@@ -1,0 +1,10 @@
+[project]
+name = "researcher-agent"
+version = "0.1.0"
+dependencies = [
+    "crewai[tools]>=0.100.0",
+    "fastapi",
+    "uvicorn",
+    "python-dotenv",
+    "langchain-community"
+]

@@ -1,0 +1,9 @@
+research_task:
+  description: >
+    Analyze the user's request: "{topic}". 
+    First, determine if you can answer from your own knowledge. 
+    If not, determine if it's a system question (use LocalSystemCheck) 
+    or a world question (use InternetSearch).
+  expected_output: >
+    A clear, concise answer. If you used a tool, briefly mention which one.
+  agent: researcher

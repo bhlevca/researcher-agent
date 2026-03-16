@@ -21,9 +21,14 @@ class ResearchCrew():
     agents_config = 'config/agents.yaml'
     tasks_config = 'config/tasks.yaml'
 
-    def __init__(self):
-        self.ollama_llm = LLM(
-            model=os.getenv("MODEL", "ollama/qwen3.5:27b"),
+    def __init__(self, model: str | None = None):
+        self._model_name = model or os.getenv("MODEL", "ollama/qwen3.5:9b")
+        self.ollama_llm = self._make_llm(self._model_name)
+
+    @staticmethod
+    def _make_llm(model: str) -> LLM:
+        return LLM(
+            model=model,
             base_url="http://localhost:11434",
             config={
                 "options": {
@@ -33,7 +38,6 @@ class ResearchCrew():
                     "num_predict": 1024,
                 }
             },
-            # Disable Qwen3.5 internal thinking to avoid hidden token generation
             extra_body={"chat_template_kwargs": {"enable_thinking": False}},
         )
 

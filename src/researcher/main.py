@@ -6,13 +6,17 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
+import httpx
 from researcher.crew import ResearchCrew
 
 load_dotenv()
 app = FastAPI()
 
-# Initialize crew once at startup, not per request
-_crew_instance = ResearchCrew().crew()
+OLLAMA_BASE = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+
+# Mutable state: current crew and model
+_current_model = os.getenv("MODEL", "ollama/qwen3.5:9b")
+_crew_instance = ResearchCrew(model=_current_model).crew()
 
 # --- Chat UI ---
 
@@ -21,13 +25,49 @@ STATIC_DIR = Path(__file__).parent / "static"
 class ChatRequest(BaseModel):
     message: str
 
+class ModelRequest(BaseModel):
+    model: str
+
 @app.get("/")
 async def index():
     return FileResponse(STATIC_DIR / "index.html")
 
 @app.get("/info")
 async def info():
-    return {"model": os.getenv("MODEL", "ollama/qwen3.5:9b")}
+    return {"model": _current_model}
+
+@app.get("/models")
+async def list_models():
+    """Query Ollama for available local models."""
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(f"{OLLAMA_BASE}/api/tags")
+            resp.raise_for_status()
+            data = resp.json()
+        models = [
+            {
+                "name": m["name"],
+                "size_gb": round(m.get("size", 0) / 1e9, 1),
+                "family": m.get("details", {}).get("family", ""),
+                "params": m.get("details", {}).get("parameter_size", ""),
+            }
+            for m in data.get("models", [])
+        ]
+        return {"models": models, "current": _current_model}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Cannot reach Ollama: {e}")
+
+@app.post("/model")
+async def switch_model(req: ModelRequest):
+    """Switch the active LLM model."""
+    global _current_model, _crew_instance
+    new_model = req.model if req.model.startswith("ollama/") else f"ollama/{req.model}"
+    try:
+        _crew_instance = ResearchCrew(model=new_model).crew()
+        _current_model = new_model
+        return {"model": _current_model}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to switch model: {e}")
 
 @app.post("/chat")
 async def chat(req: ChatRequest):

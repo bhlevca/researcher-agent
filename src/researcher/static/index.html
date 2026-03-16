@@ -39,6 +39,27 @@
             border-radius: 1rem;
         }
 
+        #model-select {
+            background: #0f3460;
+            color: #e0e0e0;
+            border: 1px solid #1a3a6e;
+            padding: 0.35rem 0.6rem;
+            border-radius: 0.5rem;
+            font-size: 0.8rem;
+            font-family: inherit;
+            outline: none;
+            cursor: pointer;
+            max-width: 280px;
+        }
+
+        #model-select:focus { border-color: #e94560; }
+
+        .model-info {
+            font-size: 0.7rem;
+            color: #64748b;
+            margin-left: 0.25rem;
+        }
+
         #chat-container {
             flex: 1;
             overflow-y: auto;
@@ -147,7 +168,10 @@
 <body>
     <header>
         <h1>Research Agent</h1>
-        <span class="model-badge" id="model-badge">loading...</span>
+        <select id="model-select" title="Switch model">
+            <option>loading models...</option>
+        </select>
+        <span class="model-info" id="model-info"></span>
     </header>
 
     <div id="chat-container"></div>
@@ -162,6 +186,8 @@
         const chat = document.getElementById('chat-container');
         const input = document.getElementById('user-input');
         const sendBtn = document.getElementById('send-btn');
+        const modelSelect = document.getElementById('model-select');
+        const modelInfo = document.getElementById('model-info');
 
         // Auto-resize textarea
         input.addEventListener('input', () => {
@@ -177,11 +203,58 @@
             }
         });
 
-        // Fetch model name on load
-        fetch('/info')
-            .then(r => r.json())
-            .then(d => document.getElementById('model-badge').textContent = d.model)
-            .catch(() => {});
+        // Load available models from Ollama
+        async function loadModels() {
+            try {
+                const resp = await fetch('/models');
+                const data = await resp.json();
+                modelSelect.innerHTML = '';
+                data.models.forEach(m => {
+                    const opt = document.createElement('option');
+                    opt.value = m.name;
+                    opt.textContent = `${m.name} (${m.params}, ${m.size_gb} GB)`;
+                    // Mark the currently active model as selected
+                    const litellmName = `ollama/${m.name}`;
+                    if (litellmName === data.current || m.name === data.current) {
+                        opt.selected = true;
+                        modelInfo.textContent = m.family;
+                    }
+                    modelSelect.appendChild(opt);
+                });
+            } catch (e) {
+                modelSelect.innerHTML = '<option>error loading models</option>';
+            }
+        }
+
+        // Switch model when dropdown changes
+        modelSelect.addEventListener('change', async () => {
+            const chosen = modelSelect.value;
+            modelSelect.disabled = true;
+            modelInfo.textContent = 'switching...';
+            try {
+                const resp = await fetch('/model', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ model: chosen }),
+                });
+                if (resp.ok) {
+                    const data = await resp.json();
+                    modelInfo.textContent = `active: ${data.model}`;
+                    addMessage('assistant', `Model switched to ${data.model}`);
+                } else {
+                    const err = await resp.json();
+                    modelInfo.textContent = 'switch failed';
+                    addMessage('error', `Failed to switch model: ${err.detail}`);
+                }
+            } catch (e) {
+                modelInfo.textContent = 'switch failed';
+                addMessage('error', `Connection error: ${e.message}`);
+            } finally {
+                modelSelect.disabled = false;
+            }
+        });
+
+        loadModels();
 
         function addMessage(role, text) {
             const div = document.createElement('div');

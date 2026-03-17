@@ -24,3 +24,7 @@ Thumbs.db
 
 # Old/backup config files
 *.old
+
+# Generated images and session data
+src/researcher/static/generated/
+src/researcher/data/

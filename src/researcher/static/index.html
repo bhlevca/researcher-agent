@@ -145,6 +145,58 @@
             opacity: 0; transition: opacity 0.3s; pointer-events: none;
         }
         .toast.show { opacity: 1; }
+
+        /* ── Session controls ── */
+        .header-spacer { flex: 1; }
+        .session-controls { display: flex; gap: 0.4rem; align-items: center; }
+        .session-controls button {
+            background: #0f3460; color: #94a3b8; border: 1px solid #1a3a6e;
+            padding: 0.35rem 0.65rem; border-radius: 0.5rem; font-size: 0.75rem;
+            cursor: pointer; transition: all 0.15s; white-space: nowrap;
+        }
+        .session-controls button:hover { background: #1a3a6e; color: #e0e0e0; }
+
+        /* ── Sessions panel ── */
+        .sessions-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.4); z-index: 49; display: none;
+        }
+        .sessions-overlay.open { display: block; }
+        .sessions-panel {
+            position: fixed; top: 0; right: -340px; width: 340px; height: 100%;
+            background: #16213e; border-left: 1px solid #0f3460; z-index: 50;
+            display: flex; flex-direction: column; transition: right 0.25s ease;
+        }
+        .sessions-panel.open { right: 0; }
+        .sessions-header {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 1rem 1.2rem; border-bottom: 1px solid #0f3460;
+        }
+        .sessions-header h2 { font-size: 1rem; color: #e94560; }
+        .sessions-header button {
+            background: none; border: none; color: #94a3b8; font-size: 1.2rem;
+            cursor: pointer; padding: 0.2rem 0.5rem;
+        }
+        .sessions-header button:hover { color: #e0e0e0; }
+        .sessions-list { flex: 1; overflow-y: auto; padding: 0.75rem; }
+        .session-item {
+            background: #1a1a2e; border: 1px solid #0f3460; border-radius: 0.5rem;
+            padding: 0.65rem 0.85rem; margin-bottom: 0.5rem; cursor: pointer;
+            transition: border-color 0.15s;
+        }
+        .session-item:hover { border-color: #e94560; }
+        .session-item.active { border-color: #e94560; background: #1e2240; }
+        .session-item-name { font-size: 0.88rem; font-weight: 500; color: #e0e0e0; }
+        .session-item-meta { font-size: 0.7rem; color: #64748b; margin-top: 0.2rem; }
+        .session-item-actions { display: flex; gap: 0.3rem; margin-top: 0.35rem; }
+        .session-item-actions button {
+            background: #0f3460; color: #94a3b8; border: 1px solid #1a3a6e;
+            padding: 0.15rem 0.5rem; border-radius: 0.3rem; font-size: 0.68rem;
+            cursor: pointer;
+        }
+        .session-item-actions button:hover { background: #1a3a6e; color: #e0e0e0; }
+        .session-item-actions button.delete:hover { background: #5a1020; color: #fca5a5; }
+        .no-sessions { color: #64748b; font-size: 0.85rem; text-align: center; padding: 2rem; }
     </style>
 </head>
 <body>
@@ -154,7 +206,24 @@
             <option>loading models...</option>
         </select>
         <span class="model-info" id="model-info"></span>
+        <div class="header-spacer"></div>
+        <div class="session-controls">
+            <button onclick="newSession()" title="New session">🗒️ New</button>
+            <button onclick="saveSession()" title="Save session">💾 Save</button>
+            <button onclick="openSessionsPanel()" title="Saved sessions">📂 Sessions</button>
+        </div>
     </header>
+
+    <div class="sessions-overlay" id="sessions-overlay" onclick="closeSessionsPanel()"></div>
+    <div class="sessions-panel" id="sessions-panel">
+        <div class="sessions-header">
+            <h2>Saved Sessions</h2>
+            <button onclick="closeSessionsPanel()">✕</button>
+        </div>
+        <div id="sessions-list" class="sessions-list">
+            <div class="no-sessions">No saved sessions</div>
+        </div>
+    </div>
 
     <div id="chat-container"></div>
 
@@ -171,6 +240,11 @@
         const sendBtn = document.getElementById('send-btn');
         const modelSelect = document.getElementById('model-select');
         const modelInfo = document.getElementById('model-info');
+
+        // ── Conversation state ──
+        let chatHistory = [];
+        let currentSessionId = null;
+        let currentSessionName = null;
 
         // ── Utilities ──
         function showToast(msg) {
@@ -196,8 +270,10 @@
             text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,
                 '<a href="$2" target="_blank" rel="noopener">$1</a>');
             text = text.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-            // Bare image URLs
-            text = text.replace(/(^|[\s>])(https?:\/\/\S+\.(?:png|jpg|jpeg|gif|webp|svg))(\s|$)/gi,
+            // Bare image URLs (http and local /static/ paths)
+            text = text.replace(/(^|[\s>])(https?:\/\/\S+\.(?:png|jpg|jpeg|gif|webp|svg))([\s<]|$)/gi,
+                '$1<img src="$2" loading="lazy">$3');
+            text = text.replace(/(^|[\s>])(\/static\/\S+\.(?:png|jpg|jpeg|gif|webp|svg))([\s<]|$)/gi,
                 '$1<img src="$2" loading="lazy">$3');
             text = text.replace(/\n{2,}/g, '</p><p>');
             text = text.replace(/\n/g, '<br>');
@@ -313,13 +389,13 @@
             const copyBtn = document.createElement('button');
             copyBtn.textContent = '\ud83d\udccb Copy';
             copyBtn.onclick = () => {
-                navigator.clipboard.writeText(text).then(() => showToast('Copied to clipboard'));
+                navigator.clipboard.writeText(text).then(() => showToast('Copied response'));
             };
             acts.appendChild(copyBtn);
 
             const saveBtn = document.createElement('button');
             saveBtn.textContent = '\ud83d\udcbe Save';
-            saveBtn.onclick = () => saveText(text, reasoning);
+            saveBtn.onclick = () => saveText(text, null);
             acts.appendChild(saveBtn);
 
             if (reasoning && reasoning.length > 0) {
@@ -330,6 +406,11 @@
                     navigator.clipboard.writeText(full).then(() => showToast('Copied response + reasoning'));
                 };
                 acts.appendChild(copyAll);
+
+                const saveAll = document.createElement('button');
+                saveAll.textContent = '\ud83d\udcbe Save all';
+                saveAll.onclick = () => saveText(text, reasoning);
+                acts.appendChild(saveAll);
             }
 
             w.appendChild(acts);
@@ -371,6 +452,7 @@
             if (!text) return;
 
             addSimpleMsg('user', text);
+            chatHistory.push({ role: 'user', text: text });
             input.value = '';
             input.style.height = 'auto';
             sendBtn.disabled = true;
@@ -389,6 +471,7 @@
                 } else {
                     const data = await resp.json();
                     addAssistantMessage(data.response, data.reasoning || [], data.token_usage || {});
+                    chatHistory.push({ role: 'assistant', text: data.response, reasoning: data.reasoning || [], tokenUsage: data.token_usage || {} });
                 }
             } catch (e) {
                 hideThinking();
@@ -397,6 +480,130 @@
                 sendBtn.disabled = false;
                 input.focus();
             }
+        }
+
+        // ── Session management ──
+        function newSession() {
+            if (chatHistory.length > 0 && !confirm('Start a new session? Unsaved messages will be lost.')) return;
+            chatHistory = [];
+            currentSessionId = null;
+            currentSessionName = null;
+            chat.innerHTML = '';
+            showToast('New session started');
+        }
+
+        async function saveSession() {
+            if (chatHistory.length === 0) { showToast('Nothing to save'); return; }
+            const name = prompt('Session name:', currentSessionName || 'Session ' + new Date().toLocaleDateString());
+            if (!name) return;
+            try {
+                let resp;
+                if (currentSessionId) {
+                    resp = await fetch('/sessions/' + currentSessionId, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ name: name, messages: chatHistory }),
+                    });
+                } else {
+                    resp = await fetch('/sessions', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ name: name, messages: chatHistory }),
+                    });
+                }
+                if (resp.ok) {
+                    const data = await resp.json();
+                    currentSessionId = data.id;
+                    currentSessionName = name;
+                    showToast('Session saved: ' + name);
+                } else { showToast('Failed to save session'); }
+            } catch (e) { showToast('Error saving session'); }
+        }
+
+        function openSessionsPanel() {
+            document.getElementById('sessions-panel').classList.add('open');
+            document.getElementById('sessions-overlay').classList.add('open');
+            loadSessionsList();
+        }
+
+        function closeSessionsPanel() {
+            document.getElementById('sessions-panel').classList.remove('open');
+            document.getElementById('sessions-overlay').classList.remove('open');
+        }
+
+        async function loadSessionsList() {
+            const list = document.getElementById('sessions-list');
+            try {
+                const resp = await fetch('/sessions');
+                const data = await resp.json();
+                if (data.sessions.length === 0) {
+                    list.innerHTML = '<div class="no-sessions">No saved sessions</div>';
+                    return;
+                }
+                list.innerHTML = '';
+                data.sessions.forEach(s => {
+                    const item = document.createElement('div');
+                    item.className = 'session-item' + (s.id === currentSessionId ? ' active' : '');
+                    const nm = document.createElement('div');
+                    nm.className = 'session-item-name';
+                    nm.textContent = s.name;
+                    item.appendChild(nm);
+                    const meta = document.createElement('div');
+                    meta.className = 'session-item-meta';
+                    const dt = new Date(s.updated_at || s.created_at);
+                    meta.textContent = dt.toLocaleString() + ' \u00b7 ' + s.message_count + ' msgs' + (s.model ? ' \u00b7 ' + s.model : '');
+                    item.appendChild(meta);
+                    const acts = document.createElement('div');
+                    acts.className = 'session-item-actions';
+                    const loadBtn = document.createElement('button');
+                    loadBtn.textContent = '\u25b6 Load';
+                    loadBtn.onclick = (e) => { e.stopPropagation(); restoreSession(s.id); };
+                    acts.appendChild(loadBtn);
+                    const delBtn = document.createElement('button');
+                    delBtn.className = 'delete';
+                    delBtn.textContent = '\u2715 Delete';
+                    delBtn.onclick = (e) => { e.stopPropagation(); deleteSession(s.id, s.name); };
+                    acts.appendChild(delBtn);
+                    item.appendChild(acts);
+                    item.onclick = () => restoreSession(s.id);
+                    list.appendChild(item);
+                });
+            } catch (e) {
+                list.innerHTML = '<div class="no-sessions">Error loading sessions</div>';
+            }
+        }
+
+        async function restoreSession(id) {
+            try {
+                const resp = await fetch('/sessions/' + id);
+                if (!resp.ok) { showToast('Failed to load session'); return; }
+                const data = await resp.json();
+                chatHistory = data.messages || [];
+                currentSessionId = data.id;
+                currentSessionName = data.name;
+                chat.innerHTML = '';
+                chatHistory.forEach(msg => {
+                    if (msg.role === 'user') {
+                        addSimpleMsg('user', msg.text);
+                    } else if (msg.role === 'assistant') {
+                        addAssistantMessage(msg.text, msg.reasoning || [], msg.tokenUsage || {});
+                    }
+                });
+                closeSessionsPanel();
+                showToast('Loaded: ' + data.name);
+            } catch (e) { showToast('Error loading session'); }
+        }
+
+        async function deleteSession(id, name) {
+            if (!confirm('Delete session "' + name + '"?')) return;
+            try {
+                const resp = await fetch('/sessions/' + id, { method: 'DELETE' });
+                if (resp.ok) {
+                    if (currentSessionId === id) { currentSessionId = null; currentSessionName = null; }
+                    loadSessionsList();
+                    showToast('Deleted: ' + name);
+                }
+            } catch (e) { showToast('Error deleting session'); }
         }
     </script>
 </body>

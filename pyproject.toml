@@ -6,5 +6,7 @@ dependencies = [
     "fastapi",
     "uvicorn",
     "python-dotenv",
-    "langchain-community"
+    "langchain-community",
+    "httpx",
+    "Pillow",
 ]

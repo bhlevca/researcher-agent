@@ -6,4 +6,6 @@ research_task:
     or a world question (use InternetSearch).
   expected_output: >
     A clear, concise answer. If you used a tool, briefly mention which one.
+    If the GenerateImage tool was used, you MUST include the exact markdown image tag
+    returned by the tool (e.g. ![generated image](/static/generated/abc123.png)) in your final answer.
   agent: researcher

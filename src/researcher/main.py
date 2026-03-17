@@ -1,5 +1,7 @@
 import sys
 import os
+import io
+import re
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -21,6 +23,21 @@ _crew_instance = ResearchCrew(model=_current_model).crew()
 # --- Chat UI ---
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+# Strip ANSI escape codes and box-drawing decorations from captured output
+_ansi_re = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07')
+_box_re = re.compile(r'[╭╮╰╯│─┌┐└┘├┤┬┴┼]+')
+
+def _clean_log(text: str) -> str:
+    text = _ansi_re.sub('', text)
+    text = _box_re.sub('', text)
+    # Collapse runs of whitespace on each line and drop empty lines
+    lines = []
+    for line in text.splitlines():
+        line = line.strip()
+        if line:
+            lines.append(line)
+    return '\n'.join(lines)
 
 class ChatRequest(BaseModel):
     message: str
@@ -73,8 +90,36 @@ async def switch_model(req: ModelRequest):
 async def chat(req: ChatRequest):
     try:
         inputs = {'topic': req.message}
-        result = _crew_instance.kickoff(inputs=inputs)
-        return {"response": str(result)}
+
+        # Capture CrewAI's verbose stdout (reasoning steps)
+        capture = io.StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = capture
+        try:
+            result = _crew_instance.kickoff(inputs=inputs)
+        finally:
+            sys.stdout = old_stdout
+
+        verbose_log = _clean_log(capture.getvalue())
+
+        # Build reasoning steps from captured output
+        steps = [line for line in verbose_log.splitlines() if line.strip()]
+
+        # Token usage if available
+        usage = {}
+        if hasattr(result, 'token_usage') and result.token_usage:
+            tu = result.token_usage
+            usage = {
+                "total_tokens": getattr(tu, 'total_tokens', 0),
+                "prompt_tokens": getattr(tu, 'prompt_tokens', 0),
+                "completion_tokens": getattr(tu, 'completion_tokens', 0),
+            }
+
+        return {
+            "response": str(result),
+            "reasoning": steps,
+            "token_usage": usage,
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

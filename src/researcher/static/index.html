@@ -24,145 +24,127 @@
             align-items: center;
             gap: 0.75rem;
         }
-
-        header h1 {
-            font-size: 1.2rem;
-            font-weight: 600;
-            color: #e94560;
-        }
-
-        header .model-badge {
-            font-size: 0.75rem;
-            background: #0f3460;
-            color: #94a3b8;
-            padding: 0.25rem 0.6rem;
-            border-radius: 1rem;
-        }
+        header h1 { font-size: 1.2rem; font-weight: 600; color: #e94560; }
 
         #model-select {
-            background: #0f3460;
-            color: #e0e0e0;
-            border: 1px solid #1a3a6e;
-            padding: 0.35rem 0.6rem;
-            border-radius: 0.5rem;
-            font-size: 0.8rem;
-            font-family: inherit;
-            outline: none;
-            cursor: pointer;
-            max-width: 280px;
+            background: #0f3460; color: #e0e0e0; border: 1px solid #1a3a6e;
+            padding: 0.35rem 0.6rem; border-radius: 0.5rem; font-size: 0.8rem;
+            font-family: inherit; outline: none; cursor: pointer; max-width: 280px;
         }
-
         #model-select:focus { border-color: #e94560; }
+        .model-info { font-size: 0.7rem; color: #64748b; margin-left: 0.25rem; }
 
-        .model-info {
-            font-size: 0.7rem;
-            color: #64748b;
-            margin-left: 0.25rem;
-        }
-
+        /* ── Chat area ── */
         #chat-container {
-            flex: 1;
-            overflow-y: auto;
-            padding: 1.5rem;
-            display: flex;
-            flex-direction: column;
-            gap: 1rem;
+            flex: 1; overflow-y: auto; padding: 1.5rem;
+            display: flex; flex-direction: column; gap: 1rem;
         }
+
+        .msg-wrapper { display: flex; flex-direction: column; max-width: 80%; }
+        .msg-wrapper.user      { align-self: flex-end; }
+        .msg-wrapper.assistant { align-self: flex-start; }
+        .msg-wrapper.error     { align-self: flex-start; }
 
         .message {
-            max-width: 75%;
-            padding: 0.85rem 1.1rem;
-            border-radius: 1rem;
-            line-height: 1.55;
-            font-size: 0.95rem;
-            white-space: pre-wrap;
-            word-wrap: break-word;
+            padding: 0.85rem 1.1rem; border-radius: 1rem;
+            line-height: 1.55; font-size: 0.95rem;
+            word-wrap: break-word; overflow-wrap: break-word;
         }
-
         .message.user {
-            align-self: flex-end;
-            background: #0f3460;
-            color: #f0f0f0;
+            background: #0f3460; color: #f0f0f0;
             border-bottom-right-radius: 0.25rem;
         }
-
         .message.assistant {
-            align-self: flex-start;
-            background: #16213e;
-            border: 1px solid #0f3460;
+            background: #16213e; border: 1px solid #0f3460;
             border-bottom-left-radius: 0.25rem;
         }
-
         .message.error {
-            align-self: flex-start;
-            background: #3b1020;
-            border: 1px solid #e94560;
-            color: #fca5a5;
+            background: #3b1020; border: 1px solid #e94560; color: #fca5a5;
         }
 
+        /* Rendered HTML inside messages */
+        .message img  { max-width: 100%; border-radius: 0.5rem; margin: 0.5rem 0; }
+        .message p    { margin: 0.4em 0; }
+        .message code {
+            background: #0d1b2e; padding: 0.15em 0.35em;
+            border-radius: 0.25em; font-size: 0.88em;
+        }
+        .message pre {
+            background: #0d1b2e; padding: 0.75rem; border-radius: 0.5rem;
+            overflow-x: auto; margin: 0.5em 0;
+        }
+        .message pre code { background: none; padding: 0; }
+        .message a { color: #60a5fa; }
+
+        /* ── Reasoning collapsible ── */
+        .reasoning-toggle { margin-top: 0.4rem; }
+        .reasoning-toggle summary {
+            cursor: pointer; font-size: 0.78rem; color: #64748b;
+            user-select: none; padding: 0.25rem 0; list-style: none;
+        }
+        .reasoning-toggle summary::before { content: '\25b6  '; font-size: 0.65rem; }
+        .reasoning-toggle[open] summary::before { content: '\25bc  '; }
+        .reasoning-content {
+            background: #0d1b2e; border: 1px solid #1a2a4e; border-radius: 0.5rem;
+            padding: 0.65rem 0.85rem; margin-top: 0.3rem; font-size: 0.8rem;
+            line-height: 1.5; color: #94a3b8; max-height: 300px;
+            overflow-y: auto; white-space: pre-wrap; word-wrap: break-word;
+        }
+
+        /* ── Action buttons ── */
+        .msg-actions {
+            display: flex; gap: 0.4rem; margin-top: 0.35rem;
+            opacity: 0; transition: opacity 0.15s;
+        }
+        .msg-wrapper:hover .msg-actions { opacity: 1; }
+        .msg-actions button {
+            background: #0f3460; color: #94a3b8; border: 1px solid #1a3a6e;
+            padding: 0.2rem 0.55rem; border-radius: 0.35rem; font-size: 0.72rem;
+            cursor: pointer; transition: all 0.15s;
+        }
+        .msg-actions button:hover { background: #1a3a6e; color: #e0e0e0; }
+
+        /* ── Token badge ── */
+        .token-badge { font-size: 0.68rem; color: #475569; margin-top: 0.2rem; }
+
+        /* ── Thinking dots ── */
         .thinking {
-            align-self: flex-start;
-            color: #64748b;
-            font-style: italic;
-            padding: 0.5rem 1rem;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
+            align-self: flex-start; color: #64748b; font-style: italic;
+            padding: 0.5rem 1rem; display: flex; align-items: center; gap: 0.5rem;
         }
-
-        .thinking .dots span {
-            animation: blink 1.4s infinite;
-            font-size: 1.5rem;
-            line-height: 1;
-        }
+        .thinking .dots span { animation: blink 1.4s infinite; font-size: 1.5rem; line-height: 1; }
         .thinking .dots span:nth-child(2) { animation-delay: 0.2s; }
         .thinking .dots span:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes blink { 0%,80%,100%{opacity:.2} 40%{opacity:1} }
 
-        @keyframes blink {
-            0%, 80%, 100% { opacity: 0.2; }
-            40% { opacity: 1; }
-        }
-
+        /* ── Input area ── */
         #input-area {
-            padding: 1rem 1.5rem;
-            background: #16213e;
-            border-top: 1px solid #0f3460;
-            display: flex;
-            gap: 0.75rem;
+            padding: 1rem 1.5rem; background: #16213e;
+            border-top: 1px solid #0f3460; display: flex; gap: 0.75rem;
         }
-
         #input-area textarea {
-            flex: 1;
-            background: #1a1a2e;
-            border: 1px solid #0f3460;
-            color: #e0e0e0;
-            padding: 0.75rem 1rem;
-            border-radius: 0.75rem;
-            font-family: inherit;
-            font-size: 0.95rem;
-            resize: none;
-            outline: none;
-            min-height: 2.75rem;
-            max-height: 8rem;
+            flex: 1; background: #1a1a2e; border: 1px solid #0f3460; color: #e0e0e0;
+            padding: 0.75rem 1rem; border-radius: 0.75rem; font-family: inherit;
+            font-size: 0.95rem; resize: none; outline: none;
+            min-height: 2.75rem; max-height: 8rem;
         }
-
-        #input-area textarea:focus {
-            border-color: #e94560;
-        }
-
+        #input-area textarea:focus { border-color: #e94560; }
         #input-area button {
-            background: #e94560;
-            color: white;
-            border: none;
-            padding: 0 1.25rem;
-            border-radius: 0.75rem;
-            font-size: 1rem;
-            cursor: pointer;
+            background: #e94560; color: white; border: none; padding: 0 1.25rem;
+            border-radius: 0.75rem; font-size: 1rem; cursor: pointer;
             transition: background 0.15s;
         }
-
         #input-area button:hover { background: #c73652; }
         #input-area button:disabled { background: #4a4a5a; cursor: not-allowed; }
+
+        /* ── Toast ── */
+        .toast {
+            position: fixed; bottom: 5rem; left: 50%; transform: translateX(-50%);
+            background: #0f3460; color: #e0e0e0; padding: 0.5rem 1.2rem;
+            border-radius: 0.5rem; font-size: 0.85rem; z-index: 100;
+            opacity: 0; transition: opacity 0.3s; pointer-events: none;
+        }
+        .toast.show { opacity: 1; }
     </style>
 </head>
 <body>
@@ -177,10 +159,11 @@
     <div id="chat-container"></div>
 
     <div id="input-area">
-        <textarea id="user-input" placeholder="Ask me anything..." rows="1"
-                  autofocus></textarea>
+        <textarea id="user-input" placeholder="Ask me anything..." rows="1" autofocus></textarea>
         <button id="send-btn" onclick="sendMessage()">Send</button>
     </div>
+
+    <div class="toast" id="toast"></div>
 
     <script>
         const chat = document.getElementById('chat-container');
@@ -189,21 +172,48 @@
         const modelSelect = document.getElementById('model-select');
         const modelInfo = document.getElementById('model-info');
 
-        // Auto-resize textarea
+        // ── Utilities ──
+        function showToast(msg) {
+            const t = document.getElementById('toast');
+            t.textContent = msg;
+            t.classList.add('show');
+            setTimeout(() => t.classList.remove('show'), 2000);
+        }
+
+        function escapeHtml(s) {
+            const d = document.createElement('div');
+            d.textContent = s;
+            return d.innerHTML;
+        }
+
+        // Simple markdown rendering: code blocks, inline code, images, links, bold
+        function renderContent(text) {
+            text = text.replace(/```(\w*)\n?([\s\S]*?)```/g,
+                (_, lang, code) => '<pre><code>' + escapeHtml(code.trim()) + '</code></pre>');
+            text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
+            text = text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g,
+                '<img src="$2" alt="$1" loading="lazy">');
+            text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,
+                '<a href="$2" target="_blank" rel="noopener">$1</a>');
+            text = text.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+            // Bare image URLs
+            text = text.replace(/(^|[\s>])(https?:\/\/\S+\.(?:png|jpg|jpeg|gif|webp|svg))(\s|$)/gi,
+                '$1<img src="$2" loading="lazy">$3');
+            text = text.replace(/\n{2,}/g, '</p><p>');
+            text = text.replace(/\n/g, '<br>');
+            return '<p>' + text + '</p>';
+        }
+
+        // ── Auto-resize ──
         input.addEventListener('input', () => {
             input.style.height = 'auto';
             input.style.height = Math.min(input.scrollHeight, 128) + 'px';
         });
-
-        // Enter to send, Shift+Enter for newline
         input.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                sendMessage();
-            }
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
         });
 
-        // Load available models from Ollama
+        // ── Model dropdown ──
         async function loadModels() {
             try {
                 const resp = await fetch('/models');
@@ -212,9 +222,8 @@
                 data.models.forEach(m => {
                     const opt = document.createElement('option');
                     opt.value = m.name;
-                    opt.textContent = `${m.name} (${m.params}, ${m.size_gb} GB)`;
-                    // Mark the currently active model as selected
-                    const litellmName = `ollama/${m.name}`;
+                    opt.textContent = m.name + ' (' + m.params + ', ' + m.size_gb + ' GB)';
+                    const litellmName = 'ollama/' + m.name;
                     if (litellmName === data.current || m.name === data.current) {
                         opt.selected = true;
                         modelInfo.textContent = m.family;
@@ -226,7 +235,6 @@
             }
         }
 
-        // Switch model when dropdown changes
         modelSelect.addEventListener('change', async () => {
             const chosen = modelSelect.value;
             modelSelect.disabled = true;
@@ -239,38 +247,116 @@
                 });
                 if (resp.ok) {
                     const data = await resp.json();
-                    modelInfo.textContent = `active: ${data.model}`;
-                    addMessage('assistant', `Model switched to ${data.model}`);
+                    modelInfo.textContent = 'active: ' + data.model;
+                    addAssistantMessage('Model switched to ' + data.model, [], {});
                 } else {
                     const err = await resp.json();
                     modelInfo.textContent = 'switch failed';
-                    addMessage('error', `Failed to switch model: ${err.detail}`);
+                    addSimpleMsg('error', 'Switch failed: ' + err.detail);
                 }
             } catch (e) {
                 modelInfo.textContent = 'switch failed';
-                addMessage('error', `Connection error: ${e.message}`);
-            } finally {
-                modelSelect.disabled = false;
-            }
+                addSimpleMsg('error', 'Connection error: ' + e.message);
+            } finally { modelSelect.disabled = false; }
         });
 
         loadModels();
 
-        function addMessage(role, text) {
-            const div = document.createElement('div');
-            div.className = `message ${role}`;
-            div.textContent = text;
-            chat.appendChild(div);
+        // ── Message rendering ──
+        function addSimpleMsg(role, text) {
+            const w = document.createElement('div');
+            w.className = 'msg-wrapper ' + role;
+            const m = document.createElement('div');
+            m.className = 'message ' + role;
+            m.textContent = text;
+            w.appendChild(m);
+            chat.appendChild(w);
             chat.scrollTop = chat.scrollHeight;
-            return div;
+        }
+
+        function addAssistantMessage(text, reasoning, tokenUsage) {
+            const w = document.createElement('div');
+            w.className = 'msg-wrapper assistant';
+
+            const m = document.createElement('div');
+            m.className = 'message assistant';
+            m.innerHTML = renderContent(text);
+            w.appendChild(m);
+
+            // Collapsible reasoning
+            if (reasoning && reasoning.length > 0) {
+                const det = document.createElement('details');
+                det.className = 'reasoning-toggle';
+                const sum = document.createElement('summary');
+                sum.textContent = 'Show reasoning (' + reasoning.length + ' steps)';
+                det.appendChild(sum);
+                const c = document.createElement('div');
+                c.className = 'reasoning-content';
+                c.textContent = reasoning.join('\n');
+                det.appendChild(c);
+                w.appendChild(det);
+            }
+
+            // Token usage
+            if (tokenUsage && tokenUsage.total_tokens) {
+                const b = document.createElement('div');
+                b.className = 'token-badge';
+                b.textContent = 'tokens: ' + tokenUsage.total_tokens +
+                    ' (' + tokenUsage.prompt_tokens + ' in / ' + tokenUsage.completion_tokens + ' out)';
+                w.appendChild(b);
+            }
+
+            // Action buttons
+            const acts = document.createElement('div');
+            acts.className = 'msg-actions';
+
+            const copyBtn = document.createElement('button');
+            copyBtn.textContent = '\ud83d\udccb Copy';
+            copyBtn.onclick = () => {
+                navigator.clipboard.writeText(text).then(() => showToast('Copied to clipboard'));
+            };
+            acts.appendChild(copyBtn);
+
+            const saveBtn = document.createElement('button');
+            saveBtn.textContent = '\ud83d\udcbe Save';
+            saveBtn.onclick = () => saveText(text, reasoning);
+            acts.appendChild(saveBtn);
+
+            if (reasoning && reasoning.length > 0) {
+                const copyAll = document.createElement('button');
+                copyAll.textContent = '\ud83d\udccb Copy all';
+                copyAll.onclick = () => {
+                    const full = '=== Response ===\n' + text + '\n\n=== Reasoning ===\n' + reasoning.join('\n');
+                    navigator.clipboard.writeText(full).then(() => showToast('Copied response + reasoning'));
+                };
+                acts.appendChild(copyAll);
+            }
+
+            w.appendChild(acts);
+            chat.appendChild(w);
+            chat.scrollTop = chat.scrollHeight;
+        }
+
+        function saveText(text, reasoning) {
+            var content = text;
+            if (reasoning && reasoning.length > 0) {
+                content += '\n\n--- Reasoning ---\n' + reasoning.join('\n');
+            }
+            const blob = new Blob([content], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'response-' + new Date().toISOString().slice(0,19).replace(/:/g,'-') + '.txt';
+            a.click();
+            URL.revokeObjectURL(url);
+            showToast('Saved to file');
         }
 
         function showThinking() {
-            const div = document.createElement('div');
-            div.className = 'thinking';
-            div.id = 'thinking-indicator';
-            div.innerHTML = 'Thinking <span class="dots"><span>.</span><span>.</span><span>.</span></span>';
-            chat.appendChild(div);
+            const d = document.createElement('div');
+            d.className = 'thinking'; d.id = 'thinking-indicator';
+            d.innerHTML = 'Thinking <span class="dots"><span>.</span><span>.</span><span>.</span></span>';
+            chat.appendChild(d);
             chat.scrollTop = chat.scrollHeight;
         }
 
@@ -279,11 +365,12 @@
             if (el) el.remove();
         }
 
+        // ── Send message ──
         async function sendMessage() {
             const text = input.value.trim();
             if (!text) return;
 
-            addMessage('user', text);
+            addSimpleMsg('user', text);
             input.value = '';
             input.style.height = 'auto';
             sendBtn.disabled = true;
@@ -295,19 +382,17 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ message: text }),
                 });
-
                 hideThinking();
-
                 if (!resp.ok) {
                     const err = await resp.json();
-                    addMessage('error', `Error: ${err.detail || resp.statusText}`);
+                    addSimpleMsg('error', 'Error: ' + (err.detail || resp.statusText));
                 } else {
                     const data = await resp.json();
-                    addMessage('assistant', data.response);
+                    addAssistantMessage(data.response, data.reasoning || [], data.token_usage || {});
                 }
             } catch (e) {
                 hideThinking();
-                addMessage('error', `Connection error: ${e.message}`);
+                addSimpleMsg('error', 'Connection error: ' + e.message);
             } finally {
                 sendBtn.disabled = false;
                 input.focus();

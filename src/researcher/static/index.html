@@ -63,7 +63,7 @@
         }
 
         /* Rendered HTML inside messages */
-        .message img  { max-width: 100%; border-radius: 0.5rem; margin: 0.5rem 0; }
+        .message img  { max-width: 100%; display: block; border-radius: 0.5rem; margin: 0.5rem 0; }
         .message p    { margin: 0.4em 0; }
         .message code {
             background: #0d1b2e; padding: 0.15em 0.35em;
@@ -90,6 +90,23 @@
             line-height: 1.5; color: #94a3b8; max-height: 300px;
             overflow-y: auto; white-space: pre-wrap; word-wrap: break-word;
         }
+
+        /* Live reasoning during streaming */
+        .live-reasoning {
+            background: #0d1b2e; border: 1px solid #1a2a4e; border-radius: 0.5rem;
+            padding: 0.65rem 0.85rem; font-size: 0.8rem; line-height: 1.5;
+            color: #94a3b8; max-height: 300px; overflow-y: auto;
+            white-space: pre-wrap; word-wrap: break-word;
+        }
+        .live-reasoning-label {
+            font-size: 0.75rem; color: #e94560; font-weight: 600;
+            margin-bottom: 0.3rem; display: flex; align-items: center; gap: 0.4rem;
+        }
+        .live-reasoning-label .pulse {
+            width: 8px; height: 8px; border-radius: 50%; background: #e94560;
+            animation: pulse 1s infinite;
+        }
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
 
         /* ── Action buttons ── */
         .msg-actions {
@@ -456,25 +473,101 @@
             input.value = '';
             input.style.height = 'auto';
             sendBtn.disabled = true;
-            showThinking();
+
+            // Create live reasoning container
+            const liveWrapper = document.createElement('div');
+            liveWrapper.className = 'msg-wrapper assistant';
+
+            const liveLabel = document.createElement('div');
+            liveLabel.className = 'live-reasoning-label';
+            liveLabel.innerHTML = '<span class="pulse"></span> Thinking...';
+            liveWrapper.appendChild(liveLabel);
+
+            const liveBox = document.createElement('div');
+            liveBox.className = 'live-reasoning';
+            liveWrapper.appendChild(liveBox);
+
+            chat.appendChild(liveWrapper);
+            chat.scrollTop = chat.scrollHeight;
+
+            let reasoningLines = [];
 
             try {
                 const resp = await fetch('/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ message: text }),
+                    body: JSON.stringify({ message: text, history: chatHistory }),
                 });
-                hideThinking();
+
                 if (!resp.ok) {
-                    const err = await resp.json();
+                    liveWrapper.remove();
+                    const err = await resp.json().catch(() => ({ detail: resp.statusText }));
                     addSimpleMsg('error', 'Error: ' + (err.detail || resp.statusText));
-                } else {
-                    const data = await resp.json();
-                    addAssistantMessage(data.response, data.reasoning || [], data.token_usage || {});
-                    chatHistory.push({ role: 'assistant', text: data.response, reasoning: data.reasoning || [], tokenUsage: data.token_usage || {} });
+                    return;
+                }
+
+                const reader = resp.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+
+                    // Process complete SSE events (separated by \n\n)
+                    while (buffer.includes('\n\n')) {
+                        const idx = buffer.indexOf('\n\n');
+                        const eventStr = buffer.slice(0, idx);
+                        buffer = buffer.slice(idx + 2);
+
+                        let eventType = '';
+                        let dataStr = '';
+                        for (const line of eventStr.split('\n')) {
+                            if (line.startsWith('event: ')) eventType = line.slice(7);
+                            else if (line.startsWith('data: ')) dataStr += line.slice(6);
+                        }
+
+                        if (eventType === 'reasoning' && dataStr) {
+                            const line = JSON.parse(dataStr);
+                            reasoningLines.push(line);
+                            liveBox.textContent = reasoningLines.join('\n');
+                            liveBox.scrollTop = liveBox.scrollHeight;
+                            chat.scrollTop = chat.scrollHeight;
+                        } else if (eventType === 'done' && dataStr) {
+                            const result = JSON.parse(dataStr);
+                            liveWrapper.remove();
+                            addAssistantMessage(
+                                result.response,
+                                result.reasoning || reasoningLines,
+                                result.token_usage || {}
+                            );
+                            chatHistory.push({
+                                role: 'assistant',
+                                text: result.response,
+                                reasoning: result.reasoning || reasoningLines,
+                                tokenUsage: result.token_usage || {}
+                            });
+                        } else if (eventType === 'error' && dataStr) {
+                            liveWrapper.remove();
+                            addSimpleMsg('error', 'Error: ' + JSON.parse(dataStr));
+                        }
+                    }
+                }
+
+                // If stream ended without a 'done' event, show what we have
+                if (liveWrapper.parentNode) {
+                    liveWrapper.remove();
+                    if (reasoningLines.length > 0) {
+                        addAssistantMessage(
+                            'The agent completed but produced no final answer.',
+                            reasoningLines, {}
+                        );
+                    }
                 }
             } catch (e) {
-                hideThinking();
+                if (liveWrapper.parentNode) liveWrapper.remove();
                 addSimpleMsg('error', 'Connection error: ' + e.message);
             } finally {
                 sendBtn.disabled = false;

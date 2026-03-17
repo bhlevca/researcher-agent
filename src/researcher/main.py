@@ -1,21 +1,35 @@
 import sys
 import os
+
+# Disable CrewAI interactive trace prompt that blocks the server
+os.environ.setdefault('CREWAI_TRACING_ENABLED', 'false')
+
 import io
 import re
 import json
 import uuid
+import asyncio
+import queue
 from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import httpx
-from researcher.crew import ResearchCrew
+from researcher.crew import (
+    ResearchCrew,
+    generate_image as _generate_image_tool,
+    generate_ai_image as _generate_ai_image_tool,
+    preload_sd,
+)
 
 load_dotenv()
 app = FastAPI()
+
+# Pre-load Stable Diffusion in background so first image request is fast
+preload_sd()
 
 OLLAMA_BASE = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
@@ -46,8 +60,36 @@ def _clean_log(text: str) -> str:
             lines.append(line)
     return '\n'.join(lines)
 
+def _clean_line(text: str) -> str:
+    """Clean a single line of stdout output."""
+    text = _ansi_re.sub('', text)
+    text = _box_re.sub('', text)
+    return text.strip()
+
+class _QueueWriter:
+    """Captures writes to stdout and puts cleaned lines into a queue."""
+    def __init__(self, q: queue.Queue):
+        self._q = q
+        self._buf = ''
+
+    def write(self, s):
+        self._buf += s
+        while '\n' in self._buf:
+            line, self._buf = self._buf.split('\n', 1)
+            cleaned = _clean_line(line)
+            if cleaned:
+                self._q.put(cleaned)
+
+    def flush(self):
+        if self._buf:
+            cleaned = _clean_line(self._buf)
+            if cleaned:
+                self._q.put(cleaned)
+            self._buf = ''
+
 class ChatRequest(BaseModel):
     message: str
+    history: list = []
 
 class ModelRequest(BaseModel):
     model: str
@@ -99,46 +141,143 @@ async def switch_model(req: ModelRequest):
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
-    try:
-        inputs = {'topic': req.message}
+    # Build context from conversation history so follow-up requests work
+    context_lines = []
+    for msg in req.history[-6:]:   # last 3 exchanges max
+        role = msg.get('role', 'user')
+        text = msg.get('text', '')
+        if role == 'user':
+            context_lines.append(f"User: {text}")
+        elif role == 'assistant':
+            short = text[:300] + ('...' if len(text) > 300 else '')
+            context_lines.append(f"Assistant: {short}")
 
-        # Capture CrewAI's verbose stdout (reasoning steps)
-        capture = io.StringIO()
+    if context_lines:
+        topic = ("Previous conversation:\n"
+                 + "\n".join(context_lines)
+                 + "\n\nNew request: " + req.message)
+    else:
+        topic = req.message
+
+    inputs = {'topic': topic}
+
+    q: queue.Queue = queue.Queue()
+
+    def _run_crew():
+        writer = _QueueWriter(q)
         old_stdout = sys.stdout
-        sys.stdout = capture
+        old_stdin = sys.stdin
+        sys.stdout = writer
+        sys.stdin = io.StringIO('N\n')
         try:
             result = _crew_instance.kickoff(inputs=inputs)
         finally:
+            writer.flush()
             sys.stdout = old_stdout
+            sys.stdin = old_stdin
+        return result
 
-        verbose_log = _clean_log(capture.getvalue())
+    def _sse(event: str, data) -> str:
+        return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
-        # Build reasoning steps from captured output
-        steps = [line for line in verbose_log.splitlines() if line.strip()]
+    async def event_stream():
+        loop = asyncio.get_running_loop()
+        future = loop.run_in_executor(None, _run_crew)
+        all_lines: list[str] = []
 
+        # Stream reasoning lines while crew is running
+        while not future.done():
+            await asyncio.sleep(0.15)
+            while not q.empty():
+                try:
+                    line = q.get_nowait()
+                    all_lines.append(line)
+                    yield _sse("reasoning", line)
+                except queue.Empty:
+                    break
+
+        # Drain remaining lines
+        while not q.empty():
+            try:
+                line = q.get_nowait()
+                all_lines.append(line)
+                yield _sse("reasoning", line)
+            except queue.Empty:
+                break
+
+        # Get result (or error)
+        try:
+            result = future.result()
+        except Exception as e:
+            yield _sse("error", str(e))
+            return
+
+        verbose_log = '\n'.join(all_lines)
         response_text = str(result)
 
-        # If GenerateImage was used but the LLM forgot the markdown in its Final Answer,
-        # extract the image tag from the verbose log and append it.
+        # --- Post-processing (image extraction, validation, cleanup) ---
         _img_md_re = re.compile(r'!\[[^\]]*\]\(/static/generated/[a-f0-9]+\.png\)')
         if '/static/generated/' not in response_text:
             images_in_log = _img_md_re.findall(verbose_log)
             if images_in_log:
                 response_text += '\n\n' + '\n'.join(images_in_log)
 
-        # Remove any image references that point to non-existent files (LLM hallucinations)
         def _validate_img(match):
-            path = STATIC_DIR / match.group(1).lstrip('/')
-            if path.exists():
-                return match.group(0)
-            return '*(image generation failed)*'
+            rel = match.group(1).replace('/static/', '', 1)
+            path = STATIC_DIR / rel
+            return match.group(0) if path.exists() else ''
         response_text = re.sub(
             r'!\[[^\]]*\]\((/static/generated/[^)]+)\)',
-            _validate_img,
-            response_text
+            _validate_img, response_text
         )
 
-        # Token usage if available
+        # Orphan rescue (run tool server-side if LLM described action in text)
+        _orphan_re = re.compile(
+            r'Action:\s*(generate_?(?:ai_?)?image)\s*\n\s*Action\s*Input:\s*(\{.*\}|.+)',
+            re.DOTALL | re.IGNORECASE
+        )
+        orphan = _orphan_re.search(response_text)
+        if orphan and '/static/generated/' not in response_text:
+            try:
+                tool_name = orphan.group(1).lower().replace(' ', '').replace('_', '')
+                raw_input = orphan.group(2).strip()
+                if 'ai' in tool_name:
+                    prompt = raw_input.strip('"\'')
+                    try:
+                        parsed = json.loads(raw_input)
+                        prompt = parsed.get('prompt', raw_input)
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                    img_result = _generate_ai_image_tool.run(prompt)
+                else:
+                    parsed = json.loads(raw_input)
+                    if 'instructions' in parsed:
+                        iv = parsed['instructions']
+                        if isinstance(iv, dict):
+                            iv = json.dumps(iv)
+                        img_result = _generate_image_tool.run(iv)
+                    else:
+                        img_result = _generate_image_tool.run(raw_input)
+                response_text = img_result
+            except Exception:
+                pass
+
+        response_text = re.sub(r'<result>\s*</result>', '', response_text)
+        response_text = re.sub(
+            r'Thought:.*?Action:.*?Action Input:.*?$',
+            '', response_text, flags=re.DOTALL
+        )
+        response_text = response_text.strip()
+
+        if not response_text:
+            images_in_log = _img_md_re.findall(verbose_log)
+            valid = [img for img in images_in_log
+                     if (STATIC_DIR / img.split('(')[1].rstrip(')').replace('/static/', '', 1)).exists()]
+            if valid:
+                response_text = valid[-1]
+            else:
+                response_text = 'The agent could not complete the request. Please try rephrasing.'
+
         usage = {}
         if hasattr(result, 'token_usage') and result.token_usage:
             tu = result.token_usage
@@ -148,13 +287,13 @@ async def chat(req: ChatRequest):
                 "completion_tokens": getattr(tu, 'completion_tokens', 0),
             }
 
-        return {
+        yield _sse("done", {
             "response": response_text,
-            "reasoning": steps,
+            "reasoning": all_lines,
             "token_usage": usage,
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        })
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 # --- Session management ---
 

@@ -1,6 +1,7 @@
 import os
 import json as _json
 import uuid as _uuid
+import threading
 from pathlib import Path
 from crewai import Agent, Crew, Process, Task, LLM
 from crewai.project import CrewBase, agent, crew, task
@@ -31,10 +32,12 @@ def generate_image(instructions: str) -> str:
     - shapes: list of shape objects. Each has a "type" and properties:
       Rectangle: {"type":"rectangle","x":10,"y":10,"width":200,"height":100,"fill":"blue","outline":"black"}
       Circle: {"type":"circle","cx":256,"cy":256,"radius":100,"fill":"red","outline":"black"}
+      Triangle: {"type":"triangle","points":[[256,56],[56,456],[456,456]],"fill":"green","outline":"black"}
+      Polygon: {"type":"polygon","points":[[x1,y1],[x2,y2],[x3,y3],...],"fill":"yellow","outline":"black"}
       Line: {"type":"line","x1":0,"y1":0,"x2":200,"y2":200,"fill":"black","width":3}
       Text: {"type":"text","x":10,"y":10,"text":"Hello","fill":"black","size":24}
-    Example: {"width":400,"height":300,"background":"#f0f0f0","shapes":[{"type":"rectangle","x":50,"y":50,"width":300,"height":200,"fill":"#3498db","outline":"#2c3e50"},{"type":"text","x":100,"y":130,"text":"Hello","fill":"white","size":30}]}
-    IMPORTANT: Copy the tool's return value exactly into your Final Answer. The tool returns a markdown image tag that must appear in your response.
+    Triangle inside a circle example: {"width":512,"height":512,"background":"white","shapes":[{"type":"circle","cx":256,"cy":256,"radius":200,"fill":"lightblue","outline":"black"},{"type":"triangle","points":[[256,80],[100,400],[412,400]],"fill":"red","outline":"black"}]}
+    IMPORTANT: Copy the tool's return value exactly into your Final Answer.
     """
     try:
         spec = _json.loads(instructions)
@@ -62,6 +65,11 @@ def generate_image(instructions: str) -> str:
             x2, y2 = int(shape.get("x2", 100)), int(shape.get("y2", 100))
             lw = int(shape.get("width", 2))
             draw.line([x1, y1, x2, y2], fill=fill or "black", width=lw)
+        elif t in ("triangle", "polygon"):
+            pts = shape.get("points", shape.get("vertices", []))
+            if pts and len(pts) >= 3:
+                flat = [tuple(p) for p in pts]
+                draw.polygon(flat, fill=fill, outline=outline)
         elif t == "text":
             x, y = int(shape.get("x", 10)), int(shape.get("y", 10))
             txt = str(shape.get("text", ""))
@@ -74,6 +82,62 @@ def generate_image(instructions: str) -> str:
     fname = f"{_uuid.uuid4().hex[:12]}.png"
     img.save(_GENERATED_DIR / fname)
     return f"![generated image](/static/generated/{fname})"
+
+# --------------- Stable Diffusion AI image generation ---------------
+_sd_pipe = None
+_sd_lock = threading.Lock()
+_SD_MODEL_ID = os.getenv("SD_MODEL", "stable-diffusion-v1-5/stable-diffusion-v1-5")
+
+def _get_sd_pipe():
+    """Lazy-load SD pipeline. Uses CPU offload so VRAM is only used during generation."""
+    global _sd_pipe
+    if _sd_pipe is None:
+        with _sd_lock:
+            if _sd_pipe is None:  # double-check
+                import torch
+                from diffusers import StableDiffusionPipeline
+                print("[SD] Loading Stable Diffusion pipeline…", flush=True)
+                _sd_pipe = StableDiffusionPipeline.from_pretrained(
+                    _SD_MODEL_ID,
+                    torch_dtype=torch.float16,
+                    safety_checker=None,
+                    requires_safety_checker=False,
+                )
+                _sd_pipe.enable_model_cpu_offload()
+                print("[SD] Pipeline ready.", flush=True)
+    return _sd_pipe
+
+def preload_sd():
+    """Call from the server to warm up the SD pipeline in a background thread."""
+    threading.Thread(target=_get_sd_pipe, daemon=True).start()
+
+@tool("GenerateAIImage")
+def generate_ai_image(prompt: str) -> str:
+    """Generate a realistic or artistic image from a text description using Stable Diffusion AI.
+    Use this tool when the user asks for complex images like animals, trees, landscapes, people,
+    logos, or anything that cannot be drawn with simple geometric shapes.
+    The prompt parameter should be a detailed text description of the desired image.
+    Good prompts: "a red fox sitting in a snowy forest, digital art, highly detailed"
+    Bad prompts: "fox" (too vague)
+    Add style keywords for better results: "photorealistic", "digital art", "oil painting",
+    "watercolor", "cartoon", "3D render", "highly detailed", "8k".
+    The tool returns a markdown image tag. Copy it EXACTLY into your Final Answer.
+    """
+    try:
+        pipe = _get_sd_pipe()
+        result = pipe(
+            prompt,
+            num_inference_steps=25,
+            guidance_scale=7.5,
+            width=512,
+            height=512,
+        )
+        img = result.images[0]
+        fname = f"{_uuid.uuid4().hex[:12]}.png"
+        img.save(_GENERATED_DIR / fname)
+        return f"![generated image](/static/generated/{fname})"
+    except Exception as e:
+        return f"Error generating image: {e}"
 
 @CrewBase
 class ResearchCrew():
@@ -104,10 +168,10 @@ class ResearchCrew():
     def researcher(self) -> Agent:
         return Agent(
             config=self.agents_config['researcher'],
-            tools=[_serper_tool, ddg_search_wrapped, generate_image],
+            tools=[_serper_tool, ddg_search_wrapped, generate_image, generate_ai_image],
             llm=self.ollama_llm,
             verbose=True,
-            max_iter=3,
+            max_iter=5,
             memory=False,
         )
 

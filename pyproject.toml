@@ -9,4 +9,8 @@ dependencies = [
     "langchain-community",
     "httpx",
     "Pillow",
+    "diffusers",
+    "transformers",
+    "accelerate",
+    "safetensors",
 ]

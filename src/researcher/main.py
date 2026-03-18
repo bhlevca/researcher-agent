@@ -68,6 +68,8 @@ def _clean_line(text: str) -> str:
 
 class _QueueWriter:
     """Captures writes to stdout and puts cleaned lines into a queue."""
+    encoding = 'utf-8'
+
     def __init__(self, q: queue.Queue):
         self._q = q
         self._buf = ''
@@ -86,6 +88,12 @@ class _QueueWriter:
             if cleaned:
                 self._q.put(cleaned)
             self._buf = ''
+
+    def isatty(self):
+        return False
+
+    def fileno(self):
+        raise OSError('not a real file')
 
 class ChatRequest(BaseModel):
     message: str
@@ -143,13 +151,16 @@ async def switch_model(req: ModelRequest):
 async def chat(req: ChatRequest):
     # Build context from conversation history so follow-up requests work
     context_lines = []
-    for msg in req.history[-6:]:   # last 3 exchanges max
+    _img_ctx_re = re.compile(r'!\[[^\]]*\]\(/static/generated/[^)]+\)')
+    for msg in req.history[-4:]:   # last 2 exchanges max
         role = msg.get('role', 'user')
         text = msg.get('text', '')
         if role == 'user':
             context_lines.append(f"User: {text}")
         elif role == 'assistant':
-            short = text[:300] + ('...' if len(text) > 300 else '')
+            # Strip old image tags so they don't leak into verbose log
+            text = _img_ctx_re.sub('[image was shown]', text)
+            short = text[:120] + ('...' if len(text) > 120 else '')
             context_lines.append(f"Assistant: {short}")
 
     if context_lines:
@@ -185,6 +196,19 @@ async def chat(req: ChatRequest):
         future = loop.run_in_executor(None, _run_crew)
         all_lines: list[str] = []
 
+        # Filter echoed conversation history out of reasoning display
+        _skip_history = False
+        def _should_show(line: str) -> bool:
+            nonlocal _skip_history
+            if 'Previous conversation:' in line:
+                _skip_history = True
+                return False
+            if _skip_history:
+                if 'New request:' in line:
+                    _skip_history = False
+                return False
+            return True
+
         # Stream reasoning lines while crew is running
         while not future.done():
             await asyncio.sleep(0.15)
@@ -192,7 +216,8 @@ async def chat(req: ChatRequest):
                 try:
                     line = q.get_nowait()
                     all_lines.append(line)
-                    yield _sse("reasoning", line)
+                    if _should_show(line):
+                        yield _sse("reasoning", line)
                 except queue.Empty:
                     break
 
@@ -201,7 +226,8 @@ async def chat(req: ChatRequest):
             try:
                 line = q.get_nowait()
                 all_lines.append(line)
-                yield _sse("reasoning", line)
+                if _should_show(line):
+                    yield _sse("reasoning", line)
             except queue.Empty:
                 break
 
@@ -217,27 +243,15 @@ async def chat(req: ChatRequest):
 
         # --- Post-processing (image extraction, validation, cleanup) ---
         _img_md_re = re.compile(r'!\[[^\]]*\]\(/static/generated/[a-f0-9]+\.png\)')
-        if '/static/generated/' not in response_text:
-            images_in_log = _img_md_re.findall(verbose_log)
-            if images_in_log:
-                response_text += '\n\n' + '\n'.join(images_in_log)
 
-        def _validate_img(match):
-            rel = match.group(1).replace('/static/', '', 1)
-            path = STATIC_DIR / rel
-            return match.group(0) if path.exists() else ''
-        response_text = re.sub(
-            r'!\[[^\]]*\]\((/static/generated/[^)]+)\)',
-            _validate_img, response_text
-        )
-
-        # Orphan rescue (run tool server-side if LLM described action in text)
+        # Orphan rescue FIRST — run tool server-side if LLM described action
+        # in text but never executed it (e.g. hit max_iter)
         _orphan_re = re.compile(
             r'Action:\s*(generate_?(?:ai_?)?image)\s*\n\s*Action\s*Input:\s*(\{.*\}|.+)',
             re.DOTALL | re.IGNORECASE
         )
         orphan = _orphan_re.search(response_text)
-        if orphan and '/static/generated/' not in response_text:
+        if orphan:
             try:
                 tool_name = orphan.group(1).lower().replace(' ', '').replace('_', '')
                 raw_input = orphan.group(2).strip()
@@ -259,8 +273,25 @@ async def chat(req: ChatRequest):
                     else:
                         img_result = _generate_image_tool.run(raw_input)
                 response_text = img_result
-            except Exception:
-                pass
+            except Exception as exc:
+                import sys as _sys
+                _sys.stderr.write(f"[orphan-rescue] Error: {exc}\n")
+                _sys.stderr.flush()
+
+        # Pull images from verbose log only if response still has none
+        if '/static/generated/' not in response_text:
+            images_in_log = _img_md_re.findall(verbose_log)
+            if images_in_log:
+                response_text += '\n\n' + '\n'.join(images_in_log)
+
+        def _validate_img(match):
+            rel = match.group(1).replace('/static/', '', 1)
+            path = STATIC_DIR / rel
+            return match.group(0) if path.exists() else ''
+        response_text = re.sub(
+            r'!\[[^\]]*\]\((/static/generated/[^)]+)\)',
+            _validate_img, response_text
+        )
 
         response_text = re.sub(r'<result>\s*</result>', '', response_text)
         response_text = re.sub(

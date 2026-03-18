@@ -1,4 +1,5 @@
 import os
+import gc
 import json as _json
 import uuid as _uuid
 import threading
@@ -21,24 +22,13 @@ _GENERATED_DIR.mkdir(parents=True, exist_ok=True)
 
 @tool("DuckDuckGoSearch")
 def ddg_search_wrapped(query: str):
-    """Search the web using DuckDuckGo for general information and fallback data."""
+    """Search the web using DuckDuckGo. Use as fallback if Serper fails."""
     return _ddg_search.run(query)
 
 @tool("GenerateImage")
 def generate_image(instructions: str) -> str:
-    """Generate an image with shapes and text. The instructions parameter must be a JSON string with:
-    - width, height: image dimensions in pixels (default 512)
-    - background: color string like "white", "#3498db", "lightblue" (default "white")
-    - shapes: list of shape objects. Each has a "type" and properties:
-      Rectangle: {"type":"rectangle","x":10,"y":10,"width":200,"height":100,"fill":"blue","outline":"black"}
-      Circle: {"type":"circle","cx":256,"cy":256,"radius":100,"fill":"red","outline":"black"}
-      Triangle: {"type":"triangle","points":[[256,56],[56,456],[456,456]],"fill":"green","outline":"black"}
-      Polygon: {"type":"polygon","points":[[x1,y1],[x2,y2],[x3,y3],...],"fill":"yellow","outline":"black"}
-      Line: {"type":"line","x1":0,"y1":0,"x2":200,"y2":200,"fill":"black","width":3}
-      Text: {"type":"text","x":10,"y":10,"text":"Hello","fill":"black","size":24}
-    Triangle inside a circle example: {"width":512,"height":512,"background":"white","shapes":[{"type":"circle","cx":256,"cy":256,"radius":200,"fill":"lightblue","outline":"black"},{"type":"triangle","points":[[256,80],[100,400],[412,400]],"fill":"red","outline":"black"}]}
-    IMPORTANT: Copy the tool's return value exactly into your Final Answer.
-    """
+    """Draw geometric shapes. Input: JSON string with width, height, background, shapes array.
+    Shape types: rectangle, circle, triangle, polygon, line, text. Copy the returned image tag into Final Answer."""
     try:
         spec = _json.loads(instructions)
     except _json.JSONDecodeError:
@@ -113,18 +103,16 @@ def preload_sd():
 
 @tool("GenerateAIImage")
 def generate_ai_image(prompt: str) -> str:
-    """Generate a realistic or artistic image from a text description using Stable Diffusion AI.
-    Use this tool when the user asks for complex images like animals, trees, landscapes, people,
-    logos, or anything that cannot be drawn with simple geometric shapes.
-    The prompt parameter should be a detailed text description of the desired image.
-    Good prompts: "a red fox sitting in a snowy forest, digital art, highly detailed"
-    Bad prompts: "fox" (too vague)
-    Add style keywords for better results: "photorealistic", "digital art", "oil painting",
-    "watercolor", "cartoon", "3D render", "highly detailed", "8k".
-    The tool returns a markdown image tag. Copy it EXACTLY into your Final Answer.
-    """
+    """Generate a realistic image from a text prompt using Stable Diffusion AI.
+    Use for animals, landscapes, people, objects, scenes. Add style keywords like photorealistic, 8k.
+    Copy the returned image tag EXACTLY into your Final Answer."""
+    import sys as _sys
+    _sys.stderr.write(f"[SD] generate_ai_image called: {prompt[:100]}\n")
+    _sys.stderr.flush()
     try:
         pipe = _get_sd_pipe()
+        _sys.stderr.write("[SD] Pipeline acquired, starting inference...\n")
+        _sys.stderr.flush()
         result = pipe(
             prompt,
             num_inference_steps=25,
@@ -133,10 +121,22 @@ def generate_ai_image(prompt: str) -> str:
             height=512,
         )
         img = result.images[0]
+        # Aggressively free GPU memory so Ollama can use it for LLM
+        import torch, time
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+        gc.collect()
+        time.sleep(0.5)  # brief pause for Ollama to reclaim VRAM
         fname = f"{_uuid.uuid4().hex[:12]}.png"
         img.save(_GENERATED_DIR / fname)
-        return f"![generated image](/static/generated/{fname})"
+        tag = f"![generated image](/static/generated/{fname})"
+        _sys.stderr.write(f"[SD] Done: {tag}\n")
+        _sys.stderr.flush()
+        return tag
     except Exception as e:
+        _sys.stderr.write(f"[SD] ERROR: {e}\n")
+        _sys.stderr.flush()
         return f"Error generating image: {e}"
 
 @CrewBase
@@ -171,7 +171,7 @@ class ResearchCrew():
             tools=[_serper_tool, ddg_search_wrapped, generate_image, generate_ai_image],
             llm=self.ollama_llm,
             verbose=True,
-            max_iter=5,
+            max_iter=8,
             memory=False,
         )
 

@@ -2,6 +2,7 @@ import os
 import gc
 import json as _json
 import uuid as _uuid
+import logging
 import threading
 from pathlib import Path
 from crewai import Agent, Crew, Process, Task, LLM
@@ -12,6 +13,33 @@ from crewai_tools import SerperDevTool
 
 from langchain_community.tools import DuckDuckGoSearchRun
 from PIL import Image, ImageDraw, ImageFont
+
+_logger = logging.getLogger(__name__)
+
+# --- Smart TrueType font discovery ---
+_FONT_SEARCH_PATHS = [
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",   # Debian / Ubuntu / openSUSE
+    "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",  # Fedora / RHEL
+    "/usr/share/fonts/truetype/DejaVuSans.ttf",           # openSUSE alt
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",                # Arch
+    "/usr/share/fonts/dejavu/DejaVuSans.ttf",             # Generic Linux
+    "/System/Library/Fonts/Helvetica.ttc",                 # macOS
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+]
+
+
+def _find_truetype_font() -> str | None:
+    for p in _FONT_SEARCH_PATHS:
+        if Path(p).is_file():
+            return p
+    _logger.warning(
+        "No TrueType font found in standard paths; "
+        "text rendering will use Pillow default bitmap font"
+    )
+    return None
+
+
+_TRUETYPE_FONT_PATH = _find_truetype_font()
 
 # Instantiate once, reuse across calls
 _ddg_search = DuckDuckGoSearchRun()
@@ -64,9 +92,12 @@ def generate_image(instructions: str) -> str:
             x, y = int(shape.get("x", 10)), int(shape.get("y", 10))
             txt = str(shape.get("text", ""))
             size = int(shape.get("size", 20))
-            try:
-                font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", size)
-            except (IOError, OSError):
+            if _TRUETYPE_FONT_PATH:
+                try:
+                    font = ImageFont.truetype(_TRUETYPE_FONT_PATH, size)
+                except (IOError, OSError):
+                    font = ImageFont.load_default()
+            else:
                 font = ImageFont.load_default()
             draw.text((x, y), txt, fill=fill or "black", font=font)
     fname = f"{_uuid.uuid4().hex[:12]}.png"
@@ -75,7 +106,8 @@ def generate_image(instructions: str) -> str:
 
 # --------------- Stable Diffusion AI image generation ---------------
 _sd_pipe = None
-_sd_lock = threading.Lock()
+_sd_lock = threading.Lock()      # guards lazy pipeline init
+_vram_lock = threading.Lock()    # serialises GPU-heavy inference
 _SD_MODEL_ID = os.getenv("SD_MODEL", "stable-diffusion-v1-5/stable-diffusion-v1-5")
 
 def _get_sd_pipe():
@@ -111,23 +143,25 @@ def generate_ai_image(prompt: str) -> str:
     _sys.stderr.flush()
     try:
         pipe = _get_sd_pipe()
-        _sys.stderr.write("[SD] Pipeline acquired, starting inference...\n")
+        _sys.stderr.write("[SD] Pipeline acquired, acquiring VRAM lock...\n")
         _sys.stderr.flush()
-        result = pipe(
-            prompt,
-            num_inference_steps=25,
-            guidance_scale=7.5,
-            width=512,
-            height=512,
-        )
-        img = result.images[0]
-        # Aggressively free GPU memory so Ollama can use it for LLM
-        import torch, time
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            torch.cuda.synchronize()
-        gc.collect()
-        time.sleep(0.5)  # brief pause for Ollama to reclaim VRAM
+        with _vram_lock:
+            _sys.stderr.write("[SD] Starting inference...\n")
+            _sys.stderr.flush()
+            result = pipe(
+                prompt,
+                num_inference_steps=25,
+                guidance_scale=7.5,
+                width=512,
+                height=512,
+            )
+            img = result.images[0]
+            # Free GPU memory inside the lock so nothing else grabs VRAM first
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+            gc.collect()
         fname = f"{_uuid.uuid4().hex[:12]}.png"
         img.save(_GENERATED_DIR / fname)
         tag = f"![generated image](/static/generated/{fname})"

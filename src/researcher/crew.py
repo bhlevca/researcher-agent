@@ -18,12 +18,12 @@ _logger = logging.getLogger(__name__)
 
 # --- Smart TrueType font discovery ---
 _FONT_SEARCH_PATHS = [
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",   # Debian / Ubuntu / openSUSE
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",  # Debian / Ubuntu / openSUSE
     "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",  # Fedora / RHEL
-    "/usr/share/fonts/truetype/DejaVuSans.ttf",           # openSUSE alt
-    "/usr/share/fonts/TTF/DejaVuSans.ttf",                # Arch
-    "/usr/share/fonts/dejavu/DejaVuSans.ttf",             # Generic Linux
-    "/System/Library/Fonts/Helvetica.ttc",                 # macOS
+    "/usr/share/fonts/truetype/DejaVuSans.ttf",  # openSUSE alt
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",  # Arch
+    "/usr/share/fonts/dejavu/DejaVuSans.ttf",  # Generic Linux
+    "/System/Library/Fonts/Helvetica.ttc",  # macOS
     "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
 ]
 
@@ -43,20 +43,68 @@ _TRUETYPE_FONT_PATH = _find_truetype_font()
 
 # Instantiate once, reuse across calls
 _ddg_search = DuckDuckGoSearchRun()
-_serper_tool = SerperDevTool()
+_serper_raw = SerperDevTool()
 
 _GENERATED_DIR = Path(__file__).parent / "static" / "generated"
 _GENERATED_DIR.mkdir(parents=True, exist_ok=True)
 
+
+@tool("InternetSearch")
+def serper_search_wrapped(search_query: str) -> str:
+    """Search the internet using Google (Serper). Input must be a single search query string."""
+    # LLMs sometimes send JSON or arrays instead of a plain string — handle gracefully
+    q = search_query.strip()
+    if q.startswith("[") or q.startswith("{"):
+        try:
+            parsed = _json.loads(q)
+            if isinstance(parsed, list):
+                results = []
+                for item in parsed:
+                    sq = (
+                        item.get("search_query", "")
+                        if isinstance(item, dict)
+                        else str(item)
+                    )
+                    if sq:
+                        results.append(_serper_raw.run(search_query=sq))
+                return "\n---\n".join(results)
+            elif isinstance(parsed, dict) and "search_query" in parsed:
+                q = parsed["search_query"]
+        except (_json.JSONDecodeError, Exception):
+            pass
+    return _serper_raw.run(search_query=q)
+
+
 @tool("DuckDuckGoSearch")
-def ddg_search_wrapped(query: str):
-    """Search the web using DuckDuckGo. Use as fallback if Serper fails."""
-    return _ddg_search.run(query)
+def ddg_search_wrapped(query: str) -> str:
+    """Search the web using DuckDuckGo. Use as fallback if Serper fails. Input must be a single search query string."""
+    q = query.strip()
+    if q.startswith("[") or q.startswith("{"):
+        try:
+            parsed = _json.loads(q)
+            if isinstance(parsed, list):
+                results = []
+                for item in parsed:
+                    sq = (
+                        item.get("query", item.get("search_query", ""))
+                        if isinstance(item, dict)
+                        else str(item)
+                    )
+                    if sq:
+                        results.append(_ddg_search.run(sq))
+                return "\n---\n".join(results)
+            elif isinstance(parsed, dict):
+                q = parsed.get("query", parsed.get("search_query", q))
+        except (_json.JSONDecodeError, Exception):
+            pass
+    return _ddg_search.run(q)
+
 
 @tool("GenerateImage")
 def generate_image(instructions: str) -> str:
     """Draw geometric shapes. Input: JSON string with width, height, background, shapes array.
-    Shape types: rectangle, circle, triangle, polygon, line, text. Copy the returned image tag into Final Answer."""
+    Shape types: rectangle, circle, triangle, polygon, line, text. Copy the returned image tag into Final Answer.
+    """
     try:
         spec = _json.loads(instructions)
     except _json.JSONDecodeError:
@@ -104,11 +152,13 @@ def generate_image(instructions: str) -> str:
     img.save(_GENERATED_DIR / fname)
     return f"![generated image](/static/generated/{fname})"
 
+
 # --------------- Stable Diffusion AI image generation ---------------
 _sd_pipe = None
-_sd_lock = threading.Lock()      # guards lazy pipeline init
-_vram_lock = threading.Lock()    # serialises GPU-heavy inference
+_sd_lock = threading.Lock()  # guards lazy pipeline init
+_vram_lock = threading.Lock()  # serialises GPU-heavy inference
 _SD_MODEL_ID = os.getenv("SD_MODEL", "stable-diffusion-v1-5/stable-diffusion-v1-5")
+
 
 def _get_sd_pipe():
     """Lazy-load SD pipeline. Uses CPU offload so VRAM is only used during generation."""
@@ -118,6 +168,7 @@ def _get_sd_pipe():
             if _sd_pipe is None:  # double-check
                 import torch
                 from diffusers import StableDiffusionPipeline
+
                 print("[SD] Loading Stable Diffusion pipeline…", flush=True)
                 _sd_pipe = StableDiffusionPipeline.from_pretrained(
                     _SD_MODEL_ID,
@@ -129,9 +180,11 @@ def _get_sd_pipe():
                 print("[SD] Pipeline ready.", flush=True)
     return _sd_pipe
 
+
 def preload_sd():
     """Call from the server to warm up the SD pipeline in a background thread."""
     threading.Thread(target=_get_sd_pipe, daemon=True).start()
+
 
 @tool("GenerateAIImage")
 def generate_ai_image(prompt: str) -> str:
@@ -139,6 +192,7 @@ def generate_ai_image(prompt: str) -> str:
     Use for animals, landscapes, people, objects, scenes. Add style keywords like photorealistic, 8k.
     Copy the returned image tag EXACTLY into your Final Answer."""
     import sys as _sys
+
     _sys.stderr.write(f"[SD] generate_ai_image called: {prompt[:100]}\n")
     _sys.stderr.flush()
     try:
@@ -158,6 +212,7 @@ def generate_ai_image(prompt: str) -> str:
             img = result.images[0]
             # Free GPU memory inside the lock so nothing else grabs VRAM first
             import torch
+
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
@@ -173,10 +228,11 @@ def generate_ai_image(prompt: str) -> str:
         _sys.stderr.flush()
         return f"Error generating image: {e}"
 
+
 @CrewBase
-class ResearchCrew():
-    agents_config = 'config/agents.yaml'
-    tasks_config = 'config/tasks.yaml'
+class ResearchCrew:
+    agents_config = "config/agents.yaml"
+    tasks_config = "config/tasks.yaml"
 
     def __init__(self, model: str | None = None):
         self._model_name = model or os.getenv("MODEL", "ollama/qwen3.5:9b")
@@ -207,17 +263,22 @@ class ResearchCrew():
     @agent
     def researcher(self) -> Agent:
         return Agent(
-            config=self.agents_config['researcher'],
-            tools=[_serper_tool, ddg_search_wrapped, generate_image, generate_ai_image],
+            config=self.agents_config["researcher"],
+            tools=[
+                serper_search_wrapped,
+                ddg_search_wrapped,
+                generate_image,
+                generate_ai_image,
+            ],
             llm=self.ollama_llm,
             verbose=True,
-            max_iter=8,
+            max_iter=15,
             memory=False,
         )
 
     @task
     def research_task(self) -> Task:
-        return Task(config=self.tasks_config['research_task'])
+        return Task(config=self.tasks_config["research_task"])
 
     @crew
     def crew(self) -> Crew:

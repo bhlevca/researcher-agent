@@ -491,3 +491,169 @@ class TestSessionIsolation:
         resp = client.get(f"/sessions/{sid}",
                           headers={"Authorization": f"Bearer {tok_b}"})
         assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# File upload / ingestion
+# ---------------------------------------------------------------------------
+
+class TestFileUpload:
+    def test_upload_requires_auth(self, client):
+        resp = client.post("/files/upload", files=[("files", ("a.txt", b"hello", "text/plain"))])
+        assert resp.status_code == 401
+
+    def test_upload_txt(self, client, auth_headers):
+        resp = client.post("/files/upload",
+                           headers=auth_headers,
+                           files=[("files", ("test.txt", b"Hello world", "text/plain"))])
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["files"]) == 1
+        f = data["files"][0]
+        assert f["filename"] == "test.txt"
+        assert "id" in f
+        assert f["size"] == 11
+
+    def test_upload_csv(self, client, auth_headers):
+        csv_data = b"name,age\nAlice,30\nBob,25"
+        resp = client.post("/files/upload",
+                           headers=auth_headers,
+                           files=[("files", ("data.csv", csv_data, "text/csv"))])
+        assert resp.status_code == 200
+        assert resp.json()["files"][0]["filename"] == "data.csv"
+
+    def test_upload_multiple_files(self, client, auth_headers):
+        files = [
+            ("files", ("a.txt", b"file one", "text/plain")),
+            ("files", ("b.txt", b"file two", "text/plain")),
+        ]
+        resp = client.post("/files/upload", headers=auth_headers, files=files)
+        assert resp.status_code == 200
+        assert len(resp.json()["files"]) == 2
+
+    def test_upload_unsupported_type(self, client, auth_headers):
+        resp = client.post("/files/upload",
+                           headers=auth_headers,
+                           files=[("files", ("bad.exe", b"\x00\x01", "application/octet-stream"))])
+        assert resp.status_code == 200
+        f = resp.json()["files"][0]
+        assert "error" in f
+        assert "Unsupported" in f["error"]
+
+    def test_list_files(self, client, auth_headers):
+        client.post("/files/upload", headers=auth_headers,
+                     files=[("files", ("t.txt", b"data", "text/plain"))])
+        resp = client.get("/files", headers=auth_headers)
+        assert resp.status_code == 200
+        assert len(resp.json()["files"]) >= 1
+
+    def test_get_file(self, client, auth_headers):
+        up = client.post("/files/upload", headers=auth_headers,
+                          files=[("files", ("g.txt", b"get me", "text/plain"))])
+        fid = up.json()["files"][0]["id"]
+        resp = client.get(f"/files/{fid}", headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.json()["text"] == "get me"
+
+    def test_delete_file(self, client, auth_headers):
+        up = client.post("/files/upload", headers=auth_headers,
+                          files=[("files", ("d.txt", b"delete me", "text/plain"))])
+        fid = up.json()["files"][0]["id"]
+        resp = client.delete(f"/files/{fid}", headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.json()["deleted"] == fid
+        # Verify gone
+        resp = client.get(f"/files/{fid}", headers=auth_headers)
+        assert resp.status_code == 404
+
+    def test_get_nonexistent_file(self, client, auth_headers):
+        resp = client.get("/files/nonexistent999", headers=auth_headers)
+        assert resp.status_code == 404
+
+
+class TestFileIsolation:
+    """Files from one user must not be visible to another."""
+
+    def _register(self, client, username):
+        auth_module._rate_log.clear()
+        resp = client.post("/auth/register", json={
+            "username": username, "password": "pass12345"
+        })
+        return resp.json()["token"]
+
+    def test_user_cannot_see_others_files(self, client, monkeypatch):
+        monkeypatch.setattr(auth_module, "INVITE_CODE", "")
+        auth_module._rate_log.clear()
+
+        tok_a = self._register(client, "file_owner")
+        tok_b = self._register(client, "file_intruder")
+
+        up = client.post("/files/upload",
+                          headers={"Authorization": f"Bearer {tok_a}"},
+                          files=[("files", ("secret.txt", b"secret data", "text/plain"))])
+        fid = up.json()["files"][0]["id"]
+
+        # Other user cannot get it
+        resp = client.get(f"/files/{fid}",
+                          headers={"Authorization": f"Bearer {tok_b}"})
+        assert resp.status_code == 404
+
+        # Other user's list doesn't include it
+        resp = client.get("/files", headers={"Authorization": f"Bearer {tok_b}"})
+        ids = [f["id"] for f in resp.json()["files"]]
+        assert fid not in ids
+
+
+# ---------------------------------------------------------------------------
+# Export
+# ---------------------------------------------------------------------------
+
+class TestExport:
+    def test_export_requires_auth(self, client):
+        resp = client.post("/export", json={"content": "hi", "format": "txt"})
+        assert resp.status_code == 401
+
+    def test_export_markdown(self, client, auth_headers):
+        resp = client.post("/export", headers={**auth_headers, "Content-Type": "application/json"},
+                           json={"content": "# Title\nHello", "format": "md", "filename": "test"})
+        assert resp.status_code == 200
+        assert "markdown" in resp.headers["content-type"]
+        assert resp.content == b"# Title\nHello"
+
+    def test_export_txt(self, client, auth_headers):
+        resp = client.post("/export", headers={**auth_headers, "Content-Type": "application/json"},
+                           json={"content": "**bold** and *italic*", "format": "txt", "filename": "test"})
+        assert resp.status_code == 200
+        assert "text/plain" in resp.headers["content-type"]
+        # Markdown formatting should be stripped
+        assert b"**" not in resp.content
+        assert b"bold" in resp.content
+
+    def test_export_docx(self, client, auth_headers):
+        content = "# Report\n\nSome **bold** text.\n\n| A | B |\n|---|---|\n| 1 | 2 |"
+        resp = client.post("/export", headers={**auth_headers, "Content-Type": "application/json"},
+                           json={"content": content, "format": "docx", "filename": "report"})
+        assert resp.status_code == 200
+        assert "officedocument.wordprocessingml" in resp.headers["content-type"]
+        assert len(resp.content) > 100  # non-trivial DOCX
+        # Check it's valid DOCX (starts with PK zip header)
+        assert resp.content[:2] == b"PK"
+
+    def test_export_xlsx(self, client, auth_headers):
+        content = "| Name | Score |\n|------|-------|\n| Alice | 95 |\n| Bob | 87 |"
+        resp = client.post("/export", headers={**auth_headers, "Content-Type": "application/json"},
+                           json={"content": content, "format": "xlsx", "filename": "scores"})
+        assert resp.status_code == 200
+        assert "spreadsheetml" in resp.headers["content-type"]
+        assert resp.content[:2] == b"PK"
+
+    def test_export_xlsx_no_tables(self, client, auth_headers):
+        resp = client.post("/export", headers={**auth_headers, "Content-Type": "application/json"},
+                           json={"content": "Just plain text, no tables.", "format": "xlsx", "filename": "plain"})
+        assert resp.status_code == 200
+        assert resp.content[:2] == b"PK"
+
+    def test_export_unsupported_format(self, client, auth_headers):
+        resp = client.post("/export", headers={**auth_headers, "Content-Type": "application/json"},
+                           json={"content": "test", "format": "pdf", "filename": "test"})
+        assert resp.status_code == 400

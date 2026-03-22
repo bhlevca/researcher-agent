@@ -38,6 +38,11 @@ from researcher.auth import (
     get_current_user,
     get_optional_user,
 )
+from researcher.ingestion import (
+    register_ingestion_routes,
+    init_files_table,
+    get_file_context,
+)
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -101,6 +106,7 @@ class _QueueWriter:
 class ChatRequest(BaseModel):
     message: str
     history: list = []
+    file_ids: list[str] = []
 
 class ModelRequest(BaseModel):
     model: str
@@ -111,6 +117,12 @@ class SessionSaveRequest(BaseModel):
 
 class AskRequest(BaseModel):
     topic: str
+    file_ids: list[str] = []
+
+class ContinueRequest(BaseModel):
+    original_query: str
+    partial_response: str
+    file_ids: list[str] = []
 
 
 # --- Whisper speech-to-text (lazy-loaded, CPU-only to avoid VRAM contention) ---
@@ -191,6 +203,9 @@ async def lifespan(app: FastAPI):
     await init_users_table(db)
     await migrate_sessions_table(db)
 
+    # Files table
+    await init_files_table(db)
+
     # Warm up Stable Diffusion in background
     preload_sd()
 
@@ -202,6 +217,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 register_auth_routes(app)
+register_ingestion_routes(app)
 
 
 # --- Chat UI ---
@@ -347,6 +363,25 @@ def _postprocess(response_text: str, verbose_log: str) -> str:
     return response_text
 
 
+# Detect incomplete agent output (hit max iterations or malformed finish)
+_INCOMPLETE_MARKERS = [
+    'Maximum iterations reached',
+    'Invalid response from LLM call',
+    'Please try rephrasing',
+]
+
+
+def _is_incomplete(response_text: str, verbose_log: str) -> bool:
+    """Return True if the agent output looks like it was cut short."""
+    for marker in _INCOMPLETE_MARKERS:
+        if marker in response_text or marker in verbose_log:
+            return True
+    # Response ends with an orphaned Action/Action Input (tool never executed)
+    if re.search(r'Action\s*Input\s*:\s*\{[^}]*\}\s*$', response_text):
+        return True
+    return False
+
+
 def _extract_usage(result) -> dict:
     if hasattr(result, 'token_usage') and result.token_usage:
         tu = result.token_usage
@@ -362,7 +397,14 @@ def _extract_usage(result) -> dict:
 
 @app.post("/chat")
 async def chat(req: ChatRequest, request: Request):
-    await get_current_user(request)  # require login
+    user = await get_current_user(request)  # require login
+
+    # Prepend attached file contents
+    file_context = ""
+    if req.file_ids:
+        db = request.app.state.db
+        file_context = await get_file_context(db, user["id"], req.file_ids)
+
     # Build context from conversation history
     context_lines = []
     _img_ctx_re = re.compile(r'!\[[^\]]*\]\(/static/generated/[^)]+\)')
@@ -377,11 +419,12 @@ async def chat(req: ChatRequest, request: Request):
             context_lines.append(f"Assistant: {short}")
 
     if context_lines:
-        topic = ("Previous conversation:\n"
+        topic = (file_context
+                 + "Previous conversation:\n"
                  + "\n".join(context_lines)
                  + "\n\nNew request: " + req.message)
     else:
-        topic = req.message
+        topic = file_context + req.message
 
     inputs = {'topic': topic}
     crew = request.app.state.crew_instance
@@ -452,14 +495,95 @@ async def chat(req: ChatRequest, request: Request):
 
             response_text = _postprocess(str(result), '\n'.join(all_lines))
             usage = _extract_usage(result)
+            incomplete = _is_incomplete(response_text, '\n'.join(all_lines))
 
             yield _sse("done", {
                 "response": response_text,
                 "reasoning": all_lines,
                 "token_usage": usage,
+                "incomplete": incomplete,
             })
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+# --- /chat/continue  LLM-direct continuation (no CrewAI) ---
+
+@app.post("/chat/continue")
+async def chat_continue(req: ContinueRequest, request: Request):
+    """Continue an incomplete agent response by calling the LLM directly."""
+    import litellm
+
+    user = await get_current_user(request)  # require login
+
+    # Optional file context
+    file_context = ""
+    if req.file_ids:
+        db = request.app.state.db
+        file_context = await get_file_context(db, user["id"], req.file_ids)
+
+    model = request.app.state.current_model
+    # Strip "ollama/" prefix for litellm's ollama_chat provider
+    if model.startswith("ollama/"):
+        litellm_model = "ollama_chat/" + model[len("ollama/"):]
+    else:
+        litellm_model = model
+
+    system_prompt = (
+        "You are a knowledgeable research assistant. "
+        "The user asked a question and a previous agent produced a partial answer "
+        "but ran out of processing steps before finishing. "
+        "Your job is to CONTINUE and COMPLETE the answer from where it left off. "
+        "Do NOT repeat content that was already produced — only produce the REMAINING parts. "
+        "Continue seamlessly from the last line of the partial answer. "
+        "Use the same formatting style (markdown tables, headings, etc.) as the partial answer."
+    )
+    user_prompt = (
+        file_context
+        + "Original user request:\n" + req.original_query
+        + "\n\n--- PARTIAL ANSWER (already shown to user) ---\n"
+        + req.partial_response
+        + "\n--- END OF PARTIAL ANSWER ---\n\n"
+        "Continue from where the partial answer left off. "
+        "Only output the NEW content that completes the answer. "
+        "Do NOT repeat any of the partial answer above."
+    )
+
+    loop = asyncio.get_running_loop()
+    def _call_llm():
+        return litellm.completion(
+            model=litellm_model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            api_base="http://localhost:11434",
+            num_retries=0,
+            temperature=0.1,
+        )
+
+    try:
+        logger.info("[chat/continue] Calling LLM model=%s, query_len=%d, partial_len=%d",
+                     litellm_model, len(req.original_query), len(req.partial_response))
+        response = await loop.run_in_executor(None, _call_llm)
+        text = response.choices[0].message.content or ""
+        logger.info("[chat/continue] LLM returned %d chars", len(text))
+        # Strip thinking tags
+        text = re.sub(r'<think>[\s\S]*?</think>\s*', '', text).strip()
+        usage = {}
+        if hasattr(response, 'usage') and response.usage:
+            usage = {
+                "total_tokens": getattr(response.usage, 'total_tokens', 0),
+                "prompt_tokens": getattr(response.usage, 'prompt_tokens', 0),
+                "completion_tokens": getattr(response.usage, 'completion_tokens', 0),
+            }
+        return {
+            "response": text,
+            "reasoning": ["Continued via direct LLM call (bypassed agent tools)"],
+            "token_usage": usage,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # --- Session management (SQLite) ---
@@ -581,7 +705,15 @@ async def delete_session(session_id: str, request: Request):
 @app.post("/ask")
 async def ask(req: AskRequest, request: Request):
     """Programmatic API endpoint. POST JSON with {topic: "..."}. Returns structured response."""
-    await get_current_user(request)  # require login
+    user = await get_current_user(request)  # require login
+
+    # Prepend attached file contents
+    file_context = ""
+    if req.file_ids:
+        db = request.app.state.db
+        file_context = await get_file_context(db, user["id"], req.file_ids)
+
+    topic = file_context + req.topic
     crew = request.app.state.crew_instance
     semaphore = request.app.state.crew_semaphore
 
@@ -593,7 +725,7 @@ async def ask(req: AskRequest, request: Request):
         sys.stdout = writer
         sys.stdin = io.StringIO('N\n')
         try:
-            return crew.kickoff(inputs={'topic': req.topic})
+            return crew.kickoff(inputs={'topic': topic})
         finally:
             writer.flush()
             sys.stdout = old_stdout

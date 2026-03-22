@@ -50,6 +50,9 @@ All managed automatically via `pip install -e .`:
 | edge-tts | Text-to-speech via Microsoft Edge voices (server-side, streams audio to browser) |
 | PyJWT | JWT token generation and validation |
 | bcrypt | Secure password hashing |
+| pymupdf | PDF text extraction (PyMuPDF/fitz) |
+| python-docx | DOCX read/write (upload + export) |
+| openpyxl | XLSX read/write (upload + export) |
 
 ## Client Requirements
 
@@ -156,7 +159,7 @@ sqlite3 src/researcher/data/sessions.db "SELECT id, username, created_at FROM us
 
 # Delete a user and all their sessions
 sqlite3 src/researcher/data/sessions.db \
-  "DELETE FROM sessions WHERE user_id='<user-id>'; DELETE FROM users WHERE id='<user-id>';"
+  "DELETE FROM sessions WHERE user_id='<user-id>'; DELETE FROM files WHERE user_id='<user-id>'; DELETE FROM users WHERE id='<user-id>';"
 
 # Count sessions per user
 sqlite3 src/researcher/data/sessions.db \
@@ -204,6 +207,44 @@ All voice processing happens server-side: Whisper (STT) and edge-tts (TTS). The 
 | POST | `/transcribe` | Yes | Speech-to-text (Whisper, server-side) |
 | GET | `/tts/voices` | No | List available TTS voices (edge-tts, server-side) |
 | POST | `/tts/speak` | No | Text-to-speech audio (edge-tts, server-side) |
+| POST | `/files/upload` | Yes | Upload files (TXT, CSV, PDF, DOCX, XLSX, MD, JSON) |
+| GET | `/files` | Yes | List uploaded files (own only) |
+| GET | `/files/{id}` | Yes | Get file details + extracted text (own only) |
+| DELETE | `/files/{id}` | Yes | Delete an uploaded file (own only) |
+| POST | `/export` | Yes | Export content to MD, TXT, DOCX, or XLSX |
+
+## File Ingestion & Export
+
+### Uploading Files
+
+Click the **📎** button (or drag files) to attach files to your message. Supported formats:
+
+| Format | Extensions | Extraction |
+|--------|-----------|------------|
+| Plain text | `.txt`, `.md`, `.csv`, `.json` | Direct read |
+| PDF | `.pdf` | Page-by-page text extraction (PyMuPDF) |
+| Word | `.docx` | Paragraphs + tables |
+| Excel | `.xlsx` | All sheets, rows as tab-separated values |
+
+- **Max file size**: 10 MB per file
+- **Max files per user**: 50
+- Files are stored per-user with full isolation
+- Extracted text is passed to the model as context alongside your message
+
+### Managing Files
+
+Click **📁 Files** in the header to open the files panel — view and delete your uploaded files.
+
+### Exporting Responses
+
+Every assistant response has an **⬇️ Export** dropdown with four formats:
+
+| Format | What you get |
+|--------|--------------|
+| **MD** | Raw markdown as-is |
+| **TXT** | Markdown stripped (no `**`, `*`, backticks, heading markers) |
+| **DOCX** | Word document with headings, bold/italic, tables, bullet lists, code blocks, math blocks |
+| **XLSX** | Markdown tables extracted into separate Excel sheets with bold headers |
 
 ## Project Structure
 
@@ -211,12 +252,14 @@ All voice processing happens server-side: Whisper (STT) and edge-tts (TTS). The 
 src/researcher/
 ├── main.py              # FastAPI app — all endpoints
 ├── auth.py              # Authentication (JWT, bcrypt, invite code, rate limiting)
+├── ingestion.py         # File upload, text extraction, DOCX/XLSX export
 ├── crew.py              # CrewAI agent, tasks, tools (search, image gen)
 ├── tts.py               # Text-to-speech (edge-tts, multilingual voice selection)
 ├── static/
 │   └── index.html       # Browser chat UI (served to client)
 ├── data/
-│   └── sessions.db      # SQLite session storage (auto-created)
+│   ├── sessions.db      # SQLite storage (sessions, users, files — auto-created)
+│   └── uploads/         # Uploaded file originals (per-user directories)
 └── config/
     ├── agents.yaml      # Agent configuration
     └── tasks.yaml       # Task configuration

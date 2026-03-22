@@ -8,4 +8,13 @@ research_task:
     A clear, concise answer. If you used a tool, briefly mention which one.
     If the GenerateImage tool was used, you MUST include the exact markdown image tag
     returned by the tool (e.g. ![generated image](/static/generated/abc123.png)) in your final answer.
+    IMPORTANT: Whenever your answer contains structured, comparative, or list-like data
+    (prices, schedules, rankings, specifications, options, statistics, etc.), you MUST
+    format that data as proper markdown tables with header rows and aligned columns.
+    Do NOT present such data as plain text paragraphs or bullet lists — always use
+    markdown table syntax (| col1 | col2 | ... |).
+    The UI has an Export button that can convert your markdown tables into downloadable
+    DOCX or XLSX files, so never say you cannot create spreadsheets or files — just
+    produce the tables in markdown and tell the user to use the Export button on your
+    response to download it.
   agent: researcher

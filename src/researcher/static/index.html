@@ -142,8 +142,8 @@
         #input-area textarea {
             flex: 1; background: #1a1a2e; border: 1px solid #0f3460; color: #e0e0e0;
             padding: 0.75rem 1rem; border-radius: 0.75rem; font-family: inherit;
-            font-size: 0.95rem; resize: none; outline: none;
-            min-height: 2.75rem; max-height: 8rem;
+            font-size: 0.95rem; resize: vertical; outline: none;
+            min-height: 2.75rem; max-height: 12rem;
         }
         #input-area textarea:focus { border-color: #e94560; }
         #input-area button {
@@ -234,8 +234,14 @@
             background: #0f3460; color: #e0e0e0; padding: 0.5rem 1.2rem;
             border-radius: 0.5rem; font-size: 0.85rem; z-index: 100;
             opacity: 0; transition: opacity 0.3s; pointer-events: none;
+            display: flex; align-items: center; gap: 0.5rem;
         }
-        .toast.show { opacity: 1; }
+        .toast.show { opacity: 1; pointer-events: auto; }
+        .toast .toast-close {
+            background: none; border: none; color: #e0e0e0; cursor: pointer;
+            font-size: 1rem; padding: 0 0.2rem; margin-left: 0.3rem; line-height: 1;
+        }
+        .toast .toast-close:hover { color: #fff; }
 
         /* ── Session controls ── */
         .header-spacer { flex: 1; }
@@ -329,6 +335,67 @@
             cursor: pointer; padding: 0.15rem 0.35rem;
         }
         .user-badge button:hover { color: #fca5a5; }
+
+        /* ── File upload & chips ── */
+        .file-chips { display: flex; flex-wrap: wrap; gap: 0.35rem; padding: 0 0.5rem; max-height: 4rem; overflow-y: auto; }
+        .file-chips:empty { display: none; }
+        .file-chip {
+            display: inline-flex; align-items: center; gap: 0.3rem;
+            background: #0f3460; color: #94a3b8; font-size: 0.72rem;
+            padding: 0.2rem 0.5rem; border-radius: 0.4rem;
+        }
+        .file-chip button {
+            background: none; border: none; color: #64748b; font-size: 0.7rem;
+            cursor: pointer; padding: 0; line-height: 1;
+        }
+        .file-chip button:hover { color: #fca5a5; }
+        #attach-btn {
+            background: #0f3460; color: #94a3b8; border: 1px solid #1a3a6e;
+            padding: 0.45rem 0.6rem; border-radius: 0.5rem; cursor: pointer; font-size: 0.9rem;
+        }
+        #attach-btn:hover { background: #1a3a6e; color: #e0e0e0; }
+        /* ── Export dropdown ── */
+        .export-dropdown { position: relative; display: inline-block; }
+        .export-dropdown button.export-trigger {
+            background: none; border: 1px solid #1a3a6e; color: #94a3b8;
+            font-size: 0.7rem; padding: 0.2rem 0.4rem; border-radius: 0.35rem; cursor: pointer;
+        }
+        .export-dropdown button.export-trigger:hover { background: #1a3a6e; color: #e0e0e0; }
+        .export-menu {
+            display: none; position: absolute; bottom: 100%; right: 0;
+            background: #16213e; border: 1px solid #0f3460; border-radius: 0.5rem;
+            padding: 0.3rem 0; z-index: 50; min-width: 120px;
+        }
+        .export-menu.open { display: block; }
+        .export-menu button {
+            display: block; width: 100%; background: none; border: none;
+            color: #94a3b8; font-size: 0.75rem; padding: 0.35rem 0.7rem;
+            text-align: left; cursor: pointer;
+        }
+        .export-menu button:hover { background: #1a3a6e; color: #e0e0e0; }
+        /* ── Files panel ── */
+        .files-panel {
+            position: fixed; top: 0; right: -350px; width: 340px; height: 100%;
+            background: #16213e; border-left: 1px solid #0f3460;
+            z-index: 110; transition: right 0.25s; overflow-y: auto; padding: 1rem;
+        }
+        .files-panel.open { right: 0; }
+        .files-panel-overlay {
+            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.3); z-index: 105;
+        }
+        .files-panel-overlay.open { display: block; }
+        .files-panel h3 { color: #e94560; font-size: 0.95rem; margin-bottom: 0.75rem; }
+        .file-item {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 0.5rem 0.6rem; border-bottom: 1px solid #0f3460;
+        }
+        .file-item-name { color: #e0e0e0; font-size: 0.8rem; word-break: break-all; flex: 1; }
+        .file-item-size { color: #64748b; font-size: 0.7rem; margin-left: 0.5rem; }
+        .file-item button {
+            background: none; border: none; color: #64748b; cursor: pointer; font-size: 0.75rem; margin-left: 0.3rem;
+        }
+        .file-item button:hover { color: #fca5a5; }
     </style>
 </head>
 <body>
@@ -360,6 +427,7 @@
             <button onclick="newSession()" title="New session">🗒️ New</button>
             <button onclick="saveSession()" title="Save session">💾 Save</button>
             <button onclick="openSessionsPanel()" title="Saved sessions">📂 Sessions</button>
+            <button onclick="openFilesPanel()" title="Uploaded files">📁 Files</button>
         </div>
         <div class="user-badge" id="user-badge" style="display:none;">
             <span>👤</span><span class="username" id="user-badge-name"></span>
@@ -399,6 +467,13 @@
         </div>
     </div>
 
+    <!-- Files panel -->
+    <div class="files-panel-overlay" id="files-panel-overlay" onclick="closeFilesPanel()"></div>
+    <div class="files-panel" id="files-panel">
+        <h3>📁 Uploaded Files <button onclick="closeFilesPanel()" style="float:right;background:none;border:none;color:#64748b;cursor:pointer;font-size:1rem;">✕</button></h3>
+        <div id="files-list"></div>
+    </div>
+
     <div id="chat-container"></div>
 
     <div id="visualizer-container">
@@ -408,11 +483,14 @@
     </div>
 
     <div id="input-area">
+        <input type="file" id="file-input" multiple accept=".txt,.csv,.pdf,.docx,.xlsx,.md,.json" style="display:none" onchange="handleFileSelect(event)">
+        <button id="attach-btn" onclick="document.getElementById('file-input').click()" title="Attach files (TXT, CSV, PDF, DOCX, XLSX, MD, JSON)">📎</button>
         <textarea id="user-input" placeholder="Ask me anything..." rows="1" autofocus></textarea>
         <button id="mic-btn" onclick="toggleMic()" title="Voice input (click to record, click again to stop)">🎤</button>
         <button id="stop-speak-btn" onclick="stopSpeaking()" title="Stop speaking">⏹ Stop</button>
         <button id="send-btn" onclick="lastInputWasVoice = false; sendMessage()">Send</button>
     </div>
+    <div class="file-chips" id="file-chips"></div>
 
     <div class="toast" id="toast"></div>
 
@@ -570,6 +648,15 @@
             currentSessionId = null;
             currentSessionName = null;
             chat.innerHTML = '';
+            // Turn off dialog mode if active
+            if (dialogMode) {
+                dialogMode = false;
+                const btn = document.getElementById('dialog-toggle');
+                btn.classList.remove('active');
+                btn.textContent = '🗣️ Dialog';
+            }
+            // Clear attached files
+            clearSessionFiles();
             showToast('Logged out');
             openAuthModal('login');
         }
@@ -600,11 +687,20 @@
         })();
 
         // ── Utilities ──
+        let _toastTimer = null;
         function showToast(msg) {
             const t = document.getElementById('toast');
-            t.textContent = msg;
+            clearTimeout(_toastTimer);
+            t.innerHTML = '';
+            const span = document.createElement('span');
+            span.textContent = msg;
+            t.appendChild(span);
+            const btn = document.createElement('button');
+            btn.className = 'toast-close';
+            btn.innerHTML = '✕';
+            btn.onclick = () => { clearTimeout(_toastTimer); t.classList.remove('show'); };
+            t.appendChild(btn);
             t.classList.add('show');
-            setTimeout(() => t.classList.remove('show'), 2000);
         }
 
         function escapeHtml(s) {
@@ -742,29 +838,62 @@
             const copyBtn = document.createElement('button');
             copyBtn.textContent = '\ud83d\udccb Copy';
             copyBtn.onclick = () => {
-                navigator.clipboard.writeText(text).then(() => showToast('Copied response'));
+                const liveText = m.innerText || text;
+                navigator.clipboard.writeText(liveText).then(() => showToast('Copied response'));
             };
             acts.appendChild(copyBtn);
 
             const saveBtn = document.createElement('button');
             saveBtn.textContent = '\ud83d\udcbe Save';
-            saveBtn.onclick = () => saveText(text, null);
+            saveBtn.onclick = () => saveText(m.innerText || text, null);
             acts.appendChild(saveBtn);
 
             if (reasoning && reasoning.length > 0) {
                 const copyAll = document.createElement('button');
                 copyAll.textContent = '\ud83d\udccb Copy all';
                 copyAll.onclick = () => {
-                    const full = '=== Response ===\n' + text + '\n\n=== Reasoning ===\n' + reasoning.join('\n');
+                    const liveText = m.innerText || text;
+                    const full = '=== Response ===\n' + liveText + '\n\n=== Reasoning ===\n' + reasoning.join('\n');
                     navigator.clipboard.writeText(full).then(() => showToast('Copied response + reasoning'));
                 };
                 acts.appendChild(copyAll);
 
                 const saveAll = document.createElement('button');
                 saveAll.textContent = '\ud83d\udcbe Save all';
-                saveAll.onclick = () => saveText(text, reasoning);
+                saveAll.onclick = () => saveText(m.innerText || text, reasoning);
                 acts.appendChild(saveAll);
             }
+
+            // Export dropdown
+            const exportDiv = document.createElement('div');
+            exportDiv.className = 'export-dropdown';
+            const exportTrig = document.createElement('button');
+            exportTrig.className = 'export-trigger';
+            exportTrig.textContent = '\u2b07\ufe0f Export';
+            exportTrig.onclick = (e) => {
+                e.stopPropagation();
+                // Close any other open export menus
+                document.querySelectorAll('.export-menu.open').forEach(m => {
+                    if (m !== exportMenu) m.classList.remove('open');
+                });
+                exportMenu.classList.toggle('open');
+            };
+            exportDiv.appendChild(exportTrig);
+            const exportMenu = document.createElement('div');
+            exportMenu.className = 'export-menu';
+            ['md', 'txt', 'docx', 'xlsx'].forEach(fmt => {
+                const btn = document.createElement('button');
+                btn.textContent = fmt.toUpperCase();
+                btn.onclick = () => {
+                    exportMenu.classList.remove('open');
+                    // Use live text from DOM so continuation content is included
+                    const liveText = m.innerText || text;
+                    exportResponse(liveText, fmt);
+                };
+                exportMenu.appendChild(btn);
+            });
+            exportDiv.appendChild(exportMenu);
+            acts.appendChild(exportDiv);
 
             w.appendChild(acts);
             chat.appendChild(w);
@@ -833,7 +962,7 @@
                 const resp = await fetch('/chat', {
                     method: 'POST',
                     headers: jsonAuthHeaders(),
-                    body: JSON.stringify({ message: text, history: chatHistory }),
+                    body: JSON.stringify({ message: text, history: chatHistory, file_ids: getAttachedFileIds() }),
                 });
 
                 if (!resp.ok) {
@@ -886,6 +1015,17 @@
                                 reasoning: result.reasoning || reasoningLines,
                                 tokenUsage: result.token_usage || {}
                             });
+                            // ── Incomplete: offer to continue ──
+                            if (result.incomplete) {
+                                const contBtn = document.createElement('button');
+                                contBtn.textContent = '🔄 Continue — the agent ran out of steps';
+                                contBtn.style.cssText = 'margin-top:0.5rem;background:#e94560;color:white;border:none;padding:0.45rem 1rem;border-radius:0.5rem;cursor:pointer;font-size:0.82rem;';
+                                contBtn.onclick = () => {
+                                    contBtn.remove();
+                                    continueLastRequest();
+                                };
+                                msgWrapper.appendChild(contBtn);
+                            }
                             // ── Dialog: auto-speak then auto-record ──
                             if (dialogMode && result.response) {
                                 speakText(result.response, msgWrapper).then(() => {
@@ -928,6 +1068,7 @@
             currentSessionId = null;
             currentSessionName = null;
             chat.innerHTML = '';
+            clearSessionFiles();
             showToast('New session started');
         }
 
@@ -1341,6 +1482,247 @@
                 micBtn.textContent = '⏹';
             } catch (e) {
                 showToast('Microphone access denied');
+            }
+        }
+
+        // ══════════════════════════════════════════════
+        // ── File upload & management ──
+        // ══════════════════════════════════════════════
+        let attachedFiles = [];  // [{id, filename}] — chips currently shown
+        let sessionFileIds = new Set();  // all file IDs used in this session
+
+        // Close export menus on outside click
+        document.addEventListener('click', () => {
+            document.querySelectorAll('.export-menu.open').forEach(m => m.classList.remove('open'));
+        });
+
+        document.getElementById('attach-btn').onclick = () => {
+            document.getElementById('file-input').click();
+        };
+
+        async function handleFileSelect(event) {
+            const fileList = event.target.files;
+            if (!fileList || fileList.length === 0) return;
+            const formData = new FormData();
+            for (const f of fileList) formData.append('files', f);
+            try {
+                const resp = await fetch('/files/upload', {
+                    method: 'POST',
+                    headers: authHeaders(),
+                    body: formData,
+                });
+                if (!resp.ok) {
+                    const err = await resp.json().catch(() => ({}));
+                    showToast('Upload failed: ' + (err.detail || resp.statusText));
+                    return;
+                }
+                const data = await resp.json();
+                for (const f of data.files) {
+                    if (f.error) {
+                        showToast(f.filename + ': ' + f.error);
+                    } else {
+                        attachedFiles.push({ id: f.id, filename: f.filename });
+                        sessionFileIds.add(f.id);
+                        addFileChip(f.id, f.filename);
+                    }
+                }
+            } catch (e) {
+                showToast('Upload error: ' + e.message);
+            }
+            event.target.value = '';
+        }
+
+        function addFileChip(id, filename) {
+            const chips = document.getElementById('file-chips');
+            const chip = document.createElement('span');
+            chip.className = 'file-chip';
+            chip.dataset.fileId = id;
+            chip.innerHTML = '📄 ' + filename + ' <button onclick="removeFileChip(\'' + id + '\')">&times;</button>';
+            chips.appendChild(chip);
+        }
+
+        function removeFileChip(id) {
+            attachedFiles = attachedFiles.filter(f => f.id !== id);
+            const chip = document.querySelector('.file-chip[data-file-id="' + id + '"]');
+            if (chip) chip.remove();
+        }
+
+        function getAttachedFileIds() {
+            return [...sessionFileIds];
+        }
+
+        function clearFileChips() {
+            attachedFiles = [];
+            document.getElementById('file-chips').innerHTML = '';
+        }
+
+        function clearSessionFiles() {
+            attachedFiles = [];
+            sessionFileIds.clear();
+            document.getElementById('file-chips').innerHTML = '';
+        }
+
+        // ── Files panel ──
+        function openFilesPanel() {
+            document.getElementById('files-panel').classList.add('open');
+            document.getElementById('files-panel-overlay').classList.add('open');
+            loadFilesList();
+        }
+
+        function closeFilesPanel() {
+            document.getElementById('files-panel').classList.remove('open');
+            document.getElementById('files-panel-overlay').classList.remove('open');
+        }
+
+        async function loadFilesList() {
+            const list = document.getElementById('files-list');
+            try {
+                const resp = await fetch('/files', { headers: authHeaders() });
+                const data = await resp.json();
+                if (!data.files || data.files.length === 0) {
+                    list.innerHTML = '<div style="color:#64748b;text-align:center;padding:2rem;">No uploaded files</div>';
+                    return;
+                }
+                list.innerHTML = '';
+                data.files.forEach(f => {
+                    const item = document.createElement('div');
+                    item.className = 'file-item';
+                    const info = document.createElement('div');
+                    info.innerHTML = '<div class="file-item-name">📄 ' + f.filename + '</div>' +
+                        '<div class="file-item-size">' + (f.size / 1024).toFixed(1) + ' KB · ' + f.extension + '</div>';
+                    item.appendChild(info);
+                    const delBtn = document.createElement('button');
+                    delBtn.textContent = '✕';
+                    delBtn.style.cssText = 'background:none;border:none;color:#ef4444;cursor:pointer;font-size:1rem;';
+                    delBtn.onclick = () => deleteFileFromPanel(f.id, f.filename);
+                    item.appendChild(delBtn);
+                    list.appendChild(item);
+                });
+            } catch (e) {
+                list.innerHTML = '<div style="color:#ef4444;text-align:center;">Error loading files</div>';
+            }
+        }
+
+        async function deleteFileFromPanel(id, name) {
+            if (!confirm('Delete file "' + name + '"?')) return;
+            try {
+                const resp = await fetch('/files/' + id, { method: 'DELETE', headers: authHeaders() });
+                if (resp.ok) {
+                    removeFileChip(id);
+                    loadFilesList();
+                    showToast('Deleted: ' + name);
+                }
+            } catch (e) { showToast('Error deleting file'); }
+        }
+
+        // ── Continue incomplete request ──
+        async function continueLastRequest() {
+            try {
+            showToast('Continue: starting…');
+            // Find the last user message and last assistant response
+            let lastUserMsg = '';
+            for (let i = chatHistory.length - 1; i >= 0; i--) {
+                if (chatHistory[i].role === 'user') {
+                    lastUserMsg = chatHistory[i].text;
+                    break;
+                }
+            }
+            const lastAssistant = chatHistory.length > 0 ? chatHistory[chatHistory.length - 1].text : '';
+
+            // Find the last assistant message wrapper to append to
+            const allMsgWrappers = document.querySelectorAll('.msg-wrapper.assistant');
+            const lastMsgWrapper = allMsgWrappers[allMsgWrappers.length - 1];
+            const lastMsgDiv = lastMsgWrapper ? lastMsgWrapper.querySelector('.message.assistant') : null;
+
+            // Show a "continuing…" indicator in the chat
+            const spinner = document.createElement('div');
+            spinner.className = 'msg-wrapper assistant';
+            spinner.innerHTML = '<div class="message assistant" style="background:#2a1a3e;border:2px solid #e94560;padding:1rem;">⏳ <strong>Continuing from where the agent left off…</strong><br>This may take up to a minute while the LLM generates the completion.</div>';
+            chat.appendChild(spinner);
+            chat.scrollTop = chat.scrollHeight;
+
+            showToast('Calling LLM to continue…');
+            const resp = await fetch('/chat/continue', {
+                method: 'POST',
+                headers: jsonAuthHeaders(),
+                body: JSON.stringify({
+                    original_query: lastUserMsg,
+                    partial_response: lastAssistant,
+                    file_ids: [],
+                }),
+            });
+            if (!resp.ok) {
+                spinner.remove();
+                const errText = await resp.text();
+                showToast('Continue failed (' + resp.status + '): ' + errText.slice(0, 100));
+                return;
+            }
+
+            const result = await resp.json();
+            spinner.remove();
+
+            if (result.response && lastMsgDiv) {
+                // Check if the original response was a failure/empty message
+                const failurePatterns = [
+                    'could not complete the request',
+                    'Please try rephrasing',
+                    'Maximum iterations reached',
+                    'Invalid response from LLM call',
+                ];
+                const origIsFailure = failurePatterns.some(p => lastAssistant.includes(p))
+                    || lastAssistant.trim().length < 100;
+                // If original had real content, combine; otherwise replace entirely
+                const finalText = origIsFailure
+                    ? result.response
+                    : lastAssistant + '\n\n' + result.response;
+                lastMsgDiv.innerHTML = renderContent(finalText);
+                for (let i = chatHistory.length - 1; i >= 0; i--) {
+                    if (chatHistory[i].role === 'assistant') {
+                        chatHistory[i].text = finalText;
+                        break;
+                    }
+                }
+                showToast('✅ Response continued successfully');
+            } else if (result.response) {
+                addAssistantMessage(result.response, result.reasoning || [], result.token_usage || {});
+                chatHistory.push({ role: 'assistant', text: result.response });
+                showToast('✅ Continuation added as new message');
+            } else {
+                showToast('⚠️ LLM returned empty response');
+            }
+            chat.scrollTop = chat.scrollHeight;
+            } catch (e) {
+                showToast('❌ Continue error: ' + e.message);
+            }
+        }
+
+        // ── Export ──
+        async function exportResponse(content, format) {
+            try {
+                const resp = await fetch('/export', {
+                    method: 'POST',
+                    headers: jsonAuthHeaders(),
+                    body: JSON.stringify({
+                        content: content,
+                        format: format,
+                        filename: 'response-' + new Date().toISOString().slice(0, 10),
+                    }),
+                });
+                if (!resp.ok) {
+                    showToast('Export failed');
+                    return;
+                }
+                const blob = await resp.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                const ext = format === 'docx' ? 'docx' : format === 'xlsx' ? 'xlsx' : format === 'md' ? 'md' : 'txt';
+                a.download = 'response-' + new Date().toISOString().slice(0, 10) + '.' + ext;
+                a.click();
+                URL.revokeObjectURL(url);
+                showToast('Exported as ' + ext.toUpperCase());
+            } catch (e) {
+                showToast('Export error: ' + e.message);
             }
         }
     </script>

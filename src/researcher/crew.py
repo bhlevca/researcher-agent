@@ -184,6 +184,12 @@ class ResearchCrew():
 
     @staticmethod
     def _make_llm(model: str) -> LLM:
+        is_thinking_model = any(k in model.lower() for k in ("qwen3", "deepseek-r1"))
+        extra: dict = {}
+        if is_thinking_model:
+            # Let thinking models reason internally; CrewAI strips <think> tags.
+            # Forcing enable_thinking=False on qwen3 can cause empty responses.
+            extra["extra_body"] = {"chat_template_kwargs": {"enable_thinking": True}}
         return LLM(
             model=model,
             base_url="http://localhost:11434",
@@ -192,10 +198,10 @@ class ResearchCrew():
                     "num_ctx": 4096,
                     "temperature": 0.1,
                     "num_gpu": 99,
-                    "num_predict": 1024,
+                    "num_predict": 2048,
                 }
             },
-            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+            **extra,
         )
 
     @agent

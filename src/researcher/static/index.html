@@ -288,6 +288,47 @@
         .session-item-actions button:hover { background: #1a3a6e; color: #e0e0e0; }
         .session-item-actions button.delete:hover { background: #5a1020; color: #fca5a5; }
         .no-sessions { color: #64748b; font-size: 0.85rem; text-align: center; padding: 2rem; }
+
+        /* ── Auth modal ── */
+        .auth-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.5); z-index: 200; display: none;
+            justify-content: center; align-items: center;
+        }
+        .auth-overlay.open { display: flex; }
+        .auth-box {
+            background: #16213e; border: 1px solid #0f3460; border-radius: 0.75rem;
+            padding: 2rem; width: 340px; max-width: 90%;
+        }
+        .auth-box h2 { color: #e94560; font-size: 1.1rem; margin-bottom: 1rem; text-align: center; }
+        .auth-box input {
+            display: block; width: 100%; background: #1a1a2e; border: 1px solid #0f3460;
+            color: #e0e0e0; padding: 0.6rem 0.8rem; border-radius: 0.5rem;
+            font-family: inherit; font-size: 0.9rem; margin-bottom: 0.65rem; outline: none;
+        }
+        .auth-box input:focus { border-color: #e94560; }
+        .auth-box .auth-actions { display: flex; gap: 0.5rem; margin-top: 0.8rem; }
+        .auth-box .auth-actions button {
+            flex: 1; padding: 0.55rem; border-radius: 0.5rem; font-size: 0.85rem;
+            cursor: pointer; border: 1px solid #1a3a6e; transition: all 0.15s;
+        }
+        .auth-box .auth-btn-primary { background: #e94560; color: white; border-color: #e94560; }
+        .auth-box .auth-btn-primary:hover { background: #c73652; }
+        .auth-box .auth-btn-secondary { background: #0f3460; color: #94a3b8; }
+        .auth-box .auth-btn-secondary:hover { background: #1a3a6e; color: #e0e0e0; }
+        .auth-box .auth-toggle { text-align: center; margin-top: 0.75rem; font-size: 0.78rem; color: #64748b; }
+        .auth-box .auth-toggle a { color: #60a5fa; cursor: pointer; text-decoration: underline; }
+        .auth-box .auth-error { color: #fca5a5; font-size: 0.8rem; margin-bottom: 0.5rem; display: none; }
+        /* ── User badge in header ── */
+        .user-badge {
+            display: flex; align-items: center; gap: 0.35rem; font-size: 0.75rem; color: #94a3b8;
+        }
+        .user-badge .username { color: #60a5fa; font-weight: 500; }
+        .user-badge button {
+            background: none; border: none; color: #64748b; font-size: 0.72rem;
+            cursor: pointer; padding: 0.15rem 0.35rem;
+        }
+        .user-badge button:hover { color: #fca5a5; }
     </style>
 </head>
 <body>
@@ -320,7 +361,32 @@
             <button onclick="saveSession()" title="Save session">💾 Save</button>
             <button onclick="openSessionsPanel()" title="Saved sessions">📂 Sessions</button>
         </div>
+        <div class="user-badge" id="user-badge" style="display:none;">
+            <span>👤</span><span class="username" id="user-badge-name"></span>
+            <button onclick="logout()" title="Log out">✕</button>
+        </div>
+        <button id="login-btn" onclick="openAuthModal('login')" style="background:#0f3460;color:#94a3b8;border:1px solid #1a3a6e;padding:0.35rem 0.65rem;border-radius:0.5rem;font-size:0.75rem;cursor:pointer;">🔑 Login</button>
     </header>
+
+    <!-- Auth modal -->
+    <div class="auth-overlay" id="auth-overlay" onclick="if(event.target===this)closeAuthModal()">
+        <div class="auth-box">
+            <h2 id="auth-title">Login</h2>
+            <div class="auth-error" id="auth-error"></div>
+            <input type="text" id="auth-username" placeholder="Username" autocomplete="username">
+            <input type="password" id="auth-password" placeholder="Password" autocomplete="current-password">
+            <input type="text" id="auth-invite" placeholder="Invite code" style="display:none;">
+            <!-- Honeypot: invisible to humans, bots auto-fill it -->
+            <input type="text" id="auth-website" name="website" autocomplete="off" tabindex="-1" style="position:absolute;left:-9999px;opacity:0;height:0;width:0;">
+            <div class="auth-actions">
+                <button class="auth-btn-primary" id="auth-submit" onclick="submitAuth()">Login</button>
+                <button class="auth-btn-secondary" id="auth-cancel-btn" onclick="closeAuthModal()">Cancel</button>
+            </div>
+            <div class="auth-toggle" id="auth-toggle">
+                No account? <a onclick="switchAuthMode()">Register</a>
+            </div>
+        </div>
+    </div>
 
     <div class="sessions-overlay" id="sessions-overlay" onclick="closeSessionsPanel()"></div>
     <div class="sessions-panel" id="sessions-panel">
@@ -361,6 +427,177 @@
         let chatHistory = [];
         let currentSessionId = null;
         let currentSessionName = null;
+
+        // ══════════════════════════════════════════════
+        // ── Auth state & helpers ──
+        // ══════════════════════════════════════════════
+        let authToken = localStorage.getItem('authToken') || null;
+        let authUser = JSON.parse(localStorage.getItem('authUser') || 'null');
+        let authMode = 'login';              // 'login' | 'register'
+        let inviteRequired = false;
+
+        function authHeaders() {
+            const h = {};
+            if (authToken) h['Authorization'] = 'Bearer ' + authToken;
+            return h;
+        }
+        function jsonAuthHeaders() {
+            return { 'Content-Type': 'application/json', ...authHeaders() };
+        }
+
+        function setAuthState(token, user) {
+            authToken = token;
+            authUser = user;
+            if (token) {
+                localStorage.setItem('authToken', token);
+                localStorage.setItem('authUser', JSON.stringify(user));
+            } else {
+                localStorage.removeItem('authToken');
+                localStorage.removeItem('authUser');
+            }
+            updateAuthUI();
+        }
+
+        function updateAuthUI() {
+            const badge = document.getElementById('user-badge');
+            const loginBtn = document.getElementById('login-btn');
+            const inputArea = document.getElementById('input-area');
+            const chatContainer = document.getElementById('chat-container');
+            if (authUser) {
+                badge.style.display = 'flex';
+                document.getElementById('user-badge-name').textContent = authUser.username;
+                loginBtn.style.display = 'none';
+                inputArea.style.pointerEvents = '';
+                inputArea.style.opacity = '';
+                chatContainer.style.opacity = '';
+            } else {
+                badge.style.display = 'none';
+                loginBtn.style.display = '';
+                // Grey out the UI when not logged in
+                inputArea.style.pointerEvents = 'none';
+                inputArea.style.opacity = '0.4';
+                chatContainer.style.opacity = '0.4';
+            }
+        }
+
+        function openAuthModal(mode) {
+            authMode = mode || 'login';
+            const overlay = document.getElementById('auth-overlay');
+            const title = document.getElementById('auth-title');
+            const submit = document.getElementById('auth-submit');
+            const toggle = document.getElementById('auth-toggle');
+            const invite = document.getElementById('auth-invite');
+            const errEl = document.getElementById('auth-error');
+            errEl.style.display = 'none';
+            document.getElementById('auth-username').value = '';
+            document.getElementById('auth-password').value = '';
+            document.getElementById('auth-invite').value = '';
+            document.getElementById('auth-website').value = '';
+
+            if (authMode === 'register') {
+                title.textContent = 'Register';
+                submit.textContent = 'Register';
+                toggle.innerHTML = 'Have an account? <a onclick="switchAuthMode()">Login</a>';
+                invite.style.display = inviteRequired ? '' : 'none';
+            } else {
+                title.textContent = 'Login';
+                submit.textContent = 'Login';
+                toggle.innerHTML = 'No account? <a onclick="switchAuthMode()">Register</a>';
+                invite.style.display = 'none';
+            }
+            // Hide cancel button if login is required (no user logged in)
+            const cancelBtn = document.getElementById('auth-cancel-btn');
+            if (cancelBtn) cancelBtn.style.display = authUser ? '' : 'none';
+            overlay.classList.add('open');
+            document.getElementById('auth-username').focus();
+        }
+
+        function closeAuthModal() {
+            // Cannot close if not logged in
+            if (!authUser) return;
+            document.getElementById('auth-overlay').classList.remove('open');
+        }
+
+        function switchAuthMode() {
+            openAuthModal(authMode === 'login' ? 'register' : 'login');
+        }
+
+        async function submitAuth() {
+            const errEl = document.getElementById('auth-error');
+            errEl.style.display = 'none';
+            const username = document.getElementById('auth-username').value.trim();
+            const password = document.getElementById('auth-password').value;
+            const inviteCode = document.getElementById('auth-invite').value.trim();
+            const website = document.getElementById('auth-website').value;  // honeypot
+
+            if (!username || !password) {
+                errEl.textContent = 'Username and password are required';
+                errEl.style.display = 'block';
+                return;
+            }
+
+            const url = authMode === 'register' ? '/auth/register' : '/auth/login';
+            const body = { username, password, website };
+            if (authMode === 'register') body.invite_code = inviteCode;
+
+            try {
+                const resp = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                if (!resp.ok) {
+                    const err = await resp.json().catch(() => ({ detail: 'Request failed' }));
+                    errEl.textContent = err.detail || 'Request failed';
+                    errEl.style.display = 'block';
+                    return;
+                }
+                const data = await resp.json();
+                setAuthState(data.token, data.user);
+                closeAuthModal();
+                showToast('Welcome, ' + data.user.username + '!');
+                // Reload sessions for this user
+                loadModels();
+            } catch (e) {
+                errEl.textContent = 'Connection error';
+                errEl.style.display = 'block';
+            }
+        }
+
+        function logout() {
+            setAuthState(null, null);
+            chatHistory = [];
+            currentSessionId = null;
+            currentSessionName = null;
+            chat.innerHTML = '';
+            showToast('Logged out');
+            openAuthModal('login');
+        }
+
+        // Check if invite code is required, and restore auth state
+        (async function initAuth() {
+            try {
+                const resp = await fetch('/auth/config');
+                if (resp.ok) {
+                    const cfg = await resp.json();
+                    inviteRequired = cfg.invite_required;
+                }
+            } catch (e) { /* ignore */ }
+            // Validate existing token
+            if (authToken) {
+                try {
+                    const resp = await fetch('/auth/me', { headers: authHeaders() });
+                    if (!resp.ok) { setAuthState(null, null); }
+                } catch (e) { setAuthState(null, null); }
+            }
+            updateAuthUI();
+            // If not logged in, force the login modal open
+            if (!authUser) {
+                openAuthModal('login');
+            } else {
+                loadModels();
+            }
+        })();
 
         // ── Utilities ──
         function showToast(msg) {
@@ -408,7 +645,7 @@
         // ── Model dropdown ──
         async function loadModels() {
             try {
-                const resp = await fetch('/models');
+                const resp = await fetch('/models', { headers: authHeaders() });
                 const data = await resp.json();
                 modelSelect.innerHTML = '';
                 data.models.forEach(m => {
@@ -434,7 +671,7 @@
             try {
                 const resp = await fetch('/model', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: jsonAuthHeaders(),
                     body: JSON.stringify({ model: chosen }),
                 });
                 if (resp.ok) {
@@ -595,7 +832,7 @@
             try {
                 const resp = await fetch('/chat', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: jsonAuthHeaders(),
                     body: JSON.stringify({ message: text, history: chatHistory }),
                 });
 
@@ -703,13 +940,13 @@
                 if (currentSessionId) {
                     resp = await fetch('/sessions/' + currentSessionId, {
                         method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: jsonAuthHeaders(),
                         body: JSON.stringify({ name: name, messages: chatHistory }),
                     });
                 } else {
                     resp = await fetch('/sessions', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: jsonAuthHeaders(),
                         body: JSON.stringify({ name: name, messages: chatHistory }),
                     });
                 }
@@ -736,7 +973,7 @@
         async function loadSessionsList() {
             const list = document.getElementById('sessions-list');
             try {
-                const resp = await fetch('/sessions');
+                const resp = await fetch('/sessions', { headers: authHeaders() });
                 const data = await resp.json();
                 if (data.sessions.length === 0) {
                     list.innerHTML = '<div class="no-sessions">No saved sessions</div>';
@@ -777,7 +1014,7 @@
 
         async function restoreSession(id) {
             try {
-                const resp = await fetch('/sessions/' + id);
+                const resp = await fetch('/sessions/' + id, { headers: authHeaders() });
                 if (!resp.ok) { showToast('Failed to load session'); return; }
                 const data = await resp.json();
                 chatHistory = data.messages || [];
@@ -799,7 +1036,7 @@
         async function deleteSession(id, name) {
             if (!confirm('Delete session "' + name + '"?')) return;
             try {
-                const resp = await fetch('/sessions/' + id, { method: 'DELETE' });
+                const resp = await fetch('/sessions/' + id, { method: 'DELETE', headers: authHeaders() });
                 if (resp.ok) {
                     if (currentSessionId === id) { currentSessionId = null; currentSessionName = null; }
                     loadSessionsList();
@@ -820,7 +1057,7 @@
 
         async function loadVoices() {
             try {
-                const resp = await fetch('/tts/voices');
+                const resp = await fetch('/tts/voices', { headers: authHeaders() });
                 if (!resp.ok) throw new Error('HTTP ' + resp.status);
                 ttsVoices = await resp.json();
             } catch (e) {
@@ -916,7 +1153,7 @@
                 try {
                     const resp = await fetch('/tts/speak', {
                         method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
+                        headers: jsonAuthHeaders(),
                         body: JSON.stringify({ text: clean, voice: selectedVoiceName })
                     });
                     if (!resp.ok) throw new Error('TTS server error');
@@ -1071,7 +1308,7 @@
                     const lang = document.getElementById('lang-select').value;
 
                     try {
-                        const resp = await fetch('/transcribe?language=' + lang, { method: 'POST', body: form });
+                        const resp = await fetch('/transcribe?language=' + lang, { method: 'POST', body: form, headers: authHeaders() });
                         if (resp.ok) {
                             const data = await resp.json();
                             if (data.text) {

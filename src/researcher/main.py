@@ -31,6 +31,13 @@ from researcher.crew import (
     generate_ai_image as _generate_ai_image_tool,
     preload_sd,
 )
+from researcher.auth import (
+    register_auth_routes,
+    init_users_table,
+    migrate_sessions_table,
+    get_current_user,
+    get_optional_user,
+)
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -47,10 +54,15 @@ _ansi_re = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07')
 _box_re = re.compile(r'[╭╮╰╯│─┌┐└┘├┤┬┴┼]+')
 
 
+_think_re = re.compile(r'<think>[\s\S]*?</think>\s*')
+_think_open_re = re.compile(r'</?think>')
+
+
 def _clean_line(text: str) -> str:
     """Clean a single line of stdout output."""
     text = _ansi_re.sub('', text)
     text = _box_re.sub('', text)
+    text = _think_open_re.sub('', text)
     return text.strip()
 
 
@@ -175,6 +187,10 @@ async def lifespan(app: FastAPI):
 
     app.state.db = db
 
+    # Auth tables
+    await init_users_table(db)
+    await migrate_sessions_table(db)
+
     # Warm up Stable Diffusion in background
     preload_sd()
 
@@ -185,6 +201,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+register_auth_routes(app)
 
 
 # --- Chat UI ---
@@ -196,12 +213,23 @@ async def index():
 
 @app.get("/info")
 async def info(request: Request):
-    return {"model": request.app.state.current_model}
+    user = await get_optional_user(request)
+    if user:
+        db = request.app.state.db
+        cursor = await db.execute(
+            "SELECT model FROM users WHERE id = ?", (user["id"],)
+        )
+        row = await cursor.fetchone()
+        model = (row[0] if row and row[0] else None) or request.app.state.current_model
+    else:
+        model = request.app.state.current_model
+    return {"model": model, "user": user}
 
 
 @app.get("/models")
 async def list_models(request: Request):
     """Query Ollama for available local models."""
+    await get_current_user(request)  # require login
     try:
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.get(f"{OLLAMA_BASE}/api/tags")
@@ -223,12 +251,21 @@ async def list_models(request: Request):
 
 @app.post("/model")
 async def switch_model(req: ModelRequest, request: Request):
-    """Switch the active LLM model."""
+    """Switch the active LLM model. Stores per-user preference."""
+    user = await get_current_user(request)  # require login
     new_model = req.model if req.model.startswith("ollama/") else f"ollama/{req.model}"
     try:
         request.app.state.crew_instance = ResearchCrew(model=new_model).crew()
         request.app.state.current_model = new_model
-        return {"model": request.app.state.current_model}
+
+        db = request.app.state.db
+        await db.execute(
+            "UPDATE users SET model = ? WHERE id = ?",
+            (new_model, user["id"]),
+        )
+        await db.commit()
+
+        return {"model": new_model}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to switch model: {e}")
 
@@ -288,6 +325,8 @@ def _postprocess(response_text: str, verbose_log: str) -> str:
     )
 
     response_text = re.sub(r'<result>\s*</result>', '', response_text)
+    # Strip LLM thinking tags (qwen3, deepseek-r1, etc.)
+    response_text = re.sub(r'<think>[\s\S]*?</think>\s*', '', response_text)
     response_text = re.sub(
         r'Thought:.*?Action:.*?Action Input:.*?$',
         '', response_text, flags=re.DOTALL,
@@ -323,6 +362,7 @@ def _extract_usage(result) -> dict:
 
 @app.post("/chat")
 async def chat(req: ChatRequest, request: Request):
+    await get_current_user(request)  # require login
     # Build context from conversation history
     context_lines = []
     _img_ctx_re = re.compile(r'!\[[^\]]*\]\(/static/generated/[^)]+\)')
@@ -434,10 +474,12 @@ def _validate_sid(session_id: str):
 
 @app.get("/sessions")
 async def list_sessions(request: Request):
+    user = await get_current_user(request)  # require login
     db = request.app.state.db
     cursor = await db.execute(
         "SELECT id, name, created_at, updated_at, model, messages "
-        "FROM sessions ORDER BY updated_at DESC"
+        "FROM sessions WHERE user_id = ? ORDER BY updated_at DESC",
+        (user["id"],),
     )
     rows = await cursor.fetchall()
     sessions = []
@@ -459,14 +501,15 @@ async def list_sessions(request: Request):
 
 @app.post("/sessions")
 async def save_session(req: SessionSaveRequest, request: Request):
+    user = await get_current_user(request)  # require login
     db = request.app.state.db
     sid = uuid.uuid4().hex[:8]
     now = datetime.now(timezone.utc).isoformat()
     await db.execute(
-        "INSERT INTO sessions (id, name, created_at, updated_at, model, messages) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO sessions (id, name, created_at, updated_at, model, messages, user_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
         (sid, req.name, now, now,
-         request.app.state.current_model, json.dumps(req.messages)),
+         request.app.state.current_model, json.dumps(req.messages), user["id"]),
     )
     await db.commit()
     return {"id": sid, "name": req.name}
@@ -475,11 +518,15 @@ async def save_session(req: SessionSaveRequest, request: Request):
 @app.get("/sessions/{session_id}")
 async def load_session(session_id: str, request: Request):
     _validate_sid(session_id)
+    user = await get_current_user(request)  # require login
     db = request.app.state.db
     cursor = await db.execute("SELECT * FROM sessions WHERE id = ?", (session_id,))
     row = await cursor.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
+    owner = row["user_id"] if "user_id" in row.keys() else ""
+    if owner and (not user or user["id"] != owner):
+        raise HTTPException(status_code=403, detail="Not your session")
     return {
         "id": row["id"],
         "name": row["name"],
@@ -493,10 +540,15 @@ async def load_session(session_id: str, request: Request):
 @app.put("/sessions/{session_id}")
 async def update_session(session_id: str, req: SessionSaveRequest, request: Request):
     _validate_sid(session_id)
+    user = await get_current_user(request)  # require login
     db = request.app.state.db
-    cursor = await db.execute("SELECT id FROM sessions WHERE id = ?", (session_id,))
-    if not await cursor.fetchone():
+    cursor = await db.execute("SELECT id, user_id FROM sessions WHERE id = ?", (session_id,))
+    row = await cursor.fetchone()
+    if not row:
         raise HTTPException(status_code=404, detail="Session not found")
+    owner = row[1] or ""
+    if owner and (not user or user["id"] != owner):
+        raise HTTPException(status_code=403, detail="Not your session")
     now = datetime.now(timezone.utc).isoformat()
     await db.execute(
         "UPDATE sessions SET name=?, messages=?, updated_at=?, model=? WHERE id=?",
@@ -510,10 +562,15 @@ async def update_session(session_id: str, req: SessionSaveRequest, request: Requ
 @app.delete("/sessions/{session_id}")
 async def delete_session(session_id: str, request: Request):
     _validate_sid(session_id)
+    user = await get_current_user(request)  # require login
     db = request.app.state.db
-    cursor = await db.execute("SELECT id FROM sessions WHERE id = ?", (session_id,))
-    if not await cursor.fetchone():
+    cursor = await db.execute("SELECT id, user_id FROM sessions WHERE id = ?", (session_id,))
+    row = await cursor.fetchone()
+    if not row:
         raise HTTPException(status_code=404, detail="Session not found")
+    owner = row[1] or ""
+    if owner and (not user or user["id"] != owner):
+        raise HTTPException(status_code=403, detail="Not your session")
     await db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
     await db.commit()
     return {"deleted": session_id}
@@ -524,6 +581,7 @@ async def delete_session(session_id: str, request: Request):
 @app.post("/ask")
 async def ask(req: AskRequest, request: Request):
     """Programmatic API endpoint. POST JSON with {topic: "..."}. Returns structured response."""
+    await get_current_user(request)  # require login
     crew = request.app.state.crew_instance
     semaphore = request.app.state.crew_semaphore
 
@@ -567,8 +625,9 @@ async def ask(req: AskRequest, request: Request):
 # --- /transcribe — Whisper voice-to-text ---
 
 @app.post("/transcribe")
-async def transcribe(file: UploadFile = File(...), language: str = "en"):
+async def transcribe(request: Request, file: UploadFile = File(...), language: str = "en"):
     """Transcribe audio using Whisper (CPU). Accepts any ffmpeg-supported audio format."""
+    await get_current_user(request)  # require login
     # Validate language code (2-letter ISO 639-1)
     lang = language.strip().lower()[:2] if language else "en"
     suffix = Path(file.filename or "audio.webm").suffix or ".webm"
@@ -594,269 +653,17 @@ async def transcribe(file: UploadFile = File(...), language: str = "en"):
             Path(tmp_path).unlink(missing_ok=True)
 
 
-# --- /tts — Server-side text-to-speech via edge-tts ---
+# --- /tts — Server-side text-to-speech (see researcher.tts) ---
 
-_tts_voices_cache: list[dict] | None = None
-
-@app.get("/tts/voices")
-async def tts_voices():
-    """Return available edge-tts voices (cached after first call)."""
-    return await _ensure_tts_voices()
-
-
-async def _ensure_tts_voices() -> list[dict]:
-    """Return cached voice list, fetching if needed."""
-    global _tts_voices_cache
-    if _tts_voices_cache is None:
-        import edge_tts
-        voices = await edge_tts.list_voices()
-        _tts_voices_cache = [
-            {"name": v["ShortName"], "gender": v.get("Gender", ""), "locale": v.get("Locale", "")}
-            for v in voices
-        ]
-    return _tts_voices_cache
-
-
-def _detect_lang(text: str) -> str:
-    """Detect the language of a text segment, defaulting to 'en'."""
-    from langdetect import detect, LangDetectException
-    # Common false positives from langdetect on short English text
-    _FALSE_POS = {'no', 'so', 'sw', 'tl', 'cy', 'af', 'da'}
-    try:
-        lang = detect(text)
-        if lang in _FALSE_POS and len(text.split()) < 6:
-            return "en"
-        return lang
-    except LangDetectException:
-        return "en"
-
-
-# Regex to find quoted or emphasised foreign phrases in LLM output.
-# Matches: "phrase", 'phrase', «phrase», *phrase*, **phrase**, _phrase_
-_FOREIGN_PHRASE_RE = re.compile(
-    r'["\u201c\u201d«]([^"\u201c\u201d»]{2,})["\u201c\u201d»]'
-    r"|'([^']{2,})'"
-    r'|\*{1,2}([^*]{2,})\*{1,2}'
-    r'|_([^_]{2,})_'
+from researcher.tts import (                        # noqa: E402
+    _detect_lang,
+    _split_multilingual,
+    _pick_voice_for_lang,
+    _FOREIGN_PHRASE_RE,
+    register_tts_routes,
 )
 
-
-def _split_multilingual(text: str, base_lang: str = "en") -> list[tuple[str, str]]:
-    """Split *text* into ``(lang, segment)`` pairs so that each segment can be
-    spoken with the correct TTS voice.
-
-    Strategy (designed to **minimise** fragmentation):
-
-    1.  Detect the dominant language of the **whole text**.  If it differs from
-        *base_lang*, return the entire text as that language — no splitting.
-    2.  If the overall language equals *base_lang* (i.e. the text is mostly in
-        the base language with some foreign content mixed in):
-        a.  Extract quoted / emphasised foreign phrases.
-        b.  Split remaining text into sentences, detect each, and label them.
-        c.  **Merge** consecutive sentences that share the same language into
-            single contiguous blocks so we never pass tiny fragments to the
-            TTS engine.
-    """
-    from langdetect import detect, LangDetectException
-
-    # ── tunables ──────────────────────────────────────────────────
-    _FALSE_LANGS = {'no', 'so', 'sw', 'tl', 'cy', 'af', 'da'}
-    _TRUSTED_LANGS = {
-        'fr', 'de', 'es', 'it', 'pt', 'ro', 'ru', 'zh-cn', 'zh-tw',
-        'ja', 'ko', 'ar', 'nl', 'pl', 'uk', 'el', 'tr', 'sv', 'cs', 'hu',
-    }
-
-    def _safe_detect(s: str) -> str:
-        try:
-            lang = detect(s)
-            if lang in _FALSE_LANGS and len(s.split()) < 8:
-                return base_lang
-            return lang
-        except LangDetectException:
-            return base_lang
-
-    # ── Step 1: whole-text detection ──────────────────────────────
-    # If the whole text is in a single foreign language, return it as one
-    # block.  But first do a quick sanity check: split into sentences and
-    # see if any sentence detects as base_lang.  If so, it's mixed text —
-    # fall through to the per-sentence path.
-    overall = _safe_detect(text)
-    if overall != base_lang and overall in _TRUSTED_LANGS:
-        # Quick check: are there base-lang sentences mixed in?
-        _quick_bounds = list(re.finditer(r'(?<=[.!?])\s+', text))
-        _q_starts = [0] + [m.end() for m in _quick_bounds]
-        _q_ends = [m.start() for m in _quick_bounds] + [len(text)]
-        _q_sents = [text[s:e].strip() for s, e in zip(_q_starts, _q_ends) if text[s:e].strip()]
-        has_base = any(
-            _safe_detect(s) == base_lang and len(s.split()) >= 3
-            for s in _q_sents
-        )
-        if not has_base:
-            return [(overall, text)]
-
-    # ── Step 2a: extract quoted / emphasised foreign phrases ──────
-    foreign_spans: list[tuple[int, int, str]] = []
-    for m in _FOREIGN_PHRASE_RE.finditer(text):
-        phrase = next(g for g in m.groups() if g is not None)
-        if len(phrase.split()) < 2:
-            continue
-        lang = _safe_detect(phrase)
-        if lang != base_lang and lang not in _FALSE_LANGS:
-            foreign_spans.append((m.start(), m.end(), lang))
-
-    # ── Step 2b: sentence-level detection ─────────────────────────
-    sent_boundaries = list(re.finditer(r'(?<=[.!?])\s+|(?<=[:;])\s+', text))
-    sent_starts = [0] + [m.end() for m in sent_boundaries]
-    sent_ends = [m.start() for m in sent_boundaries] + [len(text)]
-    sentences = [
-        (s, e, text[s:e])
-        for s, e in zip(sent_starts, sent_ends)
-        if text[s:e].strip()
-    ]
-
-    # Label every sentence with a language
-    labelled: list[tuple[int, int, str, str]] = []  # (start, end, lang, text)
-    for start, end, sent in sentences:
-        # If the sentence overlaps a quoted foreign span, keep the quote's
-        # language for the whole sentence to avoid fragmenting it.
-        overlap_lang = None
-        for fs, fe, fl in foreign_spans:
-            if not (fe <= start or fs >= end):
-                overlap_lang = fl
-                break
-        if overlap_lang:
-            labelled.append((start, end, overlap_lang, sent))
-            continue
-
-        stripped = sent.strip()
-        wc = len(stripped.split())
-        lang = _safe_detect(stripped)
-        if lang == base_lang or lang in _FALSE_LANGS:
-            labelled.append((start, end, base_lang, sent))
-        elif lang in _TRUSTED_LANGS and wc >= 2:
-            labelled.append((start, end, lang, sent))
-        elif wc >= 4:
-            labelled.append((start, end, lang, sent))
-        else:
-            # Very short text — unreliable detection, default to base
-            labelled.append((start, end, base_lang, sent))
-
-    if not labelled:
-        return [(base_lang, text)]
-
-    # Short isolated foreign fragments (< 3 words) that don't match any
-    # neighbour are likely misdetections.  Absorb them into the preceding
-    # block's language.
-    for i in range(1, len(labelled)):
-        s, e, lang, stxt = labelled[i]
-        if lang == base_lang:
-            continue
-        wc = len(stxt.strip().split())
-        if wc < 3 and lang != labelled[i - 1][2]:
-            labelled[i] = (s, e, labelled[i - 1][2], stxt)
-
-    # ── Step 2c: merge consecutive same-language sentences ────────
-    merged: list[tuple[str, str]] = []
-    cur_lang = labelled[0][2]
-    cur_start = labelled[0][0]
-    cur_end = labelled[0][1]
-
-    for start, end, lang, _ in labelled[1:]:
-        if lang == cur_lang:
-            cur_end = end           # extend current block
-        else:
-            block = text[cur_start:cur_end].strip()
-            if block:
-                merged.append((cur_lang, block))
-            cur_lang = lang
-            cur_start = start
-            cur_end = end
-
-    # flush last block
-    block = text[cur_start:cur_end].strip()
-    if block:
-        merged.append((cur_lang, block))
-
-    # If every block ended up as base_lang, return the whole text as one piece
-    if all(lang == base_lang for lang, _ in merged):
-        return [(base_lang, text)]
-
-    return merged
-
-
-def _pick_voice_for_lang(lang: str, base_voice: str, voices: list[dict]) -> str:
-    """Pick the best edge-tts voice for a detected language, preserving the gender
-    of the user's selected base voice."""
-    # Determine gender of the base voice
-    base_gender = "Female"
-    for v in voices:
-        if v["name"] == base_voice:
-            base_gender = v["gender"]
-            break
-
-    lang_prefix = lang.lower()[:2]
-
-    # If the base voice already matches the language, keep it
-    for v in voices:
-        if v["name"] == base_voice and v["locale"].lower().startswith(lang_prefix):
-            return base_voice
-
-    candidates = [v for v in voices if v["locale"].lower().startswith(lang_prefix)]
-    if not candidates:
-        return base_voice  # no voice for this language; fall back
-
-    # Prefer same gender, then Neural voices (higher quality)
-    gender_match = [v for v in candidates if v["gender"] == base_gender]
-    pool = gender_match or candidates
-    neural = [v for v in pool if "Neural" in v["name"] and "Multilingual" not in v["name"]]
-    return (neural or pool)[0]["name"]
-
-
-class TTSRequest(BaseModel):
-    text: str
-    voice: str = "en-US-AriaNeural"
-
-
-@app.post("/tts/speak")
-async def tts_speak(req: TTSRequest):
-    """Generate speech audio from text using edge-tts.
-
-    Automatically detects language per sentence/phrase and switches to a
-    matching voice so foreign words are pronounced correctly.
-    """
-    import edge_tts
-
-    clean = req.text.strip()
-    if not clean:
-        raise HTTPException(status_code=400, detail="Empty text")
-
-    voices = await _ensure_tts_voices()
-
-    # Determine the base language from the user's selected voice
-    base_lang = "en"
-    for v in voices:
-        if v["name"] == req.voice:
-            base_lang = v["locale"][:2].lower()
-            break
-
-    segments = _split_multilingual(clean, base_lang)
-    logger.warning("[TTS] req.voice=%s base_lang=%s segments=%d text=%.80s",
-                   req.voice, base_lang, len(segments), clean)
-
-    buf = io.BytesIO()
-    for lang, text in segments:
-        voice = _pick_voice_for_lang(lang, req.voice, voices)
-        logger.warning("[TTS] segment lang=%s voice=%s text=%.60s", lang, voice, text)
-        communicate = edge_tts.Communicate(text, voice)
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                buf.write(chunk["data"])
-
-    if buf.tell() == 0:
-        raise HTTPException(status_code=500, detail="TTS produced no audio")
-
-    buf.seek(0)
-    return StreamingResponse(buf, media_type="audio/mpeg")
+register_tts_routes(app)
 
 
 # --- Static files & server entry point ---

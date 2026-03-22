@@ -1,6 +1,6 @@
 """Tests for language-aware TTS voice switching."""
 
-from researcher.main import _detect_lang, _pick_voice_for_lang, _split_multilingual
+from researcher.tts import _detect_lang, _pick_voice_for_lang, _split_multilingual
 
 
 # Sample voice list mimicking edge-tts structure

@@ -9,6 +9,7 @@ from pathlib import Path
 from upsonic import Agent as UpsonicAgent, Task as UpsonicTask
 from upsonic.models.ollama import OllamaModel
 from upsonic.tools import tool as upsonic_tool
+from upsonic.reflection.models import ReflectionConfig
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -278,6 +279,31 @@ CRITICAL RULES — FOLLOW EVERY INSTRUCTION LITERALLY:
    actually wrote. If something is ambiguous, cover the most common
    interpretation fully rather than guessing a narrow one.
 
+INTERNAL REASONING PROCESS — follow for EVERY request:
+Step 1 — ANALYZE: Read the full request. Count and list every deliverable
+  the user expects (e.g., "3 languages" = 3 separate full sections,
+  "compare X and Y" = analysis of both X and Y).
+Step 2 — PLAN: Create a mental outline of your response — headings,
+  sub-topics, estimated scope per deliverable. If the request has N parts,
+  your outline must have at least N major sections.
+Step 3 — EXECUTE: Write each section fully. After completing each section,
+  confirm to yourself: "Deliverable X — done." Only move to the next when
+  the current one is complete.
+Step 4 — VERIFY: Before submitting, re-read the original request word by
+  word. Compare your outline against what you wrote. If ANY deliverable is
+  missing or incomplete, add it NOW. Do not submit until every deliverable
+  is fully covered.
+
+CONVERSATION CONTINUITY:
+- If your input includes a CONVERSATION PROGRESS REPORT or EARLIER CONVERSATION
+  section, treat it as authoritative context — the user has been working with you
+  on this topic across multiple messages.
+- NEVER contradict or ignore earlier conversation. If the user already established
+  preferences, constraints, or context, honour them.
+- If a PROGRESS REPORT lists OPEN ITEMS, prioritise completing those in your response.
+- When building on prior work, reference what was already delivered: "As discussed
+  earlier…" or "Building on the previous analysis…"
+
 You have access to search and image tools.
 
 SEARCH STRATEGY:
@@ -312,6 +338,21 @@ OUTPUT FORMAT:
   exported DOCX looks professional.
 """
 
+# Task description for the planning phase (used in plan-then-execute decomposition)
+_PLAN_PROMPT = """\
+Analyze the following request and create a structured execution plan.
+
+REQUEST:
+{topic}
+
+Create a numbered outline listing EVERY deliverable the user expects.
+If the request mentions multiple items, languages, sections, or topics,
+list EACH one explicitly as a separate numbered deliverable.
+For each deliverable, briefly note what content is needed.
+
+Output ONLY the structured plan — do not write the actual content yet.\
+"""
+
 # Appended to every task description — replaces CrewAI's expected_output field
 _EXPECTED_OUTPUT = """
 
@@ -332,6 +373,85 @@ RESPONSE REQUIREMENTS — YOU MUST FOLLOW ALL OF THESE:
 5. Before submitting your answer, RE-READ the original request and verify you
    addressed every part of it. If you missed something, add it now.
 """
+
+# Continuation task description — used by /chat/continue
+_CONTINUE_PROMPT = """\
+The user asked a question and a previous agent attempt produced a partial answer
+but did not finish. Your job is to CONTINUE and COMPLETE the answer from where
+it left off.
+
+RULES:
+1. Do NOT repeat content that was already produced — only produce the REMAINING parts.
+2. Continue seamlessly from the last line of the partial answer.
+3. Use the same formatting style (markdown tables, headings, etc.) as the partial answer.
+4. If the partial answer is a failure message or empty, write the full answer from scratch.
+5. Before submitting, verify you have covered all remaining parts of the original request.
+
+Original user request:
+{original_query}
+
+--- PARTIAL ANSWER (already shown to user) ---
+{partial_response}
+--- END OF PARTIAL ANSWER ---
+
+Continue from where the partial answer left off. Only output the NEW content
+that completes the answer. Do NOT repeat any of the partial answer above.\
+"""
+
+# LLM-based conversation summarization — equivalent to CrewAI's Process Manager.
+# Used for long conversations (>10 messages) where heuristic extraction
+# isn't enough to preserve context fidelity.
+_SUMMARIZE_PROMPT = """\
+You are a conversation progress manager. Below is the conversation history
+between a user and an AI assistant. Produce a structured PROGRESS REPORT.
+
+CONVERSATION:
+{conversation}
+
+Output a structured progress report with these sections:
+1. TOPICS DISCUSSED: Numbered list of every topic/question the user raised.
+2. KEY DELIVERABLES: What the assistant has already produced (be specific:
+   mention languages, document types, data formats, conclusions reached).
+3. OPEN ITEMS: Anything the user asked for that hasn't been fully delivered yet.
+4. ESTABLISHED CONTEXT: Key facts, preferences, or constraints the user has
+   stated (e.g., preferred language, data sources, formatting requests).
+
+Be concise but complete. Do NOT omit any user request or deliverable.\
+"""
+
+
+# --------------- Planning heuristic ---------------
+
+import re as _re
+
+_COMPLEXITY_PATTERNS = [
+    _re.compile(r'\d+\s*(languages?|items?|examples?|sections?|parts?|versions?|points?)', _re.I),
+    _re.compile(r'\b(exhaustive|comprehensive|detailed|thorough|in-depth)\b', _re.I),
+    _re.compile(r'\b(compare|comparison|versus|vs\.?)\b', _re.I),
+    _re.compile(r'\b(each|every|all)\b.*\b(language|country|topic|item|section)\b', _re.I),
+    _re.compile(r'\b(step[- ]by[- ]step|multi[- ]part|multi[- ]section)\b', _re.I),
+]
+
+
+def _needs_planning(topic: str) -> bool:
+    """Determine if a query benefits from a planning phase.
+
+    Short simple queries skip planning; longer or multi-part requests get it.
+    """
+    # Extract the actual new request if conversation history is prepended
+    if "New request: " in topic:
+        query = topic.split("New request: ", 1)[-1]
+    else:
+        query = topic
+    # Very short queries don't need planning
+    if len(query.split()) < 20:
+        return False
+    # Check for explicit complexity indicators
+    for pat in _COMPLEXITY_PATTERNS:
+        if pat.search(query):
+            return True
+    # Long queries (> 50 words) likely benefit from planning
+    return len(query.split()) > 50
 
 
 # --------------- ResearchCrew — Upsonic-based agent wrapper ---------------
@@ -366,9 +486,15 @@ class ResearchCrew:
             debug=False,
             retry=2,
             reflection=True,
+            reflection_config=ReflectionConfig(
+                max_iterations=3,
+                acceptance_threshold=0.85,
+                enable_self_critique=True,
+                enable_improvement_suggestions=True,
+            ),
             settings={
                 "max_tokens": 16384,
-                "temperature": 0.6,
+                "temperature": 0.4,
                 "extra_body": {
                     "num_ctx": 32768,
                 },
@@ -380,58 +506,161 @@ class ResearchCrew:
         return self
 
     def kickoff(self, inputs: dict | None = None) -> "UpsonicResult":
-        """Run the agent synchronously (for /ask endpoint). Returns result object."""
+        """Run the agent synchronously (for /ask endpoint). Returns result object.
+
+        For non-trivial requests, uses a two-phase plan-then-execute approach:
+        Phase 1 generates a structured outline; Phase 2 executes it fully.
+        """
         topic = (inputs or {}).get("topic", "")
+
+        if _needs_planning(topic):
+            # Phase 1: Plan
+            plan_task = UpsonicTask(
+                description=_PLAN_PROMPT.format(topic=topic),
+                tools=[],
+            )
+            self._agent.do(plan_task, return_output=True)
+
+            # Phase 2: Execute with plan as context
+            exec_task = UpsonicTask(
+                description=topic + _EXPECTED_OUTPUT,
+                tools=_get_tools(),
+                context=[plan_task],
+            )
+            run_output = self._agent.do(exec_task, return_output=True)
+            return UpsonicResult(run_output, exec_task)
+        else:
+            # Simple request — single task
+            task = UpsonicTask(
+                description=topic + _EXPECTED_OUTPUT,
+                tools=_get_tools(),
+            )
+            run_output = self._agent.do(task, return_output=True)
+            return UpsonicResult(run_output, task)
+
+    def stream_kickoff(self, inputs: dict | None = None):
+        """Run the agent with event streaming (for /chat endpoint).
+        Yields (event_kind, data_dict) tuples for real-time SSE.
+
+        For non-trivial requests, uses a two-phase plan-then-execute approach:
+        Phase 1 streams a structured outline as reasoning; Phase 2 streams
+        the full execution with tool calls and text output.
+        """
+        topic = (inputs or {}).get("topic", "")
+
+        if _needs_planning(topic):
+            # Phase 1: Planning — stream events as reasoning
+            plan_task = UpsonicTask(
+                description=_PLAN_PROMPT.format(topic=topic),
+                tools=[],
+            )
+            yield ('step', 'Phase 1: Analyzing request and planning response…')
+            plan_output = None
+            for event in self._agent.stream(plan_task, events=True):
+                kind = getattr(event, 'event_kind', '')
+                if kind == 'thinking_delta':
+                    yield ('thinking', event.content)
+                elif kind == 'text_delta':
+                    # Plan text appears as reasoning, not final answer
+                    yield ('thinking', event.content)
+                elif kind == 'final_output':
+                    plan_output = event.output
+                elif kind == 'model_request_start':
+                    yield ('thinking', 'Planning…')
+
+            if plan_output:
+                yield ('thinking', f'\n--- Plan ---\n{plan_output}\n---\n')
+
+            # Phase 2: Execution — stream normally with plan as context
+            exec_task = UpsonicTask(
+                description=topic + _EXPECTED_OUTPUT,
+                tools=_get_tools(),
+                context=[plan_task],
+            )
+            yield ('step', 'Phase 2: Executing plan…')
+            final_output = None
+            for event in self._agent.stream(exec_task, events=True):
+                yield from self._handle_stream_event(event)
+                if getattr(event, 'event_kind', '') == 'final_output':
+                    final_output = event.output
+            yield ('done', UpsonicResult(final_output, exec_task, from_stream=True))
+        else:
+            # Simple request — single streaming task
+            task = UpsonicTask(
+                description=topic + _EXPECTED_OUTPUT,
+                tools=_get_tools(),
+            )
+            final_output = None
+            for event in self._agent.stream(task, events=True):
+                yield from self._handle_stream_event(event)
+                if getattr(event, 'event_kind', '') == 'final_output':
+                    final_output = event.output
+            yield ('done', UpsonicResult(final_output, task, from_stream=True))
+
+    @staticmethod
+    def _handle_stream_event(event):
+        """Convert a single Upsonic stream event to (kind, data) tuples."""
+        kind = getattr(event, 'event_kind', '')
+        if kind == 'thinking_delta':
+            yield ('thinking', event.content)
+        elif kind == 'text_delta':
+            yield ('text_delta', event.content)
+        elif kind == 'tool_call':
+            args_preview = ''
+            if hasattr(event, 'tool_args') and event.tool_args:
+                for key in ('search_query', 'query', 'prompt', 'instructions'):
+                    if key in event.tool_args:
+                        args_preview = f': {event.tool_args[key][:100]}'
+                        break
+            yield ('tool_call', f'{event.tool_name}{args_preview}')
+        elif kind == 'tool_result':
+            status = 'error' if event.is_error else 'done'
+            preview = ''
+            if event.result_preview:
+                preview = f': {event.result_preview[:150]}'
+            elif event.error_message:
+                preview = f': {event.error_message[:150]}'
+            time_str = f' ({event.execution_time:.1f}s)' if event.execution_time else ''
+            yield ('tool_result', f'{event.tool_name} [{status}]{time_str}{preview}')
+        elif kind == 'step_start':
+            step_name = getattr(event, 'step_name', '') or ''
+            step_idx = getattr(event, 'step_index', '')
+            yield ('step', f'Step {step_idx}: {step_name}' if step_name else f'Step {step_idx}')
+        elif kind == 'model_request_start':
+            yield ('thinking', 'Calling LLM…')
+
+    def continue_kickoff(self, original_query: str, partial_response: str,
+                         file_context: str = "") -> "UpsonicResult":
+        """Continue an incomplete response using the full Upsonic agent pipeline.
+
+        Unlike the old litellm-direct approach, this goes through the agent's
+        reflection loop and has access to search/image tools if the continuation
+        requires them.
+        """
+        description = file_context + _CONTINUE_PROMPT.format(
+            original_query=original_query,
+            partial_response=partial_response,
+        )
         task = UpsonicTask(
-            description=topic + _EXPECTED_OUTPUT,
+            description=description,
             tools=_get_tools(),
         )
         run_output = self._agent.do(task, return_output=True)
         return UpsonicResult(run_output, task)
 
-    def stream_kickoff(self, inputs: dict | None = None):
-        """Run the agent with event streaming (for /chat endpoint).
-        Yields (event_kind, data_dict) tuples for real-time SSE."""
-        topic = (inputs or {}).get("topic", "")
+    def summarize_history(self, conversation_text: str) -> str:
+        """Produce a structured progress report from conversation history.
+
+        This is the Upsonic equivalent of CrewAI's Process Manager — it
+        condenses long conversations into a structured summary so the agent
+        never loses track of what was discussed and what remains to be done.
+        """
         task = UpsonicTask(
-            description=topic + _EXPECTED_OUTPUT,
-            tools=_get_tools(),
+            description=_SUMMARIZE_PROMPT.format(conversation=conversation_text),
+            tools=[],  # No tools needed for summarization
         )
-        final_output = None
-        for event in self._agent.stream(task, events=True):
-            kind = getattr(event, 'event_kind', '')
-            if kind == 'thinking_delta':
-                yield ('thinking', event.content)
-            elif kind == 'text_delta':
-                yield ('text_delta', event.content)
-            elif kind == 'tool_call':
-                args_preview = ''
-                if hasattr(event, 'tool_args') and event.tool_args:
-                    # Show search query or prompt if available
-                    for key in ('search_query', 'query', 'prompt', 'instructions'):
-                        if key in event.tool_args:
-                            args_preview = f': {event.tool_args[key][:100]}'
-                            break
-                yield ('tool_call', f'{event.tool_name}{args_preview}')
-            elif kind == 'tool_result':
-                status = 'error' if event.is_error else 'done'
-                preview = ''
-                if event.result_preview:
-                    preview = f': {event.result_preview[:150]}'
-                elif event.error_message:
-                    preview = f': {event.error_message[:150]}'
-                time_str = f' ({event.execution_time:.1f}s)' if event.execution_time else ''
-                yield ('tool_result', f'{event.tool_name} [{status}]{time_str}{preview}')
-            elif kind == 'step_start':
-                step_name = getattr(event, 'step_name', '') or ''
-                step_idx = getattr(event, 'step_index', '')
-                yield ('step', f'Step {step_idx}: {step_name}' if step_name else f'Step {step_idx}')
-            elif kind == 'final_output':
-                final_output = event.output
-            elif kind == 'model_request_start':
-                yield ('thinking', 'Calling LLM...')
-        # Yield the final result
-        yield ('done', UpsonicResult(final_output, task, from_stream=True))
+        result = self._agent.do(task, return_output=True)
+        return str(result) if result else ""
 
 
 class UpsonicResult:

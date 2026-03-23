@@ -405,6 +405,153 @@ def _extract_usage(result) -> dict:
     return {}
 
 
+# --- Conversation Progress Manager ---
+# Equivalent to CrewAI's Process Manager: prevents amnesia by building
+# structured context from conversation history instead of dumb truncation.
+
+_img_ctx_re = re.compile(r'!\[[^\]]*\]\(/static/generated/[^)]+\)')
+_heading_re = re.compile(r'^#{1,4}\s+.+', re.MULTILINE)
+
+
+def _extract_headings(text: str, max_headings: int = 8) -> list[str]:
+    """Pull markdown headings from text as a structural summary."""
+    return _heading_re.findall(text)[:max_headings]
+
+
+def _heuristic_summary(text: str, max_chars: int = 800) -> str:
+    """Heuristic summarization: extract headings + first/last paragraphs."""
+    text = _img_ctx_re.sub('[image]', text)
+    headings = _extract_headings(text)
+    if headings:
+        # Keep headings as structural outline
+        outline = "Structure: " + " | ".join(h.lstrip('#').strip() for h in headings)
+    else:
+        outline = ""
+
+    paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+    if not paragraphs:
+        return text[:max_chars]
+
+    # First paragraph (introduction/summary) + last paragraph (conclusion)
+    first = paragraphs[0][:400]
+    last = paragraphs[-1][:400] if len(paragraphs) > 1 else ""
+    parts = [p for p in [outline, first, last] if p]
+    result = "\n".join(parts)
+    return result[:max_chars]
+
+
+def _build_conversation_context(history: list, crew, new_message: str,
+                                file_context: str = "") -> str:
+    """Build conversation context with intelligent summarization.
+
+    Three tiers based on conversation length:
+    - Short (≤4 messages): Full history, no summarization needed.
+    - Medium (5-10 messages): Heuristic extraction of key content from
+      older assistant messages; recent messages kept in full.
+    - Long (>10 messages): LLM-based progress report for the oldest
+      portion, heuristic for middle, full for recent.
+    """
+    if not history:
+        return file_context + new_message
+
+    n = len(history)
+
+    if n <= 4:
+        # Short conversation — include everything in full
+        lines = []
+        for msg in history:
+            role = msg.get('role', 'user')
+            text = msg.get('text', '')
+            if role == 'assistant':
+                text = _img_ctx_re.sub('[image]', text)
+                text = text[:3000] + ('…' if len(text) > 3000 else '')
+            lines.append(f"{role.title()}: {text}")
+        return (file_context
+                + "Previous conversation:\n"
+                + "\n".join(lines)
+                + "\n\nNew request: " + new_message)
+
+    # For medium/long conversations, split into zones:
+    #   - OLD zone:    messages before the last 6
+    #   - RECENT zone: last 6 messages (kept with more detail)
+    recent_count = min(6, n)
+    old_msgs = history[:n - recent_count]
+    recent_msgs = history[n - recent_count:]
+
+    # --- Process OLD messages ---
+    old_context = ""
+    if old_msgs:
+        if len(old_msgs) > 10:
+            # Long conversation — use LLM-based summarization for oldest part
+            # Build raw text for the summarizer
+            raw_lines = []
+            for msg in old_msgs:
+                role = msg.get('role', 'user')
+                text = msg.get('text', '')
+                if role == 'assistant':
+                    text = _img_ctx_re.sub('[image]', text)
+                    text = text[:1000]  # cap individual messages for summarizer input
+                raw_lines.append(f"{role.title()}: {text}")
+            raw_conversation = "\n".join(raw_lines)
+
+            try:
+                summary = crew.summarize_history(raw_conversation)
+                if summary:
+                    # Strip thinking tags from summary
+                    summary = re.sub(r'<think>[\s\S]*?</think>\s*', '', summary).strip()
+                    old_context = f"CONVERSATION PROGRESS REPORT:\n{summary}\n"
+            except Exception:
+                logger.warning("[chat] LLM summarization failed, falling back to heuristic")
+                old_context = ""
+
+            if not old_context:
+                # Fallback: heuristic summary of old messages
+                old_lines = []
+                for msg in old_msgs:
+                    role = msg.get('role', 'user')
+                    text = msg.get('text', '')
+                    if role == 'user':
+                        old_lines.append(f"User asked: {text[:300]}")
+                    else:
+                        text = _img_ctx_re.sub('[image]', text)
+                        old_lines.append(f"Assistant: {_heuristic_summary(text, 400)}")
+                old_context = ("EARLIER CONVERSATION (summarized):\n"
+                               + "\n".join(old_lines) + "\n")
+        else:
+            # Medium conversation — heuristic extraction
+            old_lines = []
+            for msg in old_msgs:
+                role = msg.get('role', 'user')
+                text = msg.get('text', '')
+                if role == 'user':
+                    # User requests always in full (they're the "instructions")
+                    old_lines.append(f"User: {text}")
+                else:
+                    text = _img_ctx_re.sub('[image]', text)
+                    old_lines.append(f"Assistant: {_heuristic_summary(text, 600)}")
+            old_context = ("EARLIER CONVERSATION:\n"
+                           + "\n".join(old_lines) + "\n")
+
+    # --- Process RECENT messages ---
+    recent_lines = []
+    for msg in recent_msgs:
+        role = msg.get('role', 'user')
+        text = msg.get('text', '')
+        if role == 'user':
+            recent_lines.append(f"User: {text}")
+        else:
+            text = _img_ctx_re.sub('[image]', text)
+            # Recent assistant messages get generous space
+            text = text[:2500] + ('…' if len(text) > 2500 else '')
+            recent_lines.append(f"Assistant: {text}")
+
+    return (file_context
+            + old_context
+            + "RECENT CONVERSATION:\n"
+            + "\n".join(recent_lines)
+            + "\n\nNew request: " + new_message)
+
+
 # --- /chat  SSE streaming endpoint ---
 
 @app.post("/chat")
@@ -417,43 +564,15 @@ async def chat(req: ChatRequest, request: Request):
         db = request.app.state.db
         file_context = await get_file_context(db, user["id"], req.file_ids)
 
-    # Build context from conversation history.
-    # Include ALL messages so the LLM never "forgets" earlier requests.
-    # User messages are always kept in full; assistant messages are
-    # progressively trimmed for older entries to stay within context budget.
-    context_lines = []
-    _img_ctx_re = re.compile(r'!\[[^\]]*\]\(/static/generated/[^)]+\)')
-    history = req.history or []
-    n = len(history)
-    for idx, msg in enumerate(history):
-        role = msg.get('role', 'user')
-        text = msg.get('text', '')
-        if role == 'user':
-            # Always include user messages in full
-            context_lines.append(f"User: {text}")
-        elif role == 'assistant':
-            text = _img_ctx_re.sub('[image was shown]', text)
-            # Recent assistant messages get more space; older ones less.
-            # Last 4 messages: 2000 chars, next 6: 600 chars, older: 200 chars.
-            if idx >= n - 4:
-                limit = 2000
-            elif idx >= n - 10:
-                limit = 600
-            else:
-                limit = 200
-            short = text[:limit] + ('...' if len(text) > limit else '')
-            context_lines.append(f"Assistant: {short}")
-
-    if context_lines:
-        topic = (file_context
-                 + "Previous conversation:\n"
-                 + "\n".join(context_lines)
-                 + "\n\nNew request: " + req.message)
-    else:
-        topic = file_context + req.message
+    crew = request.app.state.crew_instance
+    topic = _build_conversation_context(
+        history=req.history or [],
+        crew=crew,
+        new_message=req.message,
+        file_context=file_context,
+    )
 
     inputs = {'topic': topic}
-    crew = request.app.state.crew_instance
     semaphore = request.app.state.crew_semaphore
 
     # Queue for streaming events from the blocking generator
@@ -573,13 +692,11 @@ async def chat(req: ChatRequest, request: Request):
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
-# --- /chat/continue  LLM-direct continuation (no agent tools) ---
+# --- /chat/continue  Agent-based continuation ---
 
 @app.post("/chat/continue")
 async def chat_continue(req: ContinueRequest, request: Request):
-    """Continue an incomplete agent response by calling the LLM directly."""
-    import litellm
-
+    """Continue an incomplete agent response using the full Upsonic agent pipeline."""
     user = await get_current_user(request)  # require login
 
     # Optional file context
@@ -588,64 +705,34 @@ async def chat_continue(req: ContinueRequest, request: Request):
         db = request.app.state.db
         file_context = await get_file_context(db, user["id"], req.file_ids)
 
-    model = request.app.state.current_model
-    # Strip "ollama/" prefix for litellm's ollama_chat provider
-    if model.startswith("ollama/"):
-        litellm_model = "ollama_chat/" + model[len("ollama/"):]
-    else:
-        litellm_model = model
-
-    system_prompt = (
-        "You are a knowledgeable research assistant. "
-        "The user asked a question and a previous agent produced a partial answer "
-        "but ran out of processing steps before finishing. "
-        "Your job is to CONTINUE and COMPLETE the answer from where it left off. "
-        "Do NOT repeat content that was already produced — only produce the REMAINING parts. "
-        "Continue seamlessly from the last line of the partial answer. "
-        "Use the same formatting style (markdown tables, headings, etc.) as the partial answer."
-    )
-    user_prompt = (
-        file_context
-        + "Original user request:\n" + req.original_query
-        + "\n\n--- PARTIAL ANSWER (already shown to user) ---\n"
-        + req.partial_response
-        + "\n--- END OF PARTIAL ANSWER ---\n\n"
-        "Continue from where the partial answer left off. "
-        "Only output the NEW content that completes the answer. "
-        "Do NOT repeat any of the partial answer above."
-    )
+    crew = request.app.state.crew_instance
 
     loop = asyncio.get_running_loop()
-    def _call_llm():
-        return litellm.completion(
-            model=litellm_model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            api_base="http://localhost:11434",
-            num_retries=0,
-            temperature=0.1,
+    def _run_continue():
+        return crew.continue_kickoff(
+            original_query=req.original_query,
+            partial_response=req.partial_response,
+            file_context=file_context,
         )
 
     try:
-        logger.info("[chat/continue] Calling LLM model=%s, query_len=%d, partial_len=%d",
-                     litellm_model, len(req.original_query), len(req.partial_response))
-        response = await loop.run_in_executor(None, _call_llm)
-        text = response.choices[0].message.content or ""
-        logger.info("[chat/continue] LLM returned %d chars", len(text))
+        logger.info("[chat/continue] Using Upsonic agent, query_len=%d, partial_len=%d",
+                     len(req.original_query), len(req.partial_response))
+        result = await loop.run_in_executor(None, _run_continue)
+        text = str(result)
+        logger.info("[chat/continue] Agent returned %d chars", len(text))
         # Strip thinking tags
         text = re.sub(r'<think>[\s\S]*?</think>\s*', '', text).strip()
         usage = {}
-        if hasattr(response, 'usage') and response.usage:
+        if result.token_usage:
             usage = {
-                "total_tokens": getattr(response.usage, 'total_tokens', 0),
-                "prompt_tokens": getattr(response.usage, 'prompt_tokens', 0),
-                "completion_tokens": getattr(response.usage, 'completion_tokens', 0),
+                "total_tokens": result.token_usage.total_tokens,
+                "prompt_tokens": result.token_usage.prompt_tokens,
+                "completion_tokens": result.token_usage.completion_tokens,
             }
         return {
             "response": text,
-            "reasoning": ["Continued via direct LLM call (bypassed agent tools)"],
+            "reasoning": result.reasoning_lines or ["Continued via Upsonic agent"],
             "token_usage": usage,
         }
     except Exception as e:

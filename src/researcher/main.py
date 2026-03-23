@@ -1,9 +1,6 @@
 import sys
 import os
 
-# Disable CrewAI interactive trace prompt that blocks the server
-os.environ.setdefault('CREWAI_TRACING_ENABLED', 'false')
-
 import io
 import re
 import json
@@ -25,11 +22,12 @@ from dotenv import load_dotenv
 import httpx
 import aiosqlite
 
-from researcher.crew import (
+from researcher.upsonicai import (
     ResearchCrew,
     generate_image as _generate_image_tool,
     generate_ai_image as _generate_ai_image_tool,
     preload_sd,
+    UpsonicResult,
 )
 from researcher.auth import (
     register_auth_routes,
@@ -61,6 +59,7 @@ _box_re = re.compile(r'[╭╮╰╯│─┌┐└┘├┤┬┴┼]+')
 
 _think_re = re.compile(r'<think>[\s\S]*?</think>\s*')
 _think_open_re = re.compile(r'</?think>')
+_think_extract_re = re.compile(r'<think>([\s\S]*?)</think>')
 
 
 def _clean_line(text: str) -> str:
@@ -147,7 +146,7 @@ def _get_whisper():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # -- Crew / model init --
+    # -- Agent / model init --
     model = os.getenv("MODEL", "ollama/qwen3.5:9b")
     app.state.current_model = model
     app.state.crew_instance = ResearchCrew(model=model).crew()
@@ -296,7 +295,7 @@ _orphan_re = re.compile(
 
 
 def _postprocess(response_text: str, verbose_log: str) -> str:
-    """Clean up crew output: rescue orphan tool calls, validate images, strip noise."""
+    """Clean up agent output: rescue orphan tool calls, validate images, strip noise."""
     # Orphan rescue — run tool server-side if LLM described action but never executed
     orphan = _orphan_re.search(response_text)
     if orphan:
@@ -310,16 +309,16 @@ def _postprocess(response_text: str, verbose_log: str) -> str:
                     prompt = parsed.get('prompt', raw_input)
                 except (json.JSONDecodeError, TypeError):
                     pass
-                response_text = _generate_ai_image_tool.run(prompt)
+                response_text = _generate_ai_image_tool(prompt)
             else:
                 parsed = json.loads(raw_input)
                 if 'instructions' in parsed:
                     iv = parsed['instructions']
                     if isinstance(iv, dict):
                         iv = json.dumps(iv)
-                    response_text = _generate_image_tool.run(iv)
+                    response_text = _generate_image_tool(iv)
                 else:
-                    response_text = _generate_image_tool.run(raw_input)
+                    response_text = _generate_image_tool(raw_input)
         except Exception as exc:
             sys.stderr.write(f"[orphan-rescue] Error: {exc}\n")
             sys.stderr.flush()
@@ -382,6 +381,19 @@ def _is_incomplete(response_text: str, verbose_log: str) -> bool:
     return False
 
 
+def _extract_thinking(raw_text: str) -> list[str]:
+    """Pull reasoning from <think> blocks before they get stripped."""
+    lines = []
+    for m in _think_extract_re.finditer(raw_text):
+        thought = m.group(1).strip()
+        if thought:
+            for line in thought.splitlines():
+                line = line.strip()
+                if line:
+                    lines.append(line)
+    return lines
+
+
 def _extract_usage(result) -> dict:
     if hasattr(result, 'token_usage') and result.token_usage:
         tu = result.token_usage
@@ -405,17 +417,31 @@ async def chat(req: ChatRequest, request: Request):
         db = request.app.state.db
         file_context = await get_file_context(db, user["id"], req.file_ids)
 
-    # Build context from conversation history
+    # Build context from conversation history.
+    # Include ALL messages so the LLM never "forgets" earlier requests.
+    # User messages are always kept in full; assistant messages are
+    # progressively trimmed for older entries to stay within context budget.
     context_lines = []
     _img_ctx_re = re.compile(r'!\[[^\]]*\]\(/static/generated/[^)]+\)')
-    for msg in req.history[-4:]:
+    history = req.history or []
+    n = len(history)
+    for idx, msg in enumerate(history):
         role = msg.get('role', 'user')
         text = msg.get('text', '')
         if role == 'user':
+            # Always include user messages in full
             context_lines.append(f"User: {text}")
         elif role == 'assistant':
             text = _img_ctx_re.sub('[image was shown]', text)
-            short = text[:120] + ('...' if len(text) > 120 else '')
+            # Recent assistant messages get more space; older ones less.
+            # Last 4 messages: 2000 chars, next 6: 600 chars, older: 200 chars.
+            if idx >= n - 4:
+                limit = 2000
+            elif idx >= n - 10:
+                limit = 600
+            else:
+                limit = 200
+            short = text[:limit] + ('...' if len(text) > limit else '')
             context_lines.append(f"Assistant: {short}")
 
     if context_lines:
@@ -430,19 +456,16 @@ async def chat(req: ChatRequest, request: Request):
     crew = request.app.state.crew_instance
     semaphore = request.app.state.crew_semaphore
 
-    q: queue.Queue = queue.Queue()
+    # Queue for streaming events from the blocking generator
+    eq: queue.Queue = queue.Queue()
 
-    def _run_crew():
-        writer = _QueueWriter(q)
-        old_stdout, old_stdin = sys.stdout, sys.stdin
-        sys.stdout = writer
-        sys.stdin = io.StringIO('N\n')
+    def _run_stream():
+        """Run stream_kickoff in a worker thread, push events into eq."""
         try:
-            return crew.kickoff(inputs=inputs)
-        finally:
-            writer.flush()
-            sys.stdout = old_stdout
-            sys.stdin = old_stdin
+            for kind, data in crew.stream_kickoff(inputs=inputs):
+                eq.put((kind, data))
+        except Exception as exc:
+            eq.put(('error', str(exc)))
 
     def _sse(event: str, data) -> str:
         return f"event: {event}\ndata: {json.dumps(data)}\n\n"
@@ -450,56 +473,99 @@ async def chat(req: ChatRequest, request: Request):
     async def event_stream():
         async with semaphore:
             loop = asyncio.get_running_loop()
-            future = loop.run_in_executor(None, _run_crew)
-            all_lines: list[str] = []
+            future = loop.run_in_executor(None, _run_stream)
+            all_reasoning: list[str] = []
+            result = None
+            # Buffer for accumulating thinking token deltas into full lines
+            think_buf = ""
 
-            _skip_history = False
+            def _flush_thinking():
+                """Flush complete lines from the thinking buffer."""
+                nonlocal think_buf
+                lines_out = []
+                while '\n' in think_buf:
+                    line, think_buf = think_buf.split('\n', 1)
+                    line = line.strip()
+                    if line:
+                        lines_out.append(line)
+                return lines_out
 
-            def _should_show(line: str) -> bool:
-                nonlocal _skip_history
-                if 'Previous conversation:' in line:
-                    _skip_history = True
-                    return False
-                if _skip_history:
-                    if 'New request:' in line:
-                        _skip_history = False
-                    return False
-                return True
+            def _flush_thinking_all():
+                """Flush everything remaining in the buffer (partial line too)."""
+                nonlocal think_buf
+                lines_out = _flush_thinking()
+                remainder = think_buf.strip()
+                if remainder:
+                    lines_out.append(remainder)
+                    think_buf = ""
+                return lines_out
 
-            while not future.done():
-                await asyncio.sleep(0.15)
-                while not q.empty():
+            while True:
+                await asyncio.sleep(0.05)
+                # Drain all queued events
+                while not eq.empty():
                     try:
-                        line = q.get_nowait()
-                        all_lines.append(line)
-                        if _should_show(line):
-                            yield _sse("reasoning", line)
+                        kind, data = eq.get_nowait()
                     except queue.Empty:
                         break
 
-            # Drain remaining
-            while not q.empty():
-                try:
-                    line = q.get_nowait()
-                    all_lines.append(line)
-                    if _should_show(line):
+                    if kind == 'thinking':
+                        # Accumulate token deltas; emit only complete lines
+                        think_buf += str(data)
+                        for line in _flush_thinking():
+                            all_reasoning.append(line)
+                            yield _sse("reasoning", line)
+                    elif kind in ('tool_call', 'tool_result', 'step', 'done', 'error'):
+                        # Flush any pending thinking text before non-thinking events
+                        for line in _flush_thinking_all():
+                            all_reasoning.append(line)
+                            yield _sse("reasoning", line)
+                        if kind == 'tool_call':
+                            line = f"🔧 Tool: {data}"
+                            all_reasoning.append(line)
+                            yield _sse("reasoning", line)
+                        elif kind == 'tool_result':
+                            line = f"   ↳ {data}"
+                            all_reasoning.append(line)
+                            yield _sse("reasoning", line)
+                        elif kind == 'step':
+                            line = f"▶ {data}"
+                            all_reasoning.append(line)
+                            yield _sse("reasoning", line)
+                        elif kind == 'error':
+                            yield _sse("error", data)
+                            return
+                        elif kind == 'done':
+                            result = data  # UpsonicResult
+                    # text_delta — don't send as reasoning; it's the final answer text
+
+                if result is not None:
+                    break
+                if future.done():
+                    # Flush remaining thinking buffer
+                    for line in _flush_thinking_all():
+                        all_reasoning.append(line)
                         yield _sse("reasoning", line)
-                except queue.Empty:
+                    # If thread finished but we didn't get a 'done' event, check for exceptions
+                    try:
+                        future.result()
+                    except Exception as e:
+                        yield _sse("error", str(e))
+                        return
                     break
 
-            try:
-                result = future.result()
-            except Exception as e:
-                yield _sse("error", str(e))
+            if result is None:
+                yield _sse("error", "Agent stream ended without producing a result")
                 return
 
-            response_text = _postprocess(str(result), '\n'.join(all_lines))
+            raw = str(result)
+            response_text = _postprocess(raw, '\n'.join(all_reasoning))
             usage = _extract_usage(result)
-            incomplete = _is_incomplete(response_text, '\n'.join(all_lines))
+            incomplete = _is_incomplete(response_text, '\n'.join(all_reasoning))
 
             yield _sse("done", {
                 "response": response_text,
-                "reasoning": all_lines,
+                "reasoning": all_reasoning,
                 "token_usage": usage,
                 "incomplete": incomplete,
             })
@@ -507,7 +573,7 @@ async def chat(req: ChatRequest, request: Request):
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
-# --- /chat/continue  LLM-direct continuation (no CrewAI) ---
+# --- /chat/continue  LLM-direct continuation (no agent tools) ---
 
 @app.post("/chat/continue")
 async def chat_continue(req: ContinueRequest, request: Request):
@@ -721,15 +787,13 @@ async def ask(req: AskRequest, request: Request):
 
     def _run():
         writer = _QueueWriter(q)
-        old_stdout, old_stdin = sys.stdout, sys.stdin
+        old_stdout = sys.stdout
         sys.stdout = writer
-        sys.stdin = io.StringIO('N\n')
         try:
             return crew.kickoff(inputs={'topic': topic})
         finally:
             writer.flush()
             sys.stdout = old_stdout
-            sys.stdin = old_stdin
 
     async with semaphore:
         loop = asyncio.get_running_loop()
@@ -745,9 +809,21 @@ async def ask(req: AskRequest, request: Request):
         except queue.Empty:
             break
 
+    raw = str(result)
+    # Extract reasoning from AgentRunOutput thinking parts
+    if hasattr(result, 'reasoning_lines'):
+        agent_reasoning = result.reasoning_lines
+        if agent_reasoning:
+            reasoning.extend(agent_reasoning)
+    # Extract <think> reasoning from raw text as fallback
+    think_lines = _extract_thinking(raw)
+    if think_lines:
+        reasoning.extend(think_lines)
+    response_text = _postprocess(raw, '\n'.join(reasoning))
+
     return {
         "status": "success",
-        "response": str(result),
+        "response": response_text,
         "reasoning": reasoning,
         "token_usage": _extract_usage(result),
         "model": request.app.state.current_model,

@@ -1,6 +1,6 @@
 """Tests for FastAPI endpoints in main.py.
 
-Uses httpx AsyncClient with mocked heavy dependencies (CrewAI, Ollama, Whisper, SD).
+Uses httpx AsyncClient with mocked heavy dependencies (Upsonic, Ollama, Whisper, SD).
 """
 
 import asyncio
@@ -22,7 +22,7 @@ from researcher import auth as auth_module
 
 @pytest.fixture(autouse=True)
 def _patch_external_services(tmp_path, monkeypatch):
-    """Patch CrewAI, Ollama, SD preload so tests don't need real services."""
+    """Patch Upsonic agent, Ollama, SD preload so tests don't need real services."""
     # Use temp DB for tests
     test_db = tmp_path / "test_sessions.db"
     monkeypatch.setattr("researcher.main.DB_PATH", test_db)

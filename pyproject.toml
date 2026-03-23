@@ -2,11 +2,10 @@
 name = "researcher-agent"
 version = "0.5.0"
 dependencies = [
-    "crewai[tools]>=0.100.0",
+    "upsonic[tools]",
     "fastapi",
     "uvicorn",
     "python-dotenv",
-    "langchain-community",
     "httpx",
     "Pillow",
     "diffusers",
@@ -22,6 +21,7 @@ dependencies = [
     "pymupdf",
     "python-docx",
     "openpyxl",
+    "litellm",
 ]
 
 [project.optional-dependencies]

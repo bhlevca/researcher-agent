@@ -172,6 +172,10 @@ async def lifespan(app: FastAPI):
     app.state.research_crew = ResearchCrew(model=model)
     app.state.crew_semaphore = asyncio.Semaphore(1)   # serialise crew runs
 
+    # Wipe stale memory from previous server runs so old data cannot
+    # contaminate new requests (users save sessions explicitly).
+    app.state.research_crew.reset_memory()
+
     # -- SQLite session database --
     db = await aiosqlite.connect(str(DB_PATH))
     db.row_factory = aiosqlite.Row
@@ -681,6 +685,8 @@ async def chat(req: ChatRequest, request: Request):
             # Unregister event handlers to avoid leaks
             for event_type, handler in handlers:
                 crewai_event_bus.off(event_type, handler)
+            # Clear memory so it cannot leak into the next request
+            research_crew.reset_memory()
 
     def _sse(event: str, data) -> str:
         return f"event: {event}\ndata: {json.dumps(data)}\n\n"
@@ -987,6 +993,7 @@ async def ask(req: AskRequest, request: Request):
             writer.flush()
             sys.stdout = old_stdout
             sys.stdin = old_stdin
+            research_crew.reset_memory()
 
     async with semaphore:
         loop = asyncio.get_running_loop()

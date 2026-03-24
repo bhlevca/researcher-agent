@@ -606,9 +606,16 @@ class ResearchCrew:
             'If no split: {"split": false}\n'
             'If split: {"split": true, "parts": ["full description of '
             'part 1", "full description of part 2", ...]}\n\n'
-            "Each part description must be a COMPLETE, self-contained task "
-            "description with all relevant context, requirements, and "
-            "formatting instructions from the original request."
+            "CRITICAL RULES FOR EACH PART DESCRIPTION:\n"
+            "- Each part must be COMPLETELY SELF-CONTAINED. It must include "
+            "ALL requirements: format, length, style, topic, sources, etc.\n"
+            "- Each part must specify ONLY what that part should produce.\n"
+            "- Do NOT mention the other parts or the overall request.\n"
+            "- Do NOT say 'this is part N of M'.\n"
+            "- The person executing each part will ONLY see that part's "
+            "description — they will have NO knowledge of other parts.\n"
+            "- Copy ALL relevant constraints (word count, formatting, "
+            "academic level, equation requirements, etc.) into EACH part."
         )
 
         # Use a lightweight LLM config (no thinking, small context)
@@ -661,19 +668,24 @@ class ResearchCrew:
         """Build a Crew tailored for *topic*.
 
         Simple requests get a single task; complex ones are automatically
-        decomposed into independent sub-tasks so each gets a full
-        generation budget (num_predict tokens).
+        decomposed into independent sub-tasks.  Each sub-task has
+        ``context=[]`` so CrewAI does NOT forward previous task output
+        into the next task — every task only sees its own description.
         """
         parts = self._decompose(topic)
         self._is_multi_part = len(parts) > 1
 
         agent_instance = self.researcher()
+        self._memory = Memory(llm=self.ollama_llm, embedder=self._EMBEDDER_CONFIG)
+        exp = self.tasks_config["research_task"]["expected_output"]
 
-        if not self._is_multi_part:
-            # ---- single task (same as original) ----
-            memory = Memory(llm=self.ollama_llm, embedder=self._EMBEDDER_CONFIG)
+        if self._is_multi_part:
+            _logger.info("Building multi-part crew with %d sub-tasks", len(parts))
+
+        tasks = []
+        for part in parts:
             desc = (
-                f'Analyze the user\'s request: "{topic}".\n'
+                f'Analyze the user\'s request: "{part}".\n'
                 "First, determine if you can answer from your own knowledge.\n"
                 "If not, determine if it's a system question (use LocalSystemCheck) "
                 "or a world question (use InternetSearch).\n\n"
@@ -683,48 +695,19 @@ class ResearchCrew:
                 "length. One page = 500 words of dense text. Do NOT summarise "
                 "or condense. Fill the requested length with substantive content."
             )
-            exp = self.tasks_config["research_task"]["expected_output"]
-            tasks = [Task(description=desc, expected_output=exp,
-                          agent=agent_instance)]
-            return Crew(
-                agents=[agent_instance],
-                tasks=tasks,
-                process=Process.sequential,
-                memory=memory,
-                verbose=True,
-                embedder=self._EMBEDDER_CONFIG,
+            tasks.append(
+                Task(description=desc, expected_output=exp,
+                     agent=agent_instance, context=[])
             )
-        else:
-            # ---- multi-part: one sub-task per part ----
-            _logger.info("Building multi-part crew with %d sub-tasks", len(parts))
-            memory = Memory(llm=self.ollama_llm, embedder=self._EMBEDDER_CONFIG)
-            tasks = []
-            for i, part in enumerate(parts, 1):
-                desc = (
-                    f'Analyze the user\'s request: "{part}".\n'
-                    "First, determine if you can answer from your own knowledge.\n"
-                    "If not, determine if it's a system question (use LocalSystemCheck) "
-                    "or a world question (use InternetSearch).\n\n"
-                    f"ORIGINAL REQUEST (for context only):\n{topic}\n\n"
-                    "LENGTH AND THOROUGHNESS:\n"
-                    'When the user specifies a page count, word count, or says '
-                    '"thorough" / "detailed", you MUST produce the full requested '
-                    "length. One page = 500 words of dense text. Do NOT summarise "
-                    "or condense. Fill the requested length with substantive content."
-                )
-                exp = self.tasks_config["research_task"]["expected_output"]
-                tasks.append(
-                    Task(description=desc, expected_output=exp,
-                         agent=agent_instance)
-                )
-            return Crew(
-                agents=[agent_instance],
-                tasks=tasks,
-                process=Process.sequential,
-                memory=memory,
-                verbose=True,
-                embedder=self._EMBEDDER_CONFIG,
-            )
+
+        return Crew(
+            agents=[agent_instance],
+            tasks=tasks,
+            process=Process.sequential,
+            memory=self._memory,
+            verbose=True,
+            embedder=self._EMBEDDER_CONFIG,
+        )
 
     def postprocess(self, result) -> str:
         """Merge sub-task outputs when the request was split.
@@ -740,3 +723,24 @@ class ResearchCrew:
             if outputs:
                 return "\n\n---\n\n".join(outputs)
         return result.raw if hasattr(result, "raw") else str(result)
+
+    def reset_memory(self) -> None:
+        """Clear the crew's memory store and kickoff task outputs so stale
+        data cannot leak into future requests."""
+        mem = getattr(self, "_memory", None)
+        if mem is not None:
+            try:
+                mem.reset()
+                _logger.info("Crew memory reset")
+            except Exception as e:
+                _logger.warning("Failed to reset memory: %s", e)
+
+        # Also wipe the kickoff task outputs sqlite db (and stale WAL/SHM)
+        try:
+            from crewai.utilities.paths import db_storage_path as _db_storage_path
+            db_dir = Path(_db_storage_path())
+            for pattern in ("latest_kickoff_task_outputs.db*",):
+                for f in db_dir.glob(pattern):
+                    f.unlink(missing_ok=True)
+        except Exception as e:
+            _logger.warning("Failed to clean kickoff outputs: %s", e)

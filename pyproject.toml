@@ -3,6 +3,9 @@ name = "researcher-agent"
 version = "0.5.0"
 dependencies = [
     "crewai[tools]>=0.100.0",
+    "litellm",
+    "ollama",
+    "ddgs",
     "fastapi",
     "uvicorn",
     "python-dotenv",

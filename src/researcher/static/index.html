@@ -32,6 +32,13 @@
             font-family: inherit; outline: none; cursor: pointer; max-width: 280px;
         }
         #model-select:focus { border-color: #e94560; }
+        #depth-toggle {
+            background: #0f3460; color: #94a3b8; border: 1px solid #1a3a6e;
+            padding: 0.35rem 0.65rem; border-radius: 0.5rem; font-size: 0.75rem;
+            cursor: pointer; white-space: nowrap;
+        }
+        #depth-toggle:hover { background: #1a3a6e; color: #e0e0e0; }
+        #depth-toggle.deep { background: #e94560; color: white; border-color: #e94560; }
         .model-info { font-size: 0.7rem; color: #64748b; margin-left: 0.25rem; }
 
         /* ── Chat area ── */
@@ -404,6 +411,7 @@
         <select id="model-select" title="Switch model">
             <option>loading models...</option>
         </select>
+        <button id="depth-toggle" onclick="toggleMemoryDepth()" title="Memory recall depth: shallow=fast, deep=thorough but slow">🧠 Shallow</button>
         <span class="model-info" id="model-info"></span>
         <div class="voice-controls">
             <select id="voice-select" title="TTS voice"><option>loading voices...</option></select>
@@ -787,6 +795,46 @@
 
         loadModels();
 
+        // ── Memory depth toggle ──
+        const depthToggle = document.getElementById('depth-toggle');
+        let memoryDepth = 'shallow';
+
+        async function loadMemoryDepth() {
+            try {
+                const resp = await fetch('/memory-depth');
+                const data = await resp.json();
+                memoryDepth = data.depth;
+                updateDepthUI();
+            } catch (e) { /* ignore */ }
+        }
+
+        function updateDepthUI() {
+            depthToggle.textContent = memoryDepth === 'deep' ? '🧠 Deep' : '🧠 Shallow';
+            depthToggle.classList.toggle('deep', memoryDepth === 'deep');
+            depthToggle.title = memoryDepth === 'deep'
+                ? 'Memory: deep (thorough but slow) — click to switch to shallow'
+                : 'Memory: shallow (fast) — click to switch to deep';
+        }
+
+        async function toggleMemoryDepth() {
+            const newDepth = memoryDepth === 'shallow' ? 'deep' : 'shallow';
+            depthToggle.disabled = true;
+            try {
+                const resp = await fetch('/memory-depth', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ depth: newDepth }),
+                });
+                if (resp.ok) {
+                    memoryDepth = newDepth;
+                    updateDepthUI();
+                }
+            } catch (e) { /* ignore */ }
+            finally { depthToggle.disabled = false; }
+        }
+
+        loadMemoryDepth();
+
         // ── Message rendering ──
         function addSimpleMsg(role, text) {
             const w = document.createElement('div');
@@ -1036,8 +1084,36 @@
                                 });
                             }
                         } else if (eventType === 'error' && dataStr) {
+                            // Preserve reasoning lines and show error below them
                             liveWrapper.remove();
-                            addSimpleMsg('error', 'Error: ' + JSON.parse(dataStr));
+                            const errText = 'Error: ' + JSON.parse(dataStr);
+                            if (reasoningLines.length > 0) {
+                                // Show reasoning + error together
+                                const w = document.createElement('div');
+                                w.className = 'msg-wrapper assistant';
+
+                                const errMsg = document.createElement('div');
+                                errMsg.className = 'message error';
+                                errMsg.textContent = errText;
+                                w.appendChild(errMsg);
+
+                                const det = document.createElement('details');
+                                det.className = 'reasoning-toggle';
+                                det.setAttribute('open', '');
+                                const sum = document.createElement('summary');
+                                sum.textContent = 'Show reasoning (' + reasoningLines.length + ' steps before error)';
+                                det.appendChild(sum);
+                                const c = document.createElement('div');
+                                c.className = 'reasoning-content';
+                                c.textContent = reasoningLines.join('\n');
+                                det.appendChild(c);
+                                w.appendChild(det);
+
+                                chat.appendChild(w);
+                                chat.scrollTop = chat.scrollHeight;
+                            } else {
+                                addSimpleMsg('error', errText);
+                            }
                         }
                     }
                 }

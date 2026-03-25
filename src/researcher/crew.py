@@ -26,7 +26,7 @@ _logger = logging.getLogger(__name__)
 # path (_parse_planning_response) and the function-calling fallback path
 # (_call_with_function) to use lenient detection.
 # ---------------------------------------------------------------------------
-_READY_RE = _re.compile(r'(?m)^\s*(?:\*\s*)*\*{0,2}READY\*{0,2}\s*:?[^\n]*$')
+_READY_RE = _re.compile(r"(?m)^\s*(?:\*\s*)*\*{0,2}READY\*{0,2}\s*:?[^\n]*$")
 
 
 def _lenient_ready(text: str) -> bool:
@@ -38,6 +38,7 @@ def _lenient_ready(text: str) -> bool:
 
 from crewai.utilities.reasoning_handler import AgentReasoning  # noqa: E402
 
+
 # 1) Text-parsing path
 @staticmethod
 def _patched_parse(response: str) -> tuple[str, bool]:
@@ -45,16 +46,19 @@ def _patched_parse(response: str) -> tuple[str, bool]:
         return "No plan was generated.", False
     return response, _lenient_ready(response)
 
+
 AgentReasoning._parse_planning_response = _patched_parse
 
 # 2) Function-calling path (wrap to fix ready flag on fallback)
 _orig_call_with_function = AgentReasoning._call_with_function
+
 
 def _patched_call_with_function(self, prompt, plan_type):
     plan, steps, ready = _orig_call_with_function(self, prompt, plan_type)
     if not ready:
         ready = _lenient_ready(plan)
     return plan, steps, ready
+
 
 AgentReasoning._call_with_function = _patched_call_with_function
 
@@ -105,9 +109,9 @@ from crewai.utilities.exceptions.context_window_exceeding_exception import (  # 
 )
 
 _EXTRA_CTX_PATTERNS = [
-    "exceeds the context length",   # Ollama via litellm
-    "input is too long",            # some providers
-    "prompt is too long",           # some providers
+    "exceeds the context length",  # Ollama via litellm
+    "input is too long",  # some providers
+    "prompt is too long",  # some providers
 ]
 for _p in _EXTRA_CTX_PATTERNS:
     if _p not in CONTEXT_LIMIT_ERRORS:
@@ -118,9 +122,14 @@ from crewai.utilities.agent_utils import is_context_length_exceeded  # noqa: E40
 import crewai.agents.crew_agent_executor as _executor_mod  # noqa: E402
 
 # Store original methods
-_orig_invoke_loop_native_tools = _executor_mod.CrewAgentExecutor._invoke_loop_native_tools
+_orig_invoke_loop_native_tools = (
+    _executor_mod.CrewAgentExecutor._invoke_loop_native_tools
+)
 _orig_invoke_loop_react = _executor_mod.CrewAgentExecutor._invoke_loop_react
-_orig_invoke_loop_native_no_tools = _executor_mod.CrewAgentExecutor._invoke_loop_native_no_tools
+_orig_invoke_loop_native_no_tools = (
+    _executor_mod.CrewAgentExecutor._invoke_loop_native_no_tools
+)
+
 
 def _patch_exception_handler(original_method):
     """Wrap an invoke-loop method so context-length errors are checked
@@ -135,6 +144,7 @@ def _patch_exception_handler(original_method):
             # Check context length FIRST (before litellm re-raise)
             if is_context_length_exceeded(e):
                 from crewai.utilities.agent_utils import handle_context_length
+
                 _logger.warning("Context length exceeded — attempting to summarise…")
                 handle_context_length(
                     respect_context_window=self.respect_context_window,
@@ -148,7 +158,9 @@ def _patch_exception_handler(original_method):
                 # Retry once after summarisation
                 return original_method(self, *args, **kwargs)
             raise
+
     return wrapper
+
 
 _executor_mod.CrewAgentExecutor._invoke_loop_native_tools = _patch_exception_handler(
     _orig_invoke_loop_native_tools
@@ -159,7 +171,9 @@ _executor_mod.CrewAgentExecutor._invoke_loop_react = _patch_exception_handler(
 _executor_mod.CrewAgentExecutor._invoke_loop_native_no_tools = _patch_exception_handler(
     _orig_invoke_loop_native_no_tools
 )
-_logger.info("Patched CrewAgentExecutor: context-length errors now handled before litellm re-raise")
+_logger.info(
+    "Patched CrewAgentExecutor: context-length errors now handled before litellm re-raise"
+)
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
@@ -192,6 +206,7 @@ _orig_memory_recall = _UnifiedMemory.recall
 def _capped_recall(self, query, limit=10, **kwargs):
     """Recall with runtime-configurable depth, capped results, and truncation."""
     import researcher.crew as _crew_mod
+
     depth = _crew_mod.memory_depth
     kwargs["depth"] = depth
     cap = _MEMORY_RECALL_LIMIT if depth == "shallow" else min(limit, 5)
@@ -208,9 +223,12 @@ def _capped_recall(self, query, limit=10, **kwargs):
 
 
 _UnifiedMemory.recall = _capped_recall
-_logger.info("Patched Memory.recall: depth=%s, %d entries, %d chars max",
-             memory_depth,
-             _MEMORY_RECALL_LIMIT, _MAX_MEMORY_ENTRY_CHARS)
+_logger.info(
+    "Patched Memory.recall: depth=%s, %d entries, %d chars max",
+    memory_depth,
+    _MEMORY_RECALL_LIMIT,
+    _MAX_MEMORY_ENTRY_CHARS,
+)
 
 # --- Save: truncate before LLM extraction ---
 from crewai.agents.agent_builder.base_agent_executor_mixin import (  # noqa: E402
@@ -235,11 +253,7 @@ def _patched_save_to_memory(self, output) -> None:
         # Build a BRIEF summary for extraction — don't feed the full essay
         desc = (self.task.description or "")[:500]
         result_text = (output.text or "")[:2000]
-        raw = (
-            f"Task: {desc}\n"
-            f"Agent: {self.agent.role}\n"
-            f"Result: {result_text}"
-        )
+        raw = f"Task: {desc}\n" f"Agent: {self.agent.role}\n" f"Result: {result_text}"
         # Cap total size
         if len(raw) > _MAX_SAVE_CONTENT_CHARS:
             raw = raw[:_MAX_SAVE_CONTENT_CHARS]
@@ -251,7 +265,9 @@ def _patched_save_to_memory(self, output) -> None:
 
 
 CrewAgentExecutorMixin._save_to_memory = _patched_save_to_memory
-_logger.info("Patched _save_to_memory: content capped at %d chars", _MAX_SAVE_CONTENT_CHARS)
+_logger.info(
+    "Patched _save_to_memory: content capped at %d chars", _MAX_SAVE_CONTENT_CHARS
+)
 # ---------------------------------------------------------------------------
 
 # --- Smart TrueType font discovery ---
@@ -409,6 +425,7 @@ def _get_sd_pipe():
 
                 import sys as _sys
                 import warnings
+
                 print("[SD] Loading Stable Diffusion pipeline…", flush=True)
                 # Suppress the harmless "position_ids UNEXPECTED" load report
                 _real_stdout = _sys.stdout
@@ -633,27 +650,21 @@ class ResearchCrew:
         )
 
         try:
-            response = decompose_llm.call(
-                [{"role": "user", "content": prompt}]
-            )
+            response = decompose_llm.call([{"role": "user", "content": prompt}])
             # Strip <think> tags and markdown fences
-            text = _re.sub(r'<think>[\s\S]*?</think>\s*', '', response).strip()
-            text = _re.sub(r'^```(?:json)?\s*', '', text)
-            text = _re.sub(r'\s*```$', '', text)
+            text = _re.sub(r"<think>[\s\S]*?</think>\s*", "", response).strip()
+            text = _re.sub(r"^```(?:json)?\s*", "", text)
+            text = _re.sub(r"\s*```$", "", text)
             data = _json.loads(text)
             if (
                 data.get("split")
                 and isinstance(data.get("parts"), list)
                 and len(data["parts"]) > 1
             ):
-                _logger.info(
-                    "Decomposed request into %d sub-tasks", len(data["parts"])
-                )
+                _logger.info("Decomposed request into %d sub-tasks", len(data["parts"]))
                 return data["parts"]
         except Exception as e:
-            _logger.warning(
-                "Decomposition failed (running as single task): %s", e
-            )
+            _logger.warning("Decomposition failed (running as single task): %s", e)
         return [topic]
 
     _EMBEDDER_CONFIG = {
@@ -690,14 +701,18 @@ class ResearchCrew:
                 "If not, determine if it's a system question (use LocalSystemCheck) "
                 "or a world question (use InternetSearch).\n\n"
                 "LENGTH AND THOROUGHNESS:\n"
-                'When the user specifies a page count, word count, or says '
+                "When the user specifies a page count, word count, or says "
                 '"thorough" / "detailed", you MUST produce the full requested '
                 "length. One page = 500 words of dense text. Do NOT summarise "
                 "or condense. Fill the requested length with substantive content."
             )
             tasks.append(
-                Task(description=desc, expected_output=exp,
-                     agent=agent_instance, context=[])
+                Task(
+                    description=desc,
+                    expected_output=exp,
+                    agent=agent_instance,
+                    context=[],
+                )
             )
 
         return Crew(
@@ -738,6 +753,7 @@ class ResearchCrew:
         # Also wipe the kickoff task outputs sqlite db (and stale WAL/SHM)
         try:
             from crewai.utilities.paths import db_storage_path as _db_storage_path
+
             db_dir = Path(_db_storage_path())
             for pattern in ("latest_kickoff_task_outputs.db*",):
                 for f in db_dir.glob(pattern):

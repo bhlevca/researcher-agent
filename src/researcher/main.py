@@ -1,6 +1,9 @@
 import sys
 import os
 
+# Never write .pyc bytecode files — prevents stale cache bugs after edits
+sys.dont_write_bytecode = True
+
 # Disable CrewAI interactive trace prompt that blocks the server
 os.environ.setdefault('CREWAI_TRACING_ENABLED', 'false')
 
@@ -30,6 +33,22 @@ from researcher.crew import (
     generate_image as _generate_image_tool,
     generate_ai_image as _generate_ai_image_tool,
     preload_sd,
+)
+import researcher.crew as _crew_mod
+from crewai.agents.parser import AgentAction, AgentFinish
+from crewai.events.event_bus import crewai_event_bus
+from crewai.events.types.reasoning_events import (
+    AgentReasoningStartedEvent,
+    AgentReasoningCompletedEvent,
+    AgentReasoningFailedEvent,
+)
+from crewai.events.types.tool_usage_events import (
+    ToolUsageErrorEvent,
+)
+from crewai.events.types.observation_events import (
+    StepObservationCompletedEvent,
+    PlanRefinementEvent,
+    GoalAchievedEarlyEvent,
 )
 from researcher.auth import (
     register_auth_routes,
@@ -150,8 +169,12 @@ async def lifespan(app: FastAPI):
     # -- Crew / model init --
     model = os.getenv("MODEL", "ollama/qwen3.5:9b")
     app.state.current_model = model
-    app.state.crew_instance = ResearchCrew(model=model).crew()
+    app.state.research_crew = ResearchCrew(model=model)
     app.state.crew_semaphore = asyncio.Semaphore(1)   # serialise crew runs
+
+    # Wipe stale memory from previous server runs so old data cannot
+    # contaminate new requests (users save sessions explicitly).
+    app.state.research_crew.reset_memory()
 
     # -- SQLite session database --
     db = await aiosqlite.connect(str(DB_PATH))
@@ -271,7 +294,7 @@ async def switch_model(req: ModelRequest, request: Request):
     user = await get_current_user(request)  # require login
     new_model = req.model if req.model.startswith("ollama/") else f"ollama/{req.model}"
     try:
-        request.app.state.crew_instance = ResearchCrew(model=new_model).crew()
+        request.app.state.research_crew = ResearchCrew(model=new_model)
         request.app.state.current_model = new_model
 
         db = request.app.state.db
@@ -284,6 +307,26 @@ async def switch_model(req: ModelRequest, request: Request):
         return {"model": new_model}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to switch model: {e}")
+
+
+# --- Memory depth toggle: shallow (fast) / deep (thorough) ---
+
+@app.get("/memory-depth")
+async def get_memory_depth():
+    """Return the current memory recall depth."""
+    return {"depth": _crew_mod.memory_depth}
+
+
+@app.post("/memory-depth")
+async def set_memory_depth(request: Request):
+    """Switch memory recall depth between 'shallow' and 'deep'."""
+    body = await request.json()
+    depth = body.get("depth", "shallow")
+    if depth not in ("shallow", "deep"):
+        raise HTTPException(status_code=400, detail="depth must be 'shallow' or 'deep'")
+    _crew_mod.memory_depth = depth
+    logger.info("Memory depth set to: %s", depth)
+    return {"depth": depth}
 
 
 # --- Post-processing helpers ---
@@ -393,6 +436,126 @@ def _extract_usage(result) -> dict:
     return {}
 
 
+# --- Conversation context builder (3-tier) ---
+
+_IMG_CTX_RE = re.compile(r'!\[[^\]]*\]\(/static/generated/[^)]+\)')
+
+
+def _clean_assistant_text(text: str) -> str:
+    """Strip image markdown and thinking tags from assistant text."""
+    text = _IMG_CTX_RE.sub('[image]', text)
+    text = re.sub(r'<think>[\s\S]*?</think>\s*', '', text)
+    return text.strip()
+
+
+def _heuristic_shorten(text: str, max_len: int = 400) -> str:
+    """Shorten text to max_len, keeping start and end for context."""
+    if len(text) <= max_len:
+        return text
+    half = max_len // 2 - 10
+    return text[:half] + " [...] " + text[-half:]
+
+
+def _summarize_with_llm(messages: list[dict], model: str) -> str:
+    """Use litellm to summarize older conversation messages."""
+    import litellm
+    litellm_model = ("ollama_chat/" + model[len("ollama/"):]
+                     if model.startswith("ollama/") else model)
+    conversation_text = "\n".join(
+        f"{'User' if m.get('role') == 'user' else 'Assistant'}: "
+        f"{_clean_assistant_text(m.get('text', ''))[:500]}"
+        for m in messages
+    )
+    try:
+        resp = litellm.completion(
+            model=litellm_model,
+            messages=[{
+                "role": "user",
+                "content": (
+                    "Summarize this conversation in 3-5 bullet points. "
+                    "Focus on: topics discussed, decisions made, "
+                    "pending questions. Be concise.\n\n" + conversation_text
+                ),
+            }],
+            api_base="http://localhost:11434",
+            num_retries=0,
+            temperature=0.1,
+        )
+        summary = resp.choices[0].message.content or ""
+        summary = re.sub(r'<think>[\s\S]*?</think>\s*', '', summary).strip()
+        return summary
+    except Exception as e:
+        logger.warning("LLM summarization failed: %s", e)
+        # Fallback to heuristic
+        return "\n".join(
+            f"- {'User' if m.get('role') == 'user' else 'Assistant'}: "
+            f"{_heuristic_shorten(m.get('text', ''), 200)}"
+            for m in messages[-6:]
+        )
+
+
+def _build_conversation_context(history: list[dict], model: str) -> str:
+    """Build conversation context with tiered strategy.
+
+    Short  (≤4 messages):  full text for all messages
+    Medium (5-10):         last 3 full, earlier heuristic-shortened
+    Long   (>10):          last 3 full, earlier LLM-summarized
+    """
+    if not history:
+        return ""
+
+    n = len(history)
+    lines = []
+
+    if n <= 4:
+        # Short: include everything
+        for msg in history:
+            role = msg.get('role', 'user')
+            text = msg.get('text', '')
+            if role == 'assistant':
+                text = _clean_assistant_text(text)
+            lines.append(f"{'User' if role == 'user' else 'Assistant'}: {text}")
+
+    elif n <= 10:
+        # Medium: heuristic shorten older, keep last 3 full
+        older = history[:-3]
+        recent = history[-3:]
+        lines.append("[Earlier in conversation]")
+        for msg in older:
+            role = msg.get('role', 'user')
+            text = msg.get('text', '')
+            if role == 'assistant':
+                text = _clean_assistant_text(text)
+            lines.append(
+                f"{'User' if role == 'user' else 'Assistant'}: "
+                f"{_heuristic_shorten(text)}"
+            )
+        lines.append("[Recent messages]")
+        for msg in recent:
+            role = msg.get('role', 'user')
+            text = msg.get('text', '')
+            if role == 'assistant':
+                text = _clean_assistant_text(text)
+            lines.append(f"{'User' if role == 'user' else 'Assistant'}: {text}")
+
+    else:
+        # Long: LLM-summarize older, keep last 3 full
+        older = history[:-3]
+        recent = history[-3:]
+        summary = _summarize_with_llm(older, model)
+        lines.append("[Conversation summary]")
+        lines.append(summary)
+        lines.append("[Recent messages]")
+        for msg in recent:
+            role = msg.get('role', 'user')
+            text = msg.get('text', '')
+            if role == 'assistant':
+                text = _clean_assistant_text(text)
+            lines.append(f"{'User' if role == 'user' else 'Assistant'}: {text}")
+
+    return "Previous conversation:\n" + "\n".join(lines)
+
+
 # --- /chat  SSE streaming endpoint ---
 
 @app.post("/chat")
@@ -405,44 +568,125 @@ async def chat(req: ChatRequest, request: Request):
         db = request.app.state.db
         file_context = await get_file_context(db, user["id"], req.file_ids)
 
-    # Build context from conversation history
-    context_lines = []
-    _img_ctx_re = re.compile(r'!\[[^\]]*\]\(/static/generated/[^)]+\)')
-    for msg in req.history[-4:]:
-        role = msg.get('role', 'user')
-        text = msg.get('text', '')
-        if role == 'user':
-            context_lines.append(f"User: {text}")
-        elif role == 'assistant':
-            text = _img_ctx_re.sub('[image was shown]', text)
-            short = text[:120] + ('...' if len(text) > 120 else '')
-            context_lines.append(f"Assistant: {short}")
+    # Build context from conversation history (3-tier strategy)
+    model = request.app.state.current_model
+    conv_context = _build_conversation_context(req.history, model)
 
-    if context_lines:
-        topic = (file_context
-                 + "Previous conversation:\n"
-                 + "\n".join(context_lines)
-                 + "\n\nNew request: " + req.message)
+    if conv_context:
+        topic = file_context + conv_context + "\n\nNew request: " + req.message
     else:
         topic = file_context + req.message
 
-    inputs = {'topic': topic}
-    crew = request.app.state.crew_instance
+    research_crew = request.app.state.research_crew
+    crew = research_crew.build_crew(topic)
     semaphore = request.app.state.crew_semaphore
 
     q: queue.Queue = queue.Queue()
 
+    def _make_step_callback(q_ref):
+        """Return a callback that puts structured reasoning into the queue."""
+        def _step_cb(step):
+            sys.stderr.write(f"[STEP_CB] type={type(step).__name__}\n")
+            sys.stderr.flush()
+            if isinstance(step, AgentAction):
+                thought = (step.thought or '').strip()
+                if thought:
+                    # Show the agent's actual thought process
+                    for line in thought.split('\n'):
+                        line = line.strip()
+                        if line:
+                            q_ref.put(f"💭 {line}")
+                tool_name = step.tool or ''
+                tool_input = step.tool_input or ''
+                if tool_name:
+                    q_ref.put(f"🔧 Using {tool_name}: {str(tool_input)[:200]}")
+                result = str(step.result or '')[:300]
+                if result:
+                    q_ref.put(f"📋 Result: {result}")
+            elif isinstance(step, AgentFinish):
+                thought = (step.thought or '').strip()
+                if thought:
+                    for line in thought.split('\n'):
+                        line = line.strip()
+                        if line:
+                            q_ref.put(f"💭 {line}")
+                q_ref.put("✅ Composing final answer...")
+            else:
+                # Unknown step type — log and show raw
+                sys.stderr.write(f"[STEP_CB] unknown step: {repr(step)[:300]}\n")
+                sys.stderr.flush()
+                q_ref.put(f"💭 {str(step)[:300]}")
+        return _step_cb
+
+    def _make_event_handlers(q_ref):
+        """Create event bus handlers that put reasoning events into the queue."""
+
+        @crewai_event_bus.on(AgentReasoningStartedEvent)
+        def on_reasoning_started(source, event):
+            q_ref.put(f"🧠 Planning (attempt {event.attempt})...")
+
+        @crewai_event_bus.on(AgentReasoningCompletedEvent)
+        def on_reasoning_completed(source, event):
+            status = "✅ Ready" if event.ready else "🔄 Refining"
+            q_ref.put(f"🧠 {status}")
+            plan = (event.plan or '').strip()
+            if plan:
+                for line in plan.split('\n'):
+                    line = line.strip()
+                    if line:
+                        q_ref.put(f"📝 {line}")
+
+        @crewai_event_bus.on(AgentReasoningFailedEvent)
+        def on_reasoning_failed(source, event):
+            q_ref.put(f"⚠️ Reasoning error: {str(event.error)[:200]}")
+
+        # NOTE: ToolUsageStarted/Finished are handled by step_callback
+        # (which also includes 💭 thoughts). Only subscribe to errors here.
+
+        @crewai_event_bus.on(ToolUsageErrorEvent)
+        def on_tool_error(source, event):
+            q_ref.put(f"⚠️ Tool error ({event.tool_name}): {str(event.error)[:200]}")
+
+        @crewai_event_bus.on(StepObservationCompletedEvent)
+        def on_observation(source, event):
+            info = (event.key_information_learned or '').strip()
+            if info:
+                q_ref.put(f"👁️ Observed: {info[:300]}")
+
+        @crewai_event_bus.on(GoalAchievedEarlyEvent)
+        def on_goal_early(source, event):
+            q_ref.put(f"🎯 Goal achieved early (skipping {event.steps_remaining} steps)")
+
+        return [
+            (AgentReasoningStartedEvent, on_reasoning_started),
+            (AgentReasoningCompletedEvent, on_reasoning_completed),
+            (AgentReasoningFailedEvent, on_reasoning_failed),
+            (ToolUsageErrorEvent, on_tool_error),
+            (StepObservationCompletedEvent, on_observation),
+            (GoalAchievedEarlyEvent, on_goal_early),
+        ]
+
     def _run_crew():
+        # Set step_callback for structured reasoning before kickoff
+        crew.step_callback = _make_step_callback(q)
+        # Register event bus handlers for reasoning/planning events
+        handlers = _make_event_handlers(q)
+        # Still capture stdout for image paths and postprocessing
         writer = _QueueWriter(q)
         old_stdout, old_stdin = sys.stdout, sys.stdin
         sys.stdout = writer
         sys.stdin = io.StringIO('N\n')
         try:
-            return crew.kickoff(inputs=inputs)
+            return crew.kickoff()
         finally:
             writer.flush()
             sys.stdout = old_stdout
             sys.stdin = old_stdin
+            # Unregister event handlers to avoid leaks
+            for event_type, handler in handlers:
+                crewai_event_bus.off(event_type, handler)
+            # Clear memory so it cannot leak into the next request
+            research_crew.reset_memory()
 
     def _sse(event: str, data) -> str:
         return f"event: {event}\ndata: {json.dumps(data)}\n\n"
@@ -455,6 +699,16 @@ async def chat(req: ChatRequest, request: Request):
 
             _skip_history = False
 
+            # Verbose stdout noise patterns to suppress from reasoning panel
+            _verbose_noise = re.compile(
+                r'^(Agent:|Task:|Thought:|Action:|Action Input:|Observation:|'
+                r'Entering new CrewAgentExecutor|Finished chain|'
+                r'> |I encountered an error|Tool .* accepts these inputs|'
+                r'Tool Name:|Tool Arguments:|Tool Description:|'
+                r'\[1m|> Entering|> Finished|Moving on then)',
+                re.IGNORECASE,
+            )
+
             def _should_show(line: str) -> bool:
                 nonlocal _skip_history
                 if 'Previous conversation:' in line:
@@ -463,6 +717,12 @@ async def chat(req: ChatRequest, request: Request):
                 if _skip_history:
                     if 'New request:' in line:
                         _skip_history = False
+                    return False
+                # Step callback & event bus lines (emoji-prefixed) always show
+                if line and line[0] in '💭🔧📋✅🧠📝⚠️👁️🎯':
+                    return True
+                # Suppress verbose framework noise
+                if _verbose_noise.search(line):
                     return False
                 return True
 
@@ -493,7 +753,9 @@ async def chat(req: ChatRequest, request: Request):
                 yield _sse("error", str(e))
                 return
 
-            response_text = _postprocess(str(result), '\n'.join(all_lines))
+            response_text = _postprocess(
+                research_crew.postprocess(result), '\n'.join(all_lines)
+            )
             usage = _extract_usage(result)
             incomplete = _is_incomplete(response_text, '\n'.join(all_lines))
 
@@ -714,7 +976,8 @@ async def ask(req: AskRequest, request: Request):
         file_context = await get_file_context(db, user["id"], req.file_ids)
 
     topic = file_context + req.topic
-    crew = request.app.state.crew_instance
+    research_crew = request.app.state.research_crew
+    crew = research_crew.build_crew(topic)
     semaphore = request.app.state.crew_semaphore
 
     q: queue.Queue = queue.Queue()
@@ -725,11 +988,12 @@ async def ask(req: AskRequest, request: Request):
         sys.stdout = writer
         sys.stdin = io.StringIO('N\n')
         try:
-            return crew.kickoff(inputs={'topic': topic})
+            return crew.kickoff()
         finally:
             writer.flush()
             sys.stdout = old_stdout
             sys.stdin = old_stdin
+            research_crew.reset_memory()
 
     async with semaphore:
         loop = asyncio.get_running_loop()
@@ -747,7 +1011,7 @@ async def ask(req: AskRequest, request: Request):
 
     return {
         "status": "success",
-        "response": str(result),
+        "response": research_crew.postprocess(result),
         "reasoning": reasoning,
         "token_usage": _extract_usage(result),
         "model": request.app.state.current_model,

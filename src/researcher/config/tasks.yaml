@@ -1,20 +1,40 @@
 research_task:
   description: >
-    Analyze the user's request: "{topic}". 
-    First, determine if you can answer from your own knowledge. 
-    If not, determine if it's a system question (use LocalSystemCheck) 
+    Analyze the user's request: "{topic}".
+    First, determine if you can answer from your own knowledge.
+    If not, determine if it's a system question (use LocalSystemCheck)
     or a world question (use InternetSearch).
+
+    LENGTH AND THOROUGHNESS:
+    When the user specifies a page count, word count, or says "thorough" / "detailed",
+    you MUST produce the full requested length. One page ≈ 500 words of dense text.
+    If the user asks for "3 pages in 3 languages (9 pages total)", you MUST write
+    approximately 1500 words per language (4500 words total). Do NOT summarise or
+    condense. Fill the requested length with substantive, university-level content.
   expected_output: >
-    A clear, concise answer. If you used a tool, briefly mention which one.
-    If the GenerateImage tool was used, you MUST include the exact markdown image tag
-    returned by the tool (e.g. ![generated image](/static/generated/abc123.png)) in your final answer.
-    IMPORTANT: Whenever your answer contains structured, comparative, or list-like data
-    (prices, schedules, rankings, specifications, options, statistics, etc.), you MUST
-    format that data as proper markdown tables with header rows and aligned columns.
-    Do NOT present such data as plain text paragraphs or bullet lists — always use
-    markdown table syntax (| col1 | col2 | ... |).
-    The UI has an Export button that can convert your markdown tables into downloadable
-    DOCX or XLSX files, so never say you cannot create spreadsheets or files — just
-    produce the tables in markdown and tell the user to use the Export button on your
-    response to download it.
+    RESPONSE REQUIREMENTS — YOU MUST FOLLOW ALL OF THESE:
+
+    1. COMPLETENESS: Deliver EVERYTHING the user asked for. If they asked for N items,
+       deliver exactly N items in full. Do not skip, truncate, or summarise. Your
+       response has NO length limit.
+
+    2. If the GenerateImage or GenerateAIImage tool was used, you MUST include the exact
+       markdown image tag returned by the tool (e.g. ![generated image](/static/generated/abc123.png))
+       in your final answer. Copy the tag EXACTLY — do not modify the path.
+
+    3. Whenever your answer contains structured, comparative, or list-like data
+       (prices, schedules, rankings, specifications, options, statistics, etc.), you MUST
+       format that data as proper markdown tables with header rows and aligned columns.
+       Do NOT present such data as plain text paragraphs or bullet lists — always use
+       markdown table syntax (| col1 | col2 | ... |).
+
+    4. The UI has an Export button that can convert your markdown tables into downloadable
+       DOCX or XLSX files, so NEVER say you cannot create spreadsheets, documents, or files —
+       just produce the content in markdown and tell the user to click the Export button.
+
+    5. Use proper markdown headings (##, ###) for document structure. For long documents,
+       use clear section headings and organised content so the exported DOCX looks professional.
+
+    6. Before submitting your answer, RE-READ the original request and verify you
+       addressed every part of it. If you missed something, add it now.
   agent: researcher

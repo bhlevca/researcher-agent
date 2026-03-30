@@ -1,0 +1,200 @@
+# HuggingFace Z-Image-Turbo-FP8 Model Clean and Download Instructions
+
+## 1) Clean HuggingFace cache and disable offline mode
+
+```
+unset HF_HUB_OFFLINE
+unset TRANSFORMERS_OFFLINE
+
+export HF_HOME="${HOME}/.cache/huggingface"
+export TRANSFORMERS_CACHE="${HOME}/.cache/huggingface/transformers"
+
+rm -rf "${HF_HOME}/hub/models--x--z-image-turbo"* \
+       "${HF_HOME}/hub/models--T5B--Z-Image-Turbo-FP8"* \
+       "${HF_HOME}/hub/models--Tongyi-MAI--Z-Image-Turbo"* \
+       "${HF_HOME}/hub/models--*z-image*"
+
+find "${HF_HOME}" -maxdepth 5 -type d -name '*z-image*' -o -name '*Z-Image-Turbo*' | sort
+```
+
+---
+
+## 2b) Set your HuggingFace token for private model access
+
+If you have your token in `.env`, you must export it so Python and CLI tools can see it:
+
+```
+export HUGGINGFACE_TOKEN=<YOUR_HF_TOKEN>
+```
+
+Or, if you want to load it automatically in Python, install python-dotenv:
+
+```
+pip install python-dotenv
+```
+
+---
+
+## 2c) Download and load the T5B/Z-Image-Turbo-FP8 model, generate a test image (with dotenv)
+
+```
+python - <<'PY'
+import os
+from dotenv import load_dotenv
+import torch
+from diffusers import ZImagePipeline
+
+load_dotenv(dotenv_path="/home/bogdan/ai/agent/.env")
+
+os.environ.pop("HF_HUB_OFFLINE", None)
+os.environ.pop("TRANSFORMERS_OFFLINE", None)
+
+model_id = "mrfakename/Z-Image-Turbo"
+token = os.getenv("HUGGINGFACE_TOKEN")
+print("MODEL ID:", model_id)
+print("TOKEN:", "set" if token else "not set")
+
+pipe = ZImagePipeline.from_pretrained(
+    model_id,
+    torch_dtype=torch.bfloat16,
+    local_files_only=False,
+    use_auth_token=token,
+    low_cpu_mem_usage=True,
+)
+pipe.enable_attention_slicing()
+pipe.enable_model_cpu_offload()
+
+# Do NOT call pipe.to('cuda') when using enable_model_cpu_offload()
+
+with torch.inference_mode():
+    out = pipe(
+        prompt="A photorealistic cat in a meadow, studio lighting",
+        width=1024,   # Try 384x384 or 512x512 first
+        height=768,
+    )
+
+print("IMAGES:", len(out.images))
+path = "/tmp/test_zimage.png"
+out.images[0].save(path)
+print("SAVED:", path)
+PY
+```
+
+---
+
+## 3) Verify offline flags are unset
+
+```
+python - <<'PY'
+import os
+print("HF_HUB_OFFLINE", os.getenv("HF_HUB_OFFLINE"))
+print("TRANSFORMERS_OFFLINE", os.getenv("TRANSFORMERS_OFFLINE"))
+PY
+```
+
+---
+
+## 5) Using mrfakename/Z-Image-Turbo on 16GB VRAM (with Qwen)
+
+### Step 1: Unload Qwen (if running)
+If Qwen is loaded in Ollama, unload it to free VRAM before image generation. Example (if using Ollama API):
+
+```python
+import requests
+OLLAMA_URL = "http://localhost:11434/api/generate"
+requests.post(OLLAMA_URL, json={"model": "qwen3.5:9b", "keep_alive": 0, "prompt": ""}, timeout=30)
+```
+
+### Step 2: Load and run mrfakename/Z-Image-Turbo
+
+```python
+import torch
+from diffusers import ZImagePipeline
+
+pipe = ZImagePipeline.from_pretrained(
+    "mrfakename/Z-Image-Turbo",
+    torch_dtype=torch.bfloat16,  # or torch.float16 if README says so
+    low_cpu_mem_usage=True,
+    use_auth_token="YOUR_TOKEN"  # if private
+)
+pipe.enable_attention_slicing()
+# Optional: for even lower VRAM, enable CPU offload
+# pipe.enable_model_cpu_offload()
+pipe = pipe.to("cuda")
+
+prompt = "Young Chinese woman in red Hanfu, intricate embroidery, ancient temple backdrop"
+image = pipe(
+    prompt=prompt,
+    height=768,   # Use 512 or 768 for concurrent use; 1024 if Qwen is unloaded
+    width=768,
+    num_inference_steps=9,
+    guidance_scale=0.0,
+    generator=torch.Generator('cuda').manual_seed(42),
+).images[0]
+
+image.save("example.png")
+```
+
+### Step 3: Reload Qwen (if needed)
+If you need Qwen again, reload it after image generation.
+
+---
+
+**Tips:**
+- If you get OOM, lower the image size to 512×512 and use `pipe.enable_model_cpu_offload()`.
+- Always unload Qwen before loading the image model for large images.
+- For concurrent use, keep image size small.
+
+==================================================================================
+
+This one works fine with zimage:
+
+python - <<'PY'
+import os
+from dotenv import load_dotenv
+import torch
+> from diffusers import ZImagePipeline
+> 
+> load_dotenv(dotenv_path="/home/bogdan/ai/agent/.env")
+> 
+> os.environ.pop("HF_HUB_OFFLINE", None)
+> os.environ.pop("TRANSFORMERS_OFFLINE", None)
+> 
+> model_id = "mrfakename/Z-Image-Turbo"
+> token = os.getenv("HUGGINGFACE_TOKEN")
+> print("MODEL ID:", model_id)
+> print("TOKEN:", "set" if token else "not set")
+> 
+> pipe = ZImagePipeline.from_pretrained(
+>     model_id,
+>     torch_dtype=torch.bfloat16,
+>     local_files_only=False,
+>     use_auth_token=token,
+>     low_cpu_mem_usage=True,
+> )
+> pipe.enable_attention_slicing()
+> pipe.enable_model_cpu_offload()
+> 
+> # Do NOT call pipe.to('cuda') when using enable_model_cpu_offload()
+> 
+> with torch.inference_mode():
+>     out = pipe(
+>         prompt="A photorealistic cat in a meadow, studio lighting",
+>         width=1024,   # Try 384x384 or 512x512 first
+>         height=768,
+>     )
+> 
+> print("IMAGES:", len(out.images))
+> path = "/tmp/test_zimage.png"
+> out.images[0].save(path)
+> print("SAVED:", path)
+> PY
+MODEL ID: mrfakename/Z-Image-Turbo
+TOKEN: set
+Keyword arguments {'use_auth_token': '<YOUR_HF_TOKEN>'} are not expected by ZImagePipeline and will be ignored.
+Loading weights: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 398/398 [00:00<00:00, 12716.79it/s]
+Loading checkpoint shards: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████| 3/3 [00:20<00:00,  6.89s/it]
+Loading pipeline components...: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████| 5/5 [00:21<00:00,  4.26s/it]
+100%|███████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 50/50 [01:09<00:00,  1.39s/it]
+IMAGES: 1
+SAVED: /tmp/test_zimage.png

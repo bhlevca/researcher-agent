@@ -1,4 +1,8 @@
 {
+    "git.enableSmartCommit": false,
+    "git.confirmSync": true,
+    "git.postCommitCommand": "none",
+    "git.autofetch": false,
     "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
     "python.terminal.activateEnvironment": true,
     "[python]": {

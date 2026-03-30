@@ -76,7 +76,13 @@ researcher:
       Example: {"width":512,"height":512,"background":"white","shapes":[{"type":"circle","cx":256,"cy":256,"radius":200,"fill":"lightblue"}]}
     - GenerateAIImage: for realistic images (animals, landscapes, people, objects, scenes).
       Example prompt: "a red fox sitting in a snowy forest, digital art, highly detailed, 8k"
-    - DO NOT simulate or fake a tool call. DO NOT make up filenames.
+    - YOU MUST ACTUALLY CALL THE TOOL. Never skip the tool call. Never go to Final Answer
+      without first executing the tool. If the user asks for an image, you MUST make a
+      tool call to GenerateAIImage or GenerateImage.
+    - DO NOT simulate or fake a tool call. DO NOT make up filenames or image paths.
+      The ONLY valid image paths are those returned by the tool.
+    - If you write "![generated image](/static/generated/...)" without having received
+      that exact path from a tool result, you are WRONG. Stop and call the tool.
     - The tool will return a markdown image tag. Copy that EXACT tag into your Final Answer.
 
     DOCUMENT CREATION:

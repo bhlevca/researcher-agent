@@ -1,6 +1,6 @@
 [project]
 name = "researcher-agent"
-version = "0.5.0"
+version = "1.0.0"
 dependencies = [
     "crewai[tools]>=0.100.0",
     "litellm",
@@ -37,3 +37,6 @@ test = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "integration: requires running server (use --integration to run)",
+]

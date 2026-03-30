@@ -25,7 +25,8 @@ def crew_instance():
     Patches the Ollama base_url to a dummy so the LLM
     object can be created without a running Ollama server.
     """
-    from researcher.crew import ResearchCrew
+    from researcher.crew_old3 import ResearchCrew
+
     rc = ResearchCrew(model="ollama/qwen3.5:9b")
     return rc
 
@@ -47,6 +48,7 @@ class TestAgentMemoryNotBoolean:
         """If someone sets memory to a Memory instance on the agent,
         it must have an explicit LLM (not the default gpt-4o-mini)."""
         from crewai.memory.unified_memory import Memory
+
         agent = crew_instance.researcher()
         if isinstance(agent.memory, Memory):
             # The LLM field should not be the default string "gpt-4o-mini"
@@ -61,35 +63,38 @@ class TestCrewMemoryConfig:
 
     def test_crew_memory_is_memory_instance(self, crew_instance):
         from crewai.memory.unified_memory import Memory
+
         crew = crew_instance.crew()
         # crew.memory is the public field; _memory is the resolved private attr
         mem = getattr(crew, "_memory", crew.memory)
-        assert isinstance(mem, Memory), (
-            f"Crew memory should be a Memory instance, got {type(mem)}"
-        )
+        assert isinstance(
+            mem, Memory
+        ), f"Crew memory should be a Memory instance, got {type(mem)}"
 
     def test_crew_memory_llm_is_not_openai_default(self, crew_instance):
         """The Memory LLM must not be the default 'gpt-4o-mini'."""
         from crewai.memory.unified_memory import Memory
+
         crew = crew_instance.crew()
         mem = getattr(crew, "_memory", crew.memory)
         if isinstance(mem, Memory):
             # LLM field: either a string (model name) or an LLM instance
             llm_val = mem.llm
             if isinstance(llm_val, str):
-                assert "gpt" not in llm_val.lower(), (
-                    f"Crew Memory LLM defaults to OpenAI: {llm_val}"
-                )
+                assert (
+                    "gpt" not in llm_val.lower()
+                ), f"Crew Memory LLM defaults to OpenAI: {llm_val}"
             else:
                 # It's an LLM object — check its model attribute
                 model_name = getattr(llm_val, "model", "")
-                assert "gpt" not in model_name.lower(), (
-                    f"Crew Memory LLM uses OpenAI model: {model_name}"
-                )
+                assert (
+                    "gpt" not in model_name.lower()
+                ), f"Crew Memory LLM uses OpenAI model: {model_name}"
 
     def test_crew_memory_has_embedder(self, crew_instance):
         """Memory must have an embedder config (not None which defaults to OpenAI)."""
         from crewai.memory.unified_memory import Memory
+
         crew = crew_instance.crew()
         mem = getattr(crew, "_memory", crew.memory)
         if isinstance(mem, Memory):
@@ -101,12 +106,13 @@ class TestCrewMemoryConfig:
     def test_crew_memory_embedder_is_ollama(self, crew_instance):
         """The embedder should use the 'ollama' provider."""
         from crewai.memory.unified_memory import Memory
+
         crew = crew_instance.crew()
         mem = getattr(crew, "_memory", crew.memory)
         if isinstance(mem, Memory) and isinstance(mem.embedder, dict):
-            assert mem.embedder.get("provider") == "ollama", (
-                f"Embedder provider should be 'ollama', got: {mem.embedder.get('provider')}"
-            )
+            assert (
+                mem.embedder.get("provider") == "ollama"
+            ), f"Embedder provider should be 'ollama', got: {mem.embedder.get('provider')}"
 
     def test_crew_embedder_config_present(self, crew_instance):
         """Crew-level embedder config must also be set for knowledge/tools."""
@@ -121,9 +127,9 @@ class TestPlanningConfigBounded:
 
     def test_agent_has_planning_config(self, crew_instance):
         agent = crew_instance.researcher()
-        assert agent.planning_config is not None, (
-            "Agent should have a PlanningConfig for structured reasoning"
-        )
+        assert (
+            agent.planning_config is not None
+        ), "Agent should have a PlanningConfig for structured reasoning"
 
     def test_planning_max_attempts_is_bounded(self, crew_instance):
         """max_attempts=None means unlimited — must be set to prevent loops."""
@@ -134,18 +140,18 @@ class TestPlanningConfigBounded:
             "PlanningConfig.max_attempts is None (unlimited). "
             "Set a limit to prevent infinite reasoning loops with local models."
         )
-        assert 1 <= pc.max_attempts <= 10, (
-            f"max_attempts={pc.max_attempts} is outside reasonable range [1, 10]"
-        )
+        assert (
+            1 <= pc.max_attempts <= 10
+        ), f"max_attempts={pc.max_attempts} is outside reasonable range [1, 10]"
 
     def test_planning_max_steps_is_bounded(self, crew_instance):
         agent = crew_instance.researcher()
         pc = agent.planning_config
         assert pc is not None
         assert pc.max_steps is not None
-        assert 1 <= pc.max_steps <= 20, (
-            f"max_steps={pc.max_steps} is outside reasonable range [1, 20]"
-        )
+        assert (
+            1 <= pc.max_steps <= 20
+        ), f"max_steps={pc.max_steps} is outside reasonable range [1, 20]"
 
     def test_planning_prompt_contains_ready_signal(self, crew_instance):
         """The plan prompt must instruct the model to produce the READY signal."""
@@ -153,9 +159,9 @@ class TestPlanningConfigBounded:
         pc = agent.planning_config
         assert pc is not None
         if pc.plan_prompt:
-            assert "READY: I am ready to execute the task." in pc.plan_prompt, (
-                "Plan prompt must include the exact READY signal that CrewAI checks for"
-            )
+            assert (
+                "READY: I am ready to execute the task." in pc.plan_prompt
+            ), "Plan prompt must include the exact READY signal that CrewAI checks for"
 
 
 class TestNoOpenAIKeyRequired:
@@ -169,7 +175,8 @@ class TestNoOpenAIKeyRequired:
             # Re-set required test env vars
             os.environ["CREWAI_TRACING_ENABLED"] = "false"
             os.environ["SERPER_API_KEY"] = "test-key-not-real"
-            from researcher.crew import ResearchCrew
+            from researcher.crew_old3 import ResearchCrew
+
             # This should not raise
             rc = ResearchCrew(model="ollama/qwen3.5:9b")
             crew = rc.crew()

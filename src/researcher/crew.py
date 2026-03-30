@@ -411,6 +411,12 @@ def generate_image(instructions: str) -> str:
 _sd_pipe = None
 _sd_lock = threading.Lock()  # guards lazy pipeline init
 _vram_lock = threading.Lock()  # serialises GPU-heavy inference
+
+# Image backend selection
+IMAGE_BACKEND = os.getenv("IMAGE_BACKEND", "sd")  # "sd" or "zimage"
+# OLLAMA_IMAGE_URL is used ONLY for unloading/reloading the LLM via keep_alive=0.
+# It is NOT used for image generation when IMAGE_BACKEND=zimage.
+OLLAMA_IMAGE_URL = os.getenv("OLLAMA_IMAGE_URL", "http://localhost:11434/api/generate")
 _SD_MODEL_ID = os.getenv("SD_MODEL", "stable-diffusion-v1-5/stable-diffusion-v1-5")
 
 
@@ -452,47 +458,230 @@ def preload_sd():
     threading.Thread(target=_get_sd_pipe, daemon=True).start()
 
 
+# --------------- ZImagePipeline backend (diffusers + CUDA) ---------------
+# Used when IMAGE_BACKEND=zimage.
+# Reads:
+#   ZIMAGE_MODEL          — HuggingFace repo id (default: mrfakename/Z-Image-Turbo)
+#   HUGGINGFACE_TOKEN     — HF token for gated repos
+#   TRANSFORMERS_OFFLINE  — set to "1" to skip network after first download
+# Ollama is NOT involved for image generation; it is only used to
+# unload/reload the qwen3 LLM around inference to free VRAM.
+_ZIMAGE_MODEL_ID = os.getenv("ZIMAGE_MODEL", "mrfakename/Z-Image-Turbo")
+_zimage_pipe = None
+_zimage_init_lock = threading.Lock()
+
+# Flag set by generate_ai_image when GPU image generation ran.
+# Checked by main.py to decide whether to unload Ollama after the request.
+_image_was_generated = False
+
+
+def _get_zimage_pipe():
+    """Lazy-load ZImagePipeline once with bfloat16 + Flash Attention."""
+    global _zimage_pipe
+    if _zimage_pipe is None:
+        with _zimage_init_lock:
+            if _zimage_pipe is None:
+                import torch
+                from diffusers import ZImagePipeline
+                import sys as _sys
+
+                hf_token = os.getenv("HUGGINGFACE_TOKEN") or os.getenv("HF_TOKEN")
+                offline   = os.getenv("TRANSFORMERS_OFFLINE", "0") == "1"
+
+                print(
+                    f"[ZIMG] Loading ZImagePipeline ({_ZIMAGE_MODEL_ID})"
+                    f"{' [offline]' if offline else ''}...",
+                    flush=True,
+                )
+                pipe = ZImagePipeline.from_pretrained(
+                    _ZIMAGE_MODEL_ID,
+                    torch_dtype=torch.bfloat16,
+                    token=hf_token,
+                    local_files_only=offline,
+                )
+                # Leverage diffusers memory optimizations for low VRAM
+                try:
+                    pipe.enable_attention_slicing()
+                    _sys.stderr.write("[ZIMG] Attention slicing enabled\n")
+                except Exception:
+                    _sys.stderr.write("[ZIMG] Attention slicing unavailable\n")
+
+                try:
+                    pipe.enable_model_cpu_offload()
+                    _sys.stderr.write("[ZIMG] Model CPU offload enabled\n")
+                except Exception:
+                    _sys.stderr.write("[ZIMG] Model CPU offload unavailable\n")
+
+                # Flash Attention - try pipeline-level, then transformer-level
+                try:
+                    pipe.enable_flash_attention()
+                    _sys.stderr.write("[ZIMG] Flash Attention enabled\n")
+                except AttributeError:
+                    try:
+                        pipe.transformer.enable_flash_attn()
+                        _sys.stderr.write(
+                            "[ZIMG] Flash Attention enabled (transformer)\n"
+                        )
+                    except Exception:
+                        _sys.stderr.write(
+                            "[ZIMG] Flash Attention unavailable - using default\n"
+                        )
+                # Do NOT call pipe.to('cuda') when CPU offload is enabled
+                if not hasattr(pipe, 'is_loaded') or not getattr(pipe, 'is_loaded', False):
+                    pass
+                _zimage_pipe = pipe
+                print("[ZIMG] Pipeline ready.", flush=True)
+    return _zimage_pipe
+
+
+def preload_zimage():
+    """Warm up the ZImagePipeline in a background thread."""
+    threading.Thread(target=_get_zimage_pipe, daemon=True).start()
+
+
 @tool("GenerateAIImage")
 def generate_ai_image(prompt: str) -> str:
-    """Generate a realistic image from a text prompt using Stable Diffusion AI.
+    """Generate a realistic image from a text prompt using Stable Diffusion AI or Ollama z-image.
     Use for animals, landscapes, people, objects, scenes. Add style keywords like photorealistic, 8k.
     Copy the returned image tag EXACTLY into your Final Answer."""
     import sys as _sys
+    import requests
 
-    _sys.stderr.write(f"[SD] generate_ai_image called: {prompt[:100]}\n")
+    global _image_was_generated
+    backend = IMAGE_BACKEND.lower()
+    _sys.stderr.write(
+        f"[IMG] generate_ai_image called (backend={backend}): {prompt[:100]}\n"
+    )
     _sys.stderr.flush()
-    try:
-        pipe = _get_sd_pipe()
-        _sys.stderr.write("[SD] Pipeline acquired, acquiring VRAM lock...\n")
-        _sys.stderr.flush()
-        with _vram_lock:
-            _sys.stderr.write("[SD] Starting inference...\n")
+    _image_was_generated = True
+    if backend == "sd":
+        try:
+            pipe = _get_sd_pipe()
+            _sys.stderr.write("[SD] Pipeline acquired, acquiring VRAM lock...\n")
             _sys.stderr.flush()
-            result = pipe(
-                prompt,
-                num_inference_steps=25,
-                guidance_scale=7.5,
-                width=512,
-                height=512,
-            )
-            img = result.images[0]
-            # Free GPU memory inside the lock so nothing else grabs VRAM first
-            import torch
+            with _vram_lock:
+                _sys.stderr.write("[SD] Starting inference...\n")
+                _sys.stderr.flush()
+                result = pipe(
+                    prompt,
+                    num_inference_steps=25,
+                    guidance_scale=7.5,
+                    width=512,
+                    height=512,
+                )
+                img = result.images[0]
+                # Free GPU memory inside the lock so nothing else grabs VRAM first
+                import torch
 
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
+                gc.collect()
+            fname = f"{_uuid.uuid4().hex[:12]}.png"
+            img.save(_GENERATED_DIR / fname)
+            tag = f"![generated image](/static/generated/{fname})"
+            _sys.stderr.write(f"[SD] Done: {tag}\n")
+            _sys.stderr.flush()
+            return tag
+        except Exception as e:
+            _sys.stderr.write(f"[SD] ERROR: {e}\n")
+            _sys.stderr.flush()
+            return f"Error generating image: {e}"
+    elif backend == "zimage":
+        # ZImagePipeline via diffusers + CUDA.
+        # Controlled by .env: ZIMAGE_MODEL, HUGGINGFACE_TOKEN, TRANSFORMERS_OFFLINE.
+        # Ollama is used only to unload/reload the LLM around inference to free VRAM.
+        import requests as _requests
+
+        qwen_model = os.getenv("MODEL", "qwen3.5:9b").replace("ollama/", "")
+
+        # Unload the LLM to free VRAM for the image pipeline
+        try:
+            _requests.post(
+                OLLAMA_IMAGE_URL,
+                json={"model": qwen_model, "keep_alive": 0, "prompt": ""},
+                timeout=30,
+            )
+            _sys.stderr.write(f"[ZIMG] Unloaded LLM: {qwen_model}\n")
+        except Exception as e:
+            _sys.stderr.write(f"[ZIMG] Failed to unload LLM: {e}\n")
+
+        # Wait for Ollama to actually release VRAM (async unload)
+        import time as _time
+        import torch
+        _sys.stderr.write("[ZIMG] Waiting for VRAM to free...\n")
+        for _wait_i in range(15):
+            torch.cuda.empty_cache()
+            _free = torch.cuda.mem_get_info()[0] / (1024**3)
+            _sys.stderr.write(f"[ZIMG]   free VRAM: {_free:.2f} GiB\n")
+            if _free > 12.0:  # enough for ZImage
+                break
+            _time.sleep(1)
+        else:
+            _sys.stderr.write("[ZIMG] Warning: VRAM may still be tight\n")
+
+        img_tag = None
+        last_exc = None
+        pipe = None
+        try:
+            pipe = _get_zimage_pipe()
+            _sys.stderr.write(f"[ZIMG] Running inference: {prompt[:80]}\n")
+            _sys.stderr.flush()
+
+            width = int(os.getenv("ZIMAGE_WIDTH", "512"))
+            height = int(os.getenv("ZIMAGE_HEIGHT", "512"))
+
+            with torch.inference_mode():
+                result = pipe(prompt=prompt, width=width, height=height)
+
+            img = result.images[0]
+
+            fname = f"{_uuid.uuid4().hex[:12]}.png"
+            img.save(_GENERATED_DIR / fname)
+            img_tag = f"![generated image](/static/generated/{fname})"
+            _sys.stderr.write(f"[ZIMG] Done: {img_tag}\n")
+            _sys.stderr.flush()
+
+        except Exception as e:
+            last_exc = e
+            _sys.stderr.write(f"[ZIMG] ERROR: {e}\n")
+            _sys.stderr.flush()
+
+        finally:
+            # Free ZImage pipeline from GPU BEFORE reloading LLM
+            global _zimage_pipe
+            try:
+                if _zimage_pipe is not None:
+                    _zimage_pipe.to("cpu")
+                    _sys.stderr.write("[ZIMG] Moved pipeline to CPU\n")
+            except Exception:
+                pass
+            _zimage_pipe = None
+            if pipe is not None:
+                del pipe
+            gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
-            gc.collect()
-        fname = f"{_uuid.uuid4().hex[:12]}.png"
-        img.save(_GENERATED_DIR / fname)
-        tag = f"![generated image](/static/generated/{fname})"
-        _sys.stderr.write(f"[SD] Done: {tag}\n")
-        _sys.stderr.flush()
-        return tag
-    except Exception as e:
-        _sys.stderr.write(f"[SD] ERROR: {e}\n")
-        _sys.stderr.flush()
-        return f"Error generating image: {e}"
+            _free = torch.cuda.mem_get_info()[0] / (1024**3)
+            _sys.stderr.write(f"[ZIMG] GPU freed — {_free:.2f} GiB available\n")
+
+            # Reload the LLM now that VRAM is free
+            try:
+                _requests.post(
+                    OLLAMA_IMAGE_URL,
+                    json={"model": qwen_model, "prompt": ""},
+                    timeout=30,
+                )
+                _sys.stderr.write(f"[ZIMG] Reloaded LLM: {qwen_model}\n")
+            except Exception as e:
+                _sys.stderr.write(f"[ZIMG] Failed to reload LLM: {e}\n")
+
+        if img_tag:
+            return img_tag
+        return f"Error generating image via ZImagePipeline: {last_exc}"
+    else:
+        return f"Error: Unknown IMAGE_BACKEND '{backend}'. Use 'sd' or 'ollama'."
 
 
 @CrewBase
@@ -508,23 +697,20 @@ class ResearchCrew:
     @staticmethod
     def _make_llm(model: str) -> LLM:
         is_thinking_model = any(k in model.lower() for k in ("qwen3", "deepseek-r1"))
-        extra: dict = {}
+        # Build extra_body with Ollama options (CrewAI 1.12 no longer accepts config=)
+        ollama_options = {
+            "num_ctx": 32768,
+            "num_gpu": 99,
+            "num_predict": 4096,
+        }
+        extra_body: dict = {"options": ollama_options}
         if is_thinking_model:
-            # Let thinking models reason internally; CrewAI strips <think> tags.
-            # Forcing enable_thinking=False on qwen3 can cause empty responses.
-            extra["extra_body"] = {"chat_template_kwargs": {"enable_thinking": True}}
+            extra_body["chat_template_kwargs"] = {"enable_thinking": True}
         return LLM(
             model=model,
             base_url="http://localhost:11434",
-            config={
-                "options": {
-                    "num_ctx": 196608,
-                    "temperature": 0.4,
-                    "num_gpu": 99,
-                    "num_predict": 131072,
-                }
-            },
-            **extra,
+            temperature=0.4,
+            extra_body=extra_body,
         )
 
     @agent
@@ -572,24 +758,12 @@ class ResearchCrew:
 
     @crew
     def crew(self) -> Crew:
-        embedder_config = {
-            "provider": "ollama",
-            "config": {
-                "model": "nomic-embed-text",
-                "url": "http://localhost:11434/api/embeddings",
-            },
-        }
-        memory = Memory(
-            llm=self.ollama_llm,
-            embedder=embedder_config,
-        )
         return Crew(
             agents=self.agents,
             tasks=self.tasks,
             process=Process.sequential,
-            memory=memory,
+            memory=False,
             verbose=True,
-            embedder=embedder_config,
         )
 
     # ------------------------------------------------------------------
@@ -639,10 +813,10 @@ class ResearchCrew:
         decompose_llm = LLM(
             model=self._model_name,
             base_url="http://localhost:11434",
-            config={
+            temperature=0.1,
+            extra_body={
                 "options": {
                     "num_ctx": 8192,
-                    "temperature": 0.1,
                     "num_gpu": 99,
                     "num_predict": 2048,
                 }
@@ -687,7 +861,6 @@ class ResearchCrew:
         self._is_multi_part = len(parts) > 1
 
         agent_instance = self.researcher()
-        self._memory = Memory(llm=self.ollama_llm, embedder=self._EMBEDDER_CONFIG)
         exp = self.tasks_config["research_task"]["expected_output"]
 
         if self._is_multi_part:
@@ -719,9 +892,8 @@ class ResearchCrew:
             agents=[agent_instance],
             tasks=tasks,
             process=Process.sequential,
-            memory=self._memory,
+            memory=False,
             verbose=True,
-            embedder=self._EMBEDDER_CONFIG,
         )
 
     def postprocess(self, result) -> str:

@@ -28,3 +28,7 @@ Thumbs.db
 # Generated images and session data
 src/researcher/static/generated/
 src/researcher/data/
+
+# Scratch/temp test files
+tests/test_titi.py
+src/researcher/test_titi.py

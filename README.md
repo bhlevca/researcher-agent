@@ -2,6 +2,8 @@
 
 A CrewAI-powered research agent with a browser-based chat UI, voice dialog, image generation, and session management. Runs locally using Ollama — the **client only needs a web browser**.
 
+**Version 1.0.0**
+
 ## Architecture
 
 | Component | Runs on | What it does |
@@ -11,6 +13,7 @@ A CrewAI-powered research agent with a browser-based chat UI, voice dialog, imag
 | **Whisper** | Server | Speech-to-text (voice input from browser mic) |
 | **edge-tts** | Server | Text-to-speech (audio streamed back to browser) |
 | **Stable Diffusion** | Server | AI image generation (optional, needs NVIDIA GPU) |
+| **ZImage (Z-Image-Turbo)** | Server | Fast AI image generation via diffusers (optional, needs NVIDIA GPU) |
 | **Browser UI** | Client | Just a modern web browser — no plugins, no installs |
 
 > **The client computer needs nothing except a web browser with microphone access** (for voice features). All AI processing, TTS, and STT happen on the server.
@@ -93,6 +96,13 @@ cp .env.example .env
 | `SERPER_API_KEY` | Google Serper API key for web search | *(required)* |
 | `JWT_SECRET` | Secret key for signing JWT tokens | *(required)* |
 | `INVITE_CODE` | Invite code required to register | *(required)* |
+| `IMAGE_BACKEND` | Image generation backend: `sd`, `zimage`, or `none` | `sd` |
+| `ZIMAGE_MODEL` | HuggingFace repo for ZImage pipeline | `mrfakename/Z-Image-Turbo` |
+| `ZIMAGE_WIDTH` | Generated image width (ZImage) | `512` |
+| `ZIMAGE_HEIGHT` | Generated image height (ZImage) | `512` |
+| `SD_MODEL` | HuggingFace repo for Stable Diffusion | `stable-diffusion-v1-5/stable-diffusion-v1-5` |
+| `HUGGINGFACE_TOKEN` | HuggingFace token for gated model downloads | *(optional)* |
+| `TRANSFORMERS_OFFLINE` | Set to `1` after first model download for offline use | `0` |
 
 ### Authentication Setup
 
@@ -263,4 +273,87 @@ src/researcher/
 └── config/
     ├── agents.yaml      # Agent configuration
     └── tasks.yaml       # Task configuration
+docs/
+└── HF_zimage_clean_download.txt  # ZImage model setup & troubleshooting
+tests/
+├── conftest.py          # Shared fixtures, --integration flag
+├── test_api.py          # Unit tests (mocked dependencies)
+├── test_crew.py         # Unit tests for crew logic
+├── test_zimage.py       # Integration test: ZImage image generation
+├── test_sdimage.py      # Integration test: Stable Diffusion image generation
+└── ...
+```
+
+## Image Generation
+
+The agent can generate AI images via the `GenerateAIImage` tool. Two backends are supported:
+
+### ZImage (recommended for quality)
+
+Uses the [Z-Image-Turbo](https://huggingface.co/mrfakename/Z-Image-Turbo) pipeline from diffusers.
+
+```bash
+# .env
+IMAGE_BACKEND=zimage
+ZIMAGE_MODEL=mrfakename/Z-Image-Turbo
+HUGGINGFACE_TOKEN=hf_your_token_here
+TRANSFORMERS_OFFLINE=1          # after first download
+ZIMAGE_WIDTH=512                # optional, default 512
+ZIMAGE_HEIGHT=512               # optional, default 512
+```
+
+### Stable Diffusion
+
+Uses Stable Diffusion v1.5 with CPU offload.
+
+```bash
+# .env
+IMAGE_BACKEND=sd
+SD_MODEL=stable-diffusion-v1-5/stable-diffusion-v1-5
+```
+
+### GPU Memory Management
+
+With a 16 GB GPU shared between the LLM (Ollama) and image generation:
+
+1. **Before image generation**: The Ollama model is unloaded (`keep_alive=0`) and the system waits for VRAM to free
+2. **During generation**: The image pipeline loads onto GPU, generates the image, saves to disk
+3. **After generation**: The pipeline is destroyed and moved off GPU, then the Ollama model is reloaded
+4. **After request completes**: If image generation was used, the Ollama model is unloaded to fully free VRAM
+
+For text-only queries, the Ollama model stays resident in VRAM for fast responses.
+
+See [docs/HF_zimage_clean_download.txt](docs/HF_zimage_clean_download.txt) for detailed model download and troubleshooting instructions.
+
+## Testing
+
+### Unit Tests
+
+Run with mocked dependencies (no server required):
+
+```bash
+pytest tests/ -v
+```
+
+### Integration Tests
+
+Require a running server:
+
+```bash
+# Start the server first
+uvicorn researcher.main:app --host 0.0.0.0 --port 8000
+
+# In another terminal — test ZImage backend (IMAGE_BACKEND=zimage)
+pytest tests/test_zimage.py -v -s --integration
+
+# Test Stable Diffusion backend (IMAGE_BACKEND=sd)
+pytest tests/test_sdimage.py -v -s --integration
+```
+
+Integration tests authenticate against the running server, send image-generation prompts via `/chat`, and verify the SSE response contains valid image tags.
+
+Test credentials default to environment variables `TEST_USER` / `TEST_PASS`, or can be overridden:
+
+```bash
+TEST_USER=myuser TEST_PASS=mypass pytest tests/test_zimage.py -v -s --integration
 ```

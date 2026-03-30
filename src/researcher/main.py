@@ -5,7 +5,7 @@ import os
 sys.dont_write_bytecode = True
 
 # Disable CrewAI interactive trace prompt that blocks the server
-os.environ.setdefault('CREWAI_TRACING_ENABLED', 'false')
+os.environ.setdefault("CREWAI_TRACING_ENABLED", "false")
 
 import io
 import re
@@ -69,39 +69,68 @@ logger = logging.getLogger(__name__)
 OLLAMA_BASE = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 STATIC_DIR = Path(__file__).parent / "static"
 DB_PATH = Path(__file__).parent / "data" / "sessions.db"
+
+
+def _unload_ollama_model():
+    """Send keep_alive=0 to Ollama to free VRAM after crew completes."""
+    import requests as _req
+    try:
+        model = os.getenv("MODEL", "qwen3.5:9b").replace("ollama/", "")
+        _req.post(
+            f"{OLLAMA_BASE}/api/generate",
+            json={"model": model, "keep_alive": 0, "prompt": ""},
+            timeout=10,
+        )
+        logger.info("[VRAM] Unloaded Ollama model %s after crew completion", model)
+    except Exception as e:
+        logger.warning("[VRAM] Failed to unload Ollama model: %s", e)
+
+
+def _maybe_unload_ollama():
+    """Unload Ollama only if image generation used GPU this request (non-blocking)."""
+    from researcher.crew import _image_was_generated
+    import researcher.crew as _crew_mod
+    if _image_was_generated:
+        _crew_mod._image_was_generated = False  # reset for next request
+        import threading
+        threading.Thread(target=_unload_ollama_model, daemon=True).start()
+        logger.info("[VRAM] Scheduling Ollama unload (image gen used GPU)")
+    else:
+        logger.debug("[VRAM] Skipping Ollama unload (no image gen this request)")
 GENERATED_DIR = STATIC_DIR / "generated"
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 GENERATED_DIR.mkdir(parents=True, exist_ok=True)
 
 # Strip ANSI escape codes and box-drawing decorations from captured output
-_ansi_re = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07')
-_box_re = re.compile(r'[╭╮╰╯│─┌┐└┘├┤┬┴┼]+')
+_ansi_re = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07")
+_box_re = re.compile(r"[╭╮╰╯│─┌┐└┘├┤┬┴┼]+")
 
 
-_think_re = re.compile(r'<think>[\s\S]*?</think>\s*')
-_think_open_re = re.compile(r'</?think>')
+_think_re = re.compile(r"<think>[\s\S]*?</think>\s*")
+_think_open_re = re.compile(r"</?think>")
 
 
 def _clean_line(text: str) -> str:
     """Clean a single line of stdout output."""
-    text = _ansi_re.sub('', text)
-    text = _box_re.sub('', text)
-    text = _think_open_re.sub('', text)
+    text = _ansi_re.sub("", text)
+    text = _box_re.sub("", text)
+    text = _think_open_re.sub("", text)
     return text.strip()
 
 
 class _QueueWriter:
     """Captures writes to stdout and puts cleaned lines into a queue."""
-    encoding = 'utf-8'
+
+    encoding = "utf-8"
 
     def __init__(self, q: queue.Queue):
         self._q = q
-        self._buf = ''
+        self._buf = ""
 
     def write(self, s):
         self._buf += s
-        while '\n' in self._buf:
-            line, self._buf = self._buf.split('\n', 1)
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
             cleaned = _clean_line(line)
             if cleaned:
                 self._q.put(cleaned)
@@ -111,32 +140,37 @@ class _QueueWriter:
             cleaned = _clean_line(self._buf)
             if cleaned:
                 self._q.put(cleaned)
-            self._buf = ''
+            self._buf = ""
 
     def isatty(self):
         return False
 
     def fileno(self):
-        raise OSError('not a real file')
+        raise OSError("not a real file")
 
 
 # --- Pydantic models ---
+
 
 class ChatRequest(BaseModel):
     message: str
     history: list = []
     file_ids: list[str] = []
 
+
 class ModelRequest(BaseModel):
     model: str
+
 
 class SessionSaveRequest(BaseModel):
     name: str
     messages: list
 
+
 class AskRequest(BaseModel):
     topic: str
     file_ids: list[str] = []
+
 
 class ContinueRequest(BaseModel):
     original_query: str
@@ -156,6 +190,7 @@ def _get_whisper():
         with _whisper_lock:
             if _whisper_model is None:
                 import whisper
+
                 logger.info("Loading Whisper base model (CPU)…")
                 _whisper_model = whisper.load_model("base", device="cpu")
                 logger.info("Whisper model ready.")
@@ -164,13 +199,14 @@ def _get_whisper():
 
 # --- Lifespan: initialise app.state, SQLite, SD preload ---
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # -- Crew / model init --
     model = os.getenv("MODEL", "ollama/qwen3.5:9b")
     app.state.current_model = model
     app.state.research_crew = ResearchCrew(model=model)
-    app.state.crew_semaphore = asyncio.Semaphore(1)   # serialise crew runs
+    app.state.crew_semaphore = asyncio.Semaphore(1)  # serialise crew runs
 
     # Wipe stale memory from previous server runs so old data cannot
     # contaminate new requests (users save sessions explicitly).
@@ -179,7 +215,8 @@ async def lifespan(app: FastAPI):
     # -- SQLite session database --
     db = await aiosqlite.connect(str(DB_PATH))
     db.row_factory = aiosqlite.Row
-    await db.execute("""
+    await db.execute(
+        """
         CREATE TABLE IF NOT EXISTS sessions (
             id          TEXT PRIMARY KEY,
             name        TEXT NOT NULL,
@@ -188,7 +225,8 @@ async def lifespan(app: FastAPI):
             model       TEXT DEFAULT '',
             messages    TEXT NOT NULL DEFAULT '[]'
         )
-    """)
+    """
+    )
     await db.commit()
 
     # Migrate any legacy JSON session files
@@ -202,10 +240,14 @@ async def lifespan(app: FastAPI):
                     "INSERT OR IGNORE INTO sessions "
                     "(id, name, created_at, updated_at, model, messages) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
-                    (data["id"], data["name"], data["created_at"],
-                     data.get("updated_at", data["created_at"]),
-                     data.get("model", ""),
-                     json.dumps(data.get("messages", [])))
+                    (
+                        data["id"],
+                        data["name"],
+                        data["created_at"],
+                        data.get("updated_at", data["created_at"]),
+                        data.get("model", ""),
+                        json.dumps(data.get("messages", [])),
+                    ),
                 )
                 migrated += 1
             except (json.JSONDecodeError, KeyError):
@@ -245,6 +287,7 @@ register_ingestion_routes(app)
 
 # --- Chat UI ---
 
+
 @app.get("/")
 async def index():
     return FileResponse(STATIC_DIR / "index.html")
@@ -255,9 +298,7 @@ async def info(request: Request):
     user = await get_optional_user(request)
     if user:
         db = request.app.state.db
-        cursor = await db.execute(
-            "SELECT model FROM users WHERE id = ?", (user["id"],)
-        )
+        cursor = await db.execute("SELECT model FROM users WHERE id = ?", (user["id"],))
         row = await cursor.fetchone()
         model = (row[0] if row and row[0] else None) or request.app.state.current_model
     else:
@@ -311,6 +352,7 @@ async def switch_model(req: ModelRequest, request: Request):
 
 # --- Memory depth toggle: shallow (fast) / deep (thorough) ---
 
+
 @app.get("/memory-depth")
 async def get_memory_depth():
     """Return the current memory recall depth."""
@@ -331,33 +373,75 @@ async def set_memory_depth(request: Request):
 
 # --- Post-processing helpers ---
 
-_img_md_re = re.compile(r'!\[[^\]]*\]\(/static/generated/[a-f0-9]+\.png\)')
+_img_md_re = re.compile(r"!\[[^\]]*\]\(/static/generated/[a-f0-9]+\.png\)")
 _orphan_re = re.compile(
-    r'Action:\s*(generate_?(?:ai_?)?image)\s*\n\s*Action\s*Input:\s*(\{.*\}|.+)',
+    r"Action:\s*(generate_?(?:ai_?)?image)\s*\n\s*Action\s*Input:\s*(\{.*\}|.+)",
     re.DOTALL | re.IGNORECASE,
 )
 
 
 def _postprocess(response_text: str, verbose_log: str) -> str:
     """Clean up crew output: rescue orphan tool calls, validate images, strip noise."""
+
+    # Early rescue: the user asked for an image but the agent never called the tool.
+    # Detect this by checking for draw/image keywords in the request AND absence of
+    # actual tool execution in the verbose log.
+    _draw_kw = re.search(
+        r'New request:\s*(.+)', verbose_log, re.IGNORECASE
+    )
+    if _draw_kw:
+        _user_req = _draw_kw.group(1).strip().strip('"')
+        _is_image_request = bool(re.search(
+            r'\b(draw|paint|sketch|generate\s+(?:an?\s+)?image|create\s+(?:an?\s+)?image|'
+            r'illustration|picture\s+of|photo\s+of|render)\b',
+            _user_req, re.IGNORECASE,
+        ))
+        _tool_was_called = bool(re.search(
+            r'Tool:\s*generate_ai_image', verbose_log, re.IGNORECASE,
+        ))
+        if _is_image_request and not _tool_was_called:
+            sys.stderr.write(
+                "[postprocess] Early rescue: image request detected but tool was never called\n"
+            )
+            # Extract subject: strip conversational fluff
+            _subj = re.sub(
+                r'^(thanks?,?\s*|please\s+|now\s+|can you\s+|could you\s+|ok\s+|'
+                r'sure,?\s*|hey,?\s*|hi,?\s*)+',
+                '', _user_req, flags=re.IGNORECASE,
+            ).strip()
+            if _subj:
+                _early_prompt = (
+                    f"{_subj}, photorealistic, highly detailed, "
+                    "professional photography, 8k resolution"
+                ) if len(_subj) < 60 else _subj
+                sys.stderr.write(f"[postprocess] Early rescue prompt: {_early_prompt[:120]}\n")
+                sys.stderr.flush()
+                try:
+                    _early_result = _generate_ai_image_tool.run(_early_prompt)
+                    if "![generated image]" in _early_result:
+                        response_text = _early_result + "\n\n" + response_text
+                        sys.stderr.write(f"[postprocess] Early rescue succeeded: {_early_result}\n")
+                except Exception as exc:
+                    sys.stderr.write(f"[postprocess] Early rescue failed: {exc}\n")
+
     # Orphan rescue — run tool server-side if LLM described action but never executed
     orphan = _orphan_re.search(response_text)
     if orphan:
         try:
-            tool_name = orphan.group(1).lower().replace(' ', '').replace('_', '')
+            tool_name = orphan.group(1).lower().replace(" ", "").replace("_", "")
             raw_input = orphan.group(2).strip()
-            if 'ai' in tool_name:
-                prompt = raw_input.strip('"\'')
+            if "ai" in tool_name:
+                prompt = raw_input.strip("\"'")
                 try:
                     parsed = json.loads(raw_input)
-                    prompt = parsed.get('prompt', raw_input)
+                    prompt = parsed.get("prompt", raw_input)
                 except (json.JSONDecodeError, TypeError):
                     pass
                 response_text = _generate_ai_image_tool.run(prompt)
             else:
                 parsed = json.loads(raw_input)
-                if 'instructions' in parsed:
-                    iv = parsed['instructions']
+                if "instructions" in parsed:
+                    iv = parsed["instructions"]
                     if isinstance(iv, dict):
                         iv = json.dumps(iv)
                     response_text = _generate_image_tool.run(iv)
@@ -368,49 +452,124 @@ def _postprocess(response_text: str, verbose_log: str) -> str:
             sys.stderr.flush()
 
     # Pull images from verbose log if response has none
-    if '/static/generated/' not in response_text:
+    if "/static/generated/" not in response_text:
         images_in_log = _img_md_re.findall(verbose_log)
         if images_in_log:
-            response_text += '\n\n' + '\n'.join(images_in_log)
+            response_text += "\n\n" + "\n".join(images_in_log)
 
     # Validate that referenced images actually exist on disk
+    _had_img_before = bool(re.search(r"!\[[^\]]*\]\([^)]*generated[^)]*\)", response_text))
+
     def _validate_img(match):
-        rel = match.group(1).replace('/static/', '', 1)
-        return match.group(0) if (STATIC_DIR / rel).exists() else ''
+        rel = match.group(1).replace("/static/", "", 1)
+        return match.group(0) if (STATIC_DIR / rel).exists() else ""
 
     response_text = re.sub(
-        r'!\[[^\]]*\]\((/static/generated/[^)]+)\)',
-        _validate_img, response_text,
+        r"!\[[^\]]*\]\((/static/generated/[^)]+)\)",
+        _validate_img,
+        response_text,
     )
+    _has_img_after = bool(re.search(r"!\[[^\]]*\]\(/static/generated/[^)]+\)", response_text))
 
-    response_text = re.sub(r'<result>\s*</result>', '', response_text)
+    # Hallucination rescue: LLM faked an image path that didn't exist on disk.
+    # Try to extract the prompt and actually generate the image.
+    if _had_img_before and not _has_img_after:
+        sys.stderr.write("[postprocess] Detected hallucinated image path — attempting rescue\n")
+        _rescue_prompt = None
+
+        # 1) Look for a tool-call-style prompt in the verbose log
+        _m = re.search(
+            r"generate_ai_image.*?['\"]prompt['\"]:\s*['\"](.+?)['\"]",
+            verbose_log, re.IGNORECASE | re.DOTALL,
+        )
+        if _m:
+            _rescue_prompt = _m.group(1).strip()
+
+        # 2) Look for inline JSON prompt in the response text itself
+        if not _rescue_prompt:
+            _m = re.search(
+                r'\{\s*"prompt"\s*:\s*"([^"]+)"',
+                response_text, re.IGNORECASE,
+            )
+            if _m:
+                _rescue_prompt = _m.group(1).strip()
+
+        # 3) Fall back to the user's original request from the verbose log
+        if not _rescue_prompt:
+            _m = re.search(
+                r'New request:\s*(.+)',
+                verbose_log, re.IGNORECASE,
+            )
+            if _m:
+                raw = _m.group(1).strip().strip('"')
+                # Extract drawing subject: strip conversational fluff
+                _subj = re.sub(
+                    r'^(thanks?,?\s*|please\s+|now\s+|can you\s+|could you\s+|ok\s+|'
+                    r'sure,?\s*|hey,?\s*|hi,?\s*)+',
+                    '', raw, flags=re.IGNORECASE,
+                ).strip()
+                if _subj:
+                    _rescue_prompt = _subj
+
+        # Enrich short/conversational prompts with quality keywords
+        if _rescue_prompt and len(_rescue_prompt) < 60:
+            _rescue_prompt = (
+                f"{_rescue_prompt}, photorealistic, highly detailed, "
+                "professional photography, 8k resolution"
+            )
+
+        if _rescue_prompt:
+            sys.stderr.write(f"[postprocess] Rescue prompt: {_rescue_prompt[:120]}\n")
+            sys.stderr.flush()
+            try:
+                _rescue_result = _generate_ai_image_tool.run(_rescue_prompt)
+                if "![generated image]" in _rescue_result:
+                    # Strip any inline JSON prompt from the response before prepending
+                    response_text = re.sub(
+                        r'\{\s*"prompt"\s*:\s*"[^"]+"\s*\}', '', response_text
+                    ).strip()
+                    response_text = _rescue_result + "\n\n" + response_text
+                    sys.stderr.write(f"[postprocess] Rescue succeeded: {_rescue_result}\n")
+            except Exception as exc:
+                sys.stderr.write(f"[postprocess] Rescue failed: {exc}\n")
+        else:
+            sys.stderr.write("[postprocess] Could not extract prompt for rescue\n")
+
+    response_text = re.sub(r"<result>\s*</result>", "", response_text)
     # Strip LLM thinking tags (qwen3, deepseek-r1, etc.)
-    response_text = re.sub(r'<think>[\s\S]*?</think>\s*', '', response_text)
+    response_text = re.sub(r"<think>[\s\S]*?</think>\s*", "", response_text)
     response_text = re.sub(
-        r'Thought:.*?Action:.*?Action Input:.*?$',
-        '', response_text, flags=re.DOTALL,
+        r"Thought:.*?Action:.*?Action Input:.*?$",
+        "",
+        response_text,
+        flags=re.DOTALL,
     )
     response_text = response_text.strip()
 
     if not response_text:
         images_in_log = _img_md_re.findall(verbose_log)
         valid = [
-            img for img in images_in_log
-            if (STATIC_DIR / img.split('(')[1].rstrip(')').replace('/static/', '', 1)).exists()
+            img
+            for img in images_in_log
+            if (
+                STATIC_DIR / img.split("(")[1].rstrip(")").replace("/static/", "", 1)
+            ).exists()
         ]
         if valid:
             response_text = valid[-1]
         else:
-            response_text = 'The agent could not complete the request. Please try rephrasing.'
+            response_text = (
+                "The agent could not complete the request. Please try rephrasing."
+            )
 
     return response_text
 
 
 # Detect incomplete agent output (hit max iterations or malformed finish)
 _INCOMPLETE_MARKERS = [
-    'Maximum iterations reached',
-    'Invalid response from LLM call',
-    'Please try rephrasing',
+    "Maximum iterations reached",
+    "Invalid response from LLM call",
+    "Please try rephrasing",
 ]
 
 
@@ -420,31 +579,38 @@ def _is_incomplete(response_text: str, verbose_log: str) -> bool:
         if marker in response_text or marker in verbose_log:
             return True
     # Response ends with an orphaned Action/Action Input (tool never executed)
-    if re.search(r'Action\s*Input\s*:\s*\{[^}]*\}\s*$', response_text):
+    if re.search(r"Action\s*Input\s*:\s*\{[^}]*\}\s*$", response_text):
         return True
     return False
 
 
 def _extract_usage(result) -> dict:
-    if hasattr(result, 'token_usage') and result.token_usage:
+    if hasattr(result, "token_usage") and result.token_usage:
         tu = result.token_usage
         return {
-            "total_tokens": getattr(tu, 'total_tokens', 0),
-            "prompt_tokens": getattr(tu, 'prompt_tokens', 0),
-            "completion_tokens": getattr(tu, 'completion_tokens', 0),
+            "total_tokens": getattr(tu, "total_tokens", 0),
+            "prompt_tokens": getattr(tu, "prompt_tokens", 0),
+            "completion_tokens": getattr(tu, "completion_tokens", 0),
         }
     return {}
 
 
 # --- Conversation context builder (3-tier) ---
 
-_IMG_CTX_RE = re.compile(r'!\[[^\]]*\]\(/static/generated/[^)]+\)')
+_IMG_CTX_RE = re.compile(r"!\[[^\]]*\]\(/static/generated/[^)]+\)")
 
 
 def _clean_assistant_text(text: str) -> str:
-    """Strip image markdown and thinking tags from assistant text."""
-    text = _IMG_CTX_RE.sub('[image]', text)
-    text = re.sub(r'<think>[\s\S]*?</think>\s*', '', text)
+    """Strip image markdown and thinking tags from assistant text.
+
+    If the response was primarily an image generation (contains a generated
+    image tag), collapse it to a short summary.  This prevents the LLM from
+    seeing a detailed template and copying it with a made-up filename
+    instead of actually calling the tool on subsequent requests.
+    """
+    text = re.sub(r"<think>[\s\S]*?</think>\s*", "", text)
+    if _IMG_CTX_RE.search(text):
+        return "[Generated an image using GenerateAIImage tool — YOU MUST call the tool again for new images]"
     return text.strip()
 
 
@@ -459,8 +625,12 @@ def _heuristic_shorten(text: str, max_len: int = 400) -> str:
 def _summarize_with_llm(messages: list[dict], model: str) -> str:
     """Use litellm to summarize older conversation messages."""
     import litellm
-    litellm_model = ("ollama_chat/" + model[len("ollama/"):]
-                     if model.startswith("ollama/") else model)
+
+    litellm_model = (
+        "ollama_chat/" + model[len("ollama/") :]
+        if model.startswith("ollama/")
+        else model
+    )
     conversation_text = "\n".join(
         f"{'User' if m.get('role') == 'user' else 'Assistant'}: "
         f"{_clean_assistant_text(m.get('text', ''))[:500]}"
@@ -469,20 +639,22 @@ def _summarize_with_llm(messages: list[dict], model: str) -> str:
     try:
         resp = litellm.completion(
             model=litellm_model,
-            messages=[{
-                "role": "user",
-                "content": (
-                    "Summarize this conversation in 3-5 bullet points. "
-                    "Focus on: topics discussed, decisions made, "
-                    "pending questions. Be concise.\n\n" + conversation_text
-                ),
-            }],
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        "Summarize this conversation in 3-5 bullet points. "
+                        "Focus on: topics discussed, decisions made, "
+                        "pending questions. Be concise.\n\n" + conversation_text
+                    ),
+                }
+            ],
             api_base="http://localhost:11434",
             num_retries=0,
             temperature=0.1,
         )
         summary = resp.choices[0].message.content or ""
-        summary = re.sub(r'<think>[\s\S]*?</think>\s*', '', summary).strip()
+        summary = re.sub(r"<think>[\s\S]*?</think>\s*", "", summary).strip()
         return summary
     except Exception as e:
         logger.warning("LLM summarization failed: %s", e)
@@ -510,9 +682,9 @@ def _build_conversation_context(history: list[dict], model: str) -> str:
     if n <= 4:
         # Short: include everything
         for msg in history:
-            role = msg.get('role', 'user')
-            text = msg.get('text', '')
-            if role == 'assistant':
+            role = msg.get("role", "user")
+            text = msg.get("text", "")
+            if role == "assistant":
                 text = _clean_assistant_text(text)
             lines.append(f"{'User' if role == 'user' else 'Assistant'}: {text}")
 
@@ -522,9 +694,9 @@ def _build_conversation_context(history: list[dict], model: str) -> str:
         recent = history[-3:]
         lines.append("[Earlier in conversation]")
         for msg in older:
-            role = msg.get('role', 'user')
-            text = msg.get('text', '')
-            if role == 'assistant':
+            role = msg.get("role", "user")
+            text = msg.get("text", "")
+            if role == "assistant":
                 text = _clean_assistant_text(text)
             lines.append(
                 f"{'User' if role == 'user' else 'Assistant'}: "
@@ -532,9 +704,9 @@ def _build_conversation_context(history: list[dict], model: str) -> str:
             )
         lines.append("[Recent messages]")
         for msg in recent:
-            role = msg.get('role', 'user')
-            text = msg.get('text', '')
-            if role == 'assistant':
+            role = msg.get("role", "user")
+            text = msg.get("text", "")
+            if role == "assistant":
                 text = _clean_assistant_text(text)
             lines.append(f"{'User' if role == 'user' else 'Assistant'}: {text}")
 
@@ -547,9 +719,9 @@ def _build_conversation_context(history: list[dict], model: str) -> str:
         lines.append(summary)
         lines.append("[Recent messages]")
         for msg in recent:
-            role = msg.get('role', 'user')
-            text = msg.get('text', '')
-            if role == 'assistant':
+            role = msg.get("role", "user")
+            text = msg.get("text", "")
+            if role == "assistant":
                 text = _clean_assistant_text(text)
             lines.append(f"{'User' if role == 'user' else 'Assistant'}: {text}")
 
@@ -557,6 +729,7 @@ def _build_conversation_context(history: list[dict], model: str) -> str:
 
 
 # --- /chat  SSE streaming endpoint ---
+
 
 @app.post("/chat")
 async def chat(req: ChatRequest, request: Request):
@@ -585,28 +758,29 @@ async def chat(req: ChatRequest, request: Request):
 
     def _make_step_callback(q_ref):
         """Return a callback that puts structured reasoning into the queue."""
+
         def _step_cb(step):
             sys.stderr.write(f"[STEP_CB] type={type(step).__name__}\n")
             sys.stderr.flush()
             if isinstance(step, AgentAction):
-                thought = (step.thought or '').strip()
+                thought = (step.thought or "").strip()
                 if thought:
                     # Show the agent's actual thought process
-                    for line in thought.split('\n'):
+                    for line in thought.split("\n"):
                         line = line.strip()
                         if line:
                             q_ref.put(f"💭 {line}")
-                tool_name = step.tool or ''
-                tool_input = step.tool_input or ''
+                tool_name = step.tool or ""
+                tool_input = step.tool_input or ""
                 if tool_name:
                     q_ref.put(f"🔧 Using {tool_name}: {str(tool_input)[:200]}")
-                result = str(step.result or '')[:300]
+                result = str(step.result or "")[:300]
                 if result:
                     q_ref.put(f"📋 Result: {result}")
             elif isinstance(step, AgentFinish):
-                thought = (step.thought or '').strip()
+                thought = (step.thought or "").strip()
                 if thought:
-                    for line in thought.split('\n'):
+                    for line in thought.split("\n"):
                         line = line.strip()
                         if line:
                             q_ref.put(f"💭 {line}")
@@ -616,6 +790,7 @@ async def chat(req: ChatRequest, request: Request):
                 sys.stderr.write(f"[STEP_CB] unknown step: {repr(step)[:300]}\n")
                 sys.stderr.flush()
                 q_ref.put(f"💭 {str(step)[:300]}")
+
         return _step_cb
 
     def _make_event_handlers(q_ref):
@@ -629,9 +804,9 @@ async def chat(req: ChatRequest, request: Request):
         def on_reasoning_completed(source, event):
             status = "✅ Ready" if event.ready else "🔄 Refining"
             q_ref.put(f"🧠 {status}")
-            plan = (event.plan or '').strip()
+            plan = (event.plan or "").strip()
             if plan:
-                for line in plan.split('\n'):
+                for line in plan.split("\n"):
                     line = line.strip()
                     if line:
                         q_ref.put(f"📝 {line}")
@@ -649,13 +824,15 @@ async def chat(req: ChatRequest, request: Request):
 
         @crewai_event_bus.on(StepObservationCompletedEvent)
         def on_observation(source, event):
-            info = (event.key_information_learned or '').strip()
+            info = (event.key_information_learned or "").strip()
             if info:
                 q_ref.put(f"👁️ Observed: {info[:300]}")
 
         @crewai_event_bus.on(GoalAchievedEarlyEvent)
         def on_goal_early(source, event):
-            q_ref.put(f"🎯 Goal achieved early (skipping {event.steps_remaining} steps)")
+            q_ref.put(
+                f"🎯 Goal achieved early (skipping {event.steps_remaining} steps)"
+            )
 
         return [
             (AgentReasoningStartedEvent, on_reasoning_started),
@@ -675,7 +852,7 @@ async def chat(req: ChatRequest, request: Request):
         writer = _QueueWriter(q)
         old_stdout, old_stdin = sys.stdout, sys.stdin
         sys.stdout = writer
-        sys.stdin = io.StringIO('N\n')
+        sys.stdin = io.StringIO("N\n")
         try:
             return crew.kickoff()
         finally:
@@ -701,25 +878,25 @@ async def chat(req: ChatRequest, request: Request):
 
             # Verbose stdout noise patterns to suppress from reasoning panel
             _verbose_noise = re.compile(
-                r'^(Agent:|Task:|Thought:|Action:|Action Input:|Observation:|'
-                r'Entering new CrewAgentExecutor|Finished chain|'
-                r'> |I encountered an error|Tool .* accepts these inputs|'
-                r'Tool Name:|Tool Arguments:|Tool Description:|'
-                r'\[1m|> Entering|> Finished|Moving on then)',
+                r"^(Agent:|Task:|Thought:|Action:|Action Input:|Observation:|"
+                r"Entering new CrewAgentExecutor|Finished chain|"
+                r"> |I encountered an error|Tool .* accepts these inputs|"
+                r"Tool Name:|Tool Arguments:|Tool Description:|"
+                r"\[1m|> Entering|> Finished|Moving on then)",
                 re.IGNORECASE,
             )
 
             def _should_show(line: str) -> bool:
                 nonlocal _skip_history
-                if 'Previous conversation:' in line:
+                if "Previous conversation:" in line:
                     _skip_history = True
                     return False
                 if _skip_history:
-                    if 'New request:' in line:
+                    if "New request:" in line:
                         _skip_history = False
                     return False
                 # Step callback & event bus lines (emoji-prefixed) always show
-                if line and line[0] in '💭🔧📋✅🧠📝⚠️👁️🎯':
+                if line and line[0] in "💭🔧📋✅🧠📝⚠️👁️🎯":
                     return True
                 # Suppress verbose framework noise
                 if _verbose_noise.search(line):
@@ -754,22 +931,29 @@ async def chat(req: ChatRequest, request: Request):
                 return
 
             response_text = _postprocess(
-                research_crew.postprocess(result), '\n'.join(all_lines)
+                research_crew.postprocess(result), "\n".join(all_lines)
             )
             usage = _extract_usage(result)
-            incomplete = _is_incomplete(response_text, '\n'.join(all_lines))
+            incomplete = _is_incomplete(response_text, "\n".join(all_lines))
 
-            yield _sse("done", {
-                "response": response_text,
-                "reasoning": all_lines,
-                "token_usage": usage,
-                "incomplete": incomplete,
-            })
+            yield _sse(
+                "done",
+                {
+                    "response": response_text,
+                    "reasoning": all_lines,
+                    "token_usage": usage,
+                    "incomplete": incomplete,
+                },
+            )
+
+            # Free VRAM only if image generation used GPU this request
+            _maybe_unload_ollama()
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 # --- /chat/continue  LLM-direct continuation (no CrewAI) ---
+
 
 @app.post("/chat/continue")
 async def chat_continue(req: ContinueRequest, request: Request):
@@ -787,7 +971,7 @@ async def chat_continue(req: ContinueRequest, request: Request):
     model = request.app.state.current_model
     # Strip "ollama/" prefix for litellm's ollama_chat provider
     if model.startswith("ollama/"):
-        litellm_model = "ollama_chat/" + model[len("ollama/"):]
+        litellm_model = "ollama_chat/" + model[len("ollama/") :]
     else:
         litellm_model = model
 
@@ -802,7 +986,8 @@ async def chat_continue(req: ContinueRequest, request: Request):
     )
     user_prompt = (
         file_context
-        + "Original user request:\n" + req.original_query
+        + "Original user request:\n"
+        + req.original_query
         + "\n\n--- PARTIAL ANSWER (already shown to user) ---\n"
         + req.partial_response
         + "\n--- END OF PARTIAL ANSWER ---\n\n"
@@ -812,6 +997,7 @@ async def chat_continue(req: ContinueRequest, request: Request):
     )
 
     loop = asyncio.get_running_loop()
+
     def _call_llm():
         return litellm.completion(
             model=litellm_model,
@@ -825,19 +1011,23 @@ async def chat_continue(req: ContinueRequest, request: Request):
         )
 
     try:
-        logger.info("[chat/continue] Calling LLM model=%s, query_len=%d, partial_len=%d",
-                     litellm_model, len(req.original_query), len(req.partial_response))
+        logger.info(
+            "[chat/continue] Calling LLM model=%s, query_len=%d, partial_len=%d",
+            litellm_model,
+            len(req.original_query),
+            len(req.partial_response),
+        )
         response = await loop.run_in_executor(None, _call_llm)
         text = response.choices[0].message.content or ""
         logger.info("[chat/continue] LLM returned %d chars", len(text))
         # Strip thinking tags
-        text = re.sub(r'<think>[\s\S]*?</think>\s*', '', text).strip()
+        text = re.sub(r"<think>[\s\S]*?</think>\s*", "", text).strip()
         usage = {}
-        if hasattr(response, 'usage') and response.usage:
+        if hasattr(response, "usage") and response.usage:
             usage = {
-                "total_tokens": getattr(response.usage, 'total_tokens', 0),
-                "prompt_tokens": getattr(response.usage, 'prompt_tokens', 0),
-                "completion_tokens": getattr(response.usage, 'completion_tokens', 0),
+                "total_tokens": getattr(response.usage, "total_tokens", 0),
+                "prompt_tokens": getattr(response.usage, "prompt_tokens", 0),
+                "completion_tokens": getattr(response.usage, "completion_tokens", 0),
             }
         return {
             "response": text,
@@ -846,11 +1036,13 @@ async def chat_continue(req: ContinueRequest, request: Request):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        _maybe_unload_ollama()
 
 
 # --- Session management (SQLite) ---
 
-_SESSION_ID_RE = re.compile(r'^[a-f0-9]{8}$')
+_SESSION_ID_RE = re.compile(r"^[a-f0-9]{8}$")
 
 
 def _validate_sid(session_id: str):
@@ -874,14 +1066,16 @@ async def list_sessions(request: Request):
             msgs = json.loads(row["messages"])
         except (json.JSONDecodeError, TypeError):
             msgs = []
-        sessions.append({
-            "id": row["id"],
-            "name": row["name"],
-            "created_at": row["created_at"],
-            "updated_at": row["updated_at"],
-            "message_count": len(msgs),
-            "model": row["model"] or "",
-        })
+        sessions.append(
+            {
+                "id": row["id"],
+                "name": row["name"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+                "message_count": len(msgs),
+                "model": row["model"] or "",
+            }
+        )
     return {"sessions": sessions}
 
 
@@ -894,8 +1088,15 @@ async def save_session(req: SessionSaveRequest, request: Request):
     await db.execute(
         "INSERT INTO sessions (id, name, created_at, updated_at, model, messages, user_id) "
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (sid, req.name, now, now,
-         request.app.state.current_model, json.dumps(req.messages), user["id"]),
+        (
+            sid,
+            req.name,
+            now,
+            now,
+            request.app.state.current_model,
+            json.dumps(req.messages),
+            user["id"],
+        ),
     )
     await db.commit()
     return {"id": sid, "name": req.name}
@@ -928,7 +1129,9 @@ async def update_session(session_id: str, req: SessionSaveRequest, request: Requ
     _validate_sid(session_id)
     user = await get_current_user(request)  # require login
     db = request.app.state.db
-    cursor = await db.execute("SELECT id, user_id FROM sessions WHERE id = ?", (session_id,))
+    cursor = await db.execute(
+        "SELECT id, user_id FROM sessions WHERE id = ?", (session_id,)
+    )
     row = await cursor.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -938,8 +1141,13 @@ async def update_session(session_id: str, req: SessionSaveRequest, request: Requ
     now = datetime.now(timezone.utc).isoformat()
     await db.execute(
         "UPDATE sessions SET name=?, messages=?, updated_at=?, model=? WHERE id=?",
-        (req.name, json.dumps(req.messages), now,
-         request.app.state.current_model, session_id),
+        (
+            req.name,
+            json.dumps(req.messages),
+            now,
+            request.app.state.current_model,
+            session_id,
+        ),
     )
     await db.commit()
     return {"id": session_id, "name": req.name}
@@ -950,7 +1158,9 @@ async def delete_session(session_id: str, request: Request):
     _validate_sid(session_id)
     user = await get_current_user(request)  # require login
     db = request.app.state.db
-    cursor = await db.execute("SELECT id, user_id FROM sessions WHERE id = ?", (session_id,))
+    cursor = await db.execute(
+        "SELECT id, user_id FROM sessions WHERE id = ?", (session_id,)
+    )
     row = await cursor.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -963,6 +1173,7 @@ async def delete_session(session_id: str, request: Request):
 
 
 # --- /ask — structured API for automation ---
+
 
 @app.post("/ask")
 async def ask(req: AskRequest, request: Request):
@@ -986,7 +1197,7 @@ async def ask(req: AskRequest, request: Request):
         writer = _QueueWriter(q)
         old_stdout, old_stdin = sys.stdout, sys.stdin
         sys.stdout = writer
-        sys.stdin = io.StringIO('N\n')
+        sys.stdin = io.StringIO("N\n")
         try:
             return crew.kickoff()
         finally:
@@ -1009,6 +1220,9 @@ async def ask(req: AskRequest, request: Request):
         except queue.Empty:
             break
 
+    # Free VRAM only if image generation used GPU this request
+    _maybe_unload_ollama()
+
     return {
         "status": "success",
         "response": research_crew.postprocess(result),
@@ -1020,8 +1234,11 @@ async def ask(req: AskRequest, request: Request):
 
 # --- /transcribe — Whisper voice-to-text ---
 
+
 @app.post("/transcribe")
-async def transcribe(request: Request, file: UploadFile = File(...), language: str = "en"):
+async def transcribe(
+    request: Request, file: UploadFile = File(...), language: str = "en"
+):
     """Transcribe audio using Whisper (CPU). Accepts any ffmpeg-supported audio format."""
     await get_current_user(request)  # require login
     # Validate language code (2-letter ISO 639-1)
@@ -1051,7 +1268,7 @@ async def transcribe(request: Request, file: UploadFile = File(...), language: s
 
 # --- /tts — Server-side text-to-speech (see researcher.tts) ---
 
-from researcher.tts import (                        # noqa: E402
+from researcher.tts import (  # noqa: E402
     _detect_lang,
     _split_multilingual,
     _pick_voice_for_lang,
@@ -1068,5 +1285,6 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 if __name__ == "__main__":
     import uvicorn
+
     # 120-second timeout for 5070 Ti to process long searches
     uvicorn.run(app, host="0.0.0.0", port=8000, timeout_keep_alive=120)

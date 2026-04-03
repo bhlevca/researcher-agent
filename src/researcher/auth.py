@@ -41,14 +41,14 @@ JWT_EXPIRE_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", "72"))
 # Set via env var; empty string disables the gate (open registration).
 INVITE_CODE = os.getenv("INVITE_CODE", "")
 
-_USERNAME_RE = re.compile(r'^[a-zA-Z0-9_]{3,30}$')
+_USERNAME_RE = re.compile(r"^[a-zA-Z0-9_]{3,30}$")
 
 # ---------------------------------------------------------------------------
 # Rate limiting (per-IP, in-memory)
 # ---------------------------------------------------------------------------
 
-_AUTH_RATE_WINDOW = 60          # seconds
-_AUTH_RATE_MAX_ATTEMPTS = 5     # max attempts per window
+_AUTH_RATE_WINDOW = 60  # seconds
+_AUTH_RATE_MAX_ATTEMPTS = 5  # max attempts per window
 _rate_log: dict[str, collections.deque] = {}  # ip -> deque of timestamps
 
 
@@ -66,9 +66,11 @@ def _check_rate_limit(ip: str):
         )
     dq.append(now)
 
+
 # ---------------------------------------------------------------------------
 # Password helpers
 # ---------------------------------------------------------------------------
+
 
 def _hash_password(plain: str) -> str:
     return bcrypt.hashpw(plain.encode(), bcrypt.gensalt()).decode()
@@ -81,6 +83,7 @@ def _verify_password(plain: str, hashed: str) -> bool:
 # ---------------------------------------------------------------------------
 # JWT helpers
 # ---------------------------------------------------------------------------
+
 
 def _create_token(user_id: str, username: str) -> str:
     payload = {
@@ -104,6 +107,7 @@ def _decode_token(token: str) -> dict:
 # ---------------------------------------------------------------------------
 # FastAPI dependencies
 # ---------------------------------------------------------------------------
+
 
 async def get_current_user(request: Request) -> dict:
     """Require a valid JWT. Returns ``{"id": ..., "username": ...}``."""
@@ -130,9 +134,11 @@ async def get_optional_user(request: Request) -> dict | None:
 # DB helpers — called once during lifespan startup
 # ---------------------------------------------------------------------------
 
+
 async def init_users_table(db):
     """Create the ``users`` table if it doesn't exist."""
-    await db.execute("""
+    await db.execute(
+        """
         CREATE TABLE IF NOT EXISTS users (
             id          TEXT PRIMARY KEY,
             username    TEXT UNIQUE NOT NULL,
@@ -140,7 +146,8 @@ async def init_users_table(db):
             model       TEXT DEFAULT '',
             created_at  TEXT NOT NULL
         )
-    """)
+    """
+    )
     await db.commit()
 
 
@@ -149,9 +156,7 @@ async def migrate_sessions_table(db):
     cursor = await db.execute("PRAGMA table_info(sessions)")
     cols = {row[1] for row in await cursor.fetchall()}
     if "user_id" not in cols:
-        await db.execute(
-            "ALTER TABLE sessions ADD COLUMN user_id TEXT DEFAULT '' "
-        )
+        await db.execute("ALTER TABLE sessions ADD COLUMN user_id TEXT DEFAULT '' ")
         await db.commit()
         logger.info("Migrated sessions table: added user_id column")
 
@@ -160,22 +165,24 @@ async def migrate_sessions_table(db):
 # Pydantic models
 # ---------------------------------------------------------------------------
 
+
 class RegisterRequest(BaseModel):
     username: str
     password: str
     invite_code: str = ""
-    website: str = ""       # honeypot — must be empty
+    website: str = ""  # honeypot — must be empty
 
 
 class LoginRequest(BaseModel):
     username: str
     password: str
-    website: str = ""       # honeypot — must be empty
+    website: str = ""  # honeypot — must be empty
 
 
 # ---------------------------------------------------------------------------
 # Route registration
 # ---------------------------------------------------------------------------
+
 
 def register_auth_routes(app):
     """Attach ``/auth/register``, ``/auth/login``, ``/auth/me`` to *app*."""
@@ -208,7 +215,9 @@ def register_auth_routes(app):
                 detail="Username must be 3-30 characters: letters, digits, underscore",
             )
         if len(req.password) < 6:
-            raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+            raise HTTPException(
+                status_code=400, detail="Password must be at least 6 characters"
+            )
 
         db = request.app.state.db
         cursor = await db.execute(
@@ -258,13 +267,10 @@ def register_auth_routes(app):
     async def me(request: Request):
         user = await get_current_user(request)
         db = request.app.state.db
-        cursor = await db.execute(
-            "SELECT model FROM users WHERE id = ?", (user["id"],)
-        )
+        cursor = await db.execute("SELECT model FROM users WHERE id = ?", (user["id"],))
         row = await cursor.fetchone()
         return {
             "id": user["id"],
             "username": user["username"],
             "model": row[0] if row else "",
         }
-

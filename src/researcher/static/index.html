@@ -235,6 +235,15 @@
         #stop-speak-btn.visible { display: inline-block; }
         #stop-speak-btn:hover { background: #5a1020; }
 
+        /* Cancel-request button */
+        #cancel-btn {
+            display: none; background: #b91c1c; color: #fee2e2; border: 1px solid #ef4444;
+            padding: 0 1rem; border-radius: 0.75rem; font-size: 0.85rem;
+            cursor: pointer; transition: all 0.15s;
+        }
+        #cancel-btn.visible { display: inline-block; }
+        #cancel-btn:hover { background: #dc2626; }
+
         /* ── Toast ── */
         .toast {
             position: fixed; bottom: 5rem; left: 50%; transform: translateX(-50%);
@@ -496,6 +505,7 @@
         <textarea id="user-input" placeholder="Ask me anything..." rows="1" autofocus></textarea>
         <button id="mic-btn" onclick="toggleMic()" title="Voice input (click to record, click again to stop)">🎤</button>
         <button id="stop-speak-btn" onclick="stopSpeaking()" title="Stop speaking">⏹ Stop</button>
+        <button id="cancel-btn" onclick="cancelRequest()" title="Cancel current request">✕ Cancel</button>
         <button id="send-btn" onclick="lastInputWasVoice = false; sendMessage()">Send</button>
     </div>
     <div class="file-chips" id="file-chips"></div>
@@ -506,6 +516,7 @@
         const chat = document.getElementById('chat-container');
         const input = document.getElementById('user-input');
         const sendBtn = document.getElementById('send-btn');
+        const cancelBtn = document.getElementById('cancel-btn');
         const modelSelect = document.getElementById('model-select');
         const modelInfo = document.getElementById('model-info');
 
@@ -972,6 +983,30 @@
             chat.scrollTop = chat.scrollHeight;
         }
 
+        // ── Cancel in-flight request ──
+        let _activeReader = null;       // set by sendMessage, cleared on finish
+        let _activeLiveWrapper = null;  // the live-reasoning DOM node
+
+        async function cancelRequest() {
+            // 1. Tell backend to stop streaming
+            try { await fetch('/chat/cancel', { method: 'POST', headers: authHeaders() }); } catch (_) {}
+            // 2. Abort the reader so the fetch loop exits
+            if (_activeReader) {
+                try { _activeReader.cancel(); } catch (_) {}
+                _activeReader = null;
+            }
+            // 3. Clean up UI
+            if (_activeLiveWrapper && _activeLiveWrapper.parentNode) {
+                _activeLiveWrapper.remove();
+            }
+            _activeLiveWrapper = null;
+            cancelBtn.classList.remove('visible');
+            sendBtn.disabled = false;
+            input.disabled = false;
+            input.focus();
+            addSimpleMsg('error', 'Request cancelled.');
+        }
+
         function hideThinking() {
             const el = document.getElementById('thinking-indicator');
             if (el) el.remove();
@@ -987,10 +1022,12 @@
             input.value = '';
             input.style.height = 'auto';
             sendBtn.disabled = true;
+            cancelBtn.classList.add('visible');
 
             // Create live reasoning container
             const liveWrapper = document.createElement('div');
             liveWrapper.className = 'msg-wrapper assistant';
+            _activeLiveWrapper = liveWrapper;
 
             const liveLabel = document.createElement('div');
             liveLabel.className = 'live-reasoning-label';
@@ -1021,6 +1058,7 @@
                 }
 
                 const reader = resp.body.getReader();
+                _activeReader = reader;
                 const decoder = new TextDecoder();
                 let buffer = '';
 
@@ -1083,6 +1121,10 @@
                                     }
                                 });
                             }
+                        } else if (eventType === 'cancelled' && dataStr) {
+                            liveWrapper.remove();
+                            addSimpleMsg('error', 'Request cancelled.');
+                            return;
                         } else if (eventType === 'error' && dataStr) {
                             // Preserve reasoning lines and show error below them
                             liveWrapper.remove();
@@ -1130,8 +1172,14 @@
                 }
             } catch (e) {
                 if (liveWrapper.parentNode) liveWrapper.remove();
-                addSimpleMsg('error', 'Connection error: ' + e.message);
+                // Don't show connection error if user cancelled
+                if (!cancelBtn.classList.contains('visible') || e.message !== 'The reader was released.') {
+                    addSimpleMsg('error', 'Connection error: ' + e.message);
+                }
             } finally {
+                _activeReader = null;
+                _activeLiveWrapper = null;
+                cancelBtn.classList.remove('visible');
                 sendBtn.disabled = false;
                 input.focus();
             }

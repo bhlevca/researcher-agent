@@ -76,7 +76,14 @@ async def get_file_context(db, user_id: str, file_ids: list[str]) -> str:
             parts.append(f"--- {row[0]} ---\n{row[1]}")
     if not parts:
         return ""
-    return "[Attached Files]\n" + "\n\n".join(parts) + "\n[End of Attached Files]\n\n"
+    return (
+        "=== ATTACHED FILE CONTENT (already extracted — read it directly) ===\n"
+        "The following is the FULL TEXT extracted from the user's uploaded file(s).\n"
+        "You MUST use this text to answer the user's questions. Do NOT claim you\n"
+        "cannot read attachments — the content is RIGHT HERE.\n\n"
+        + "\n\n".join(parts)
+        + "\n\n=== END OF ATTACHED FILE CONTENT ===\n\n"
+    )
 
 
 # ---------------------------------------------------------------------------

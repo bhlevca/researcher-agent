@@ -74,6 +74,7 @@ DB_PATH = Path(__file__).parent / "data" / "sessions.db"
 def _unload_ollama_model():
     """Send keep_alive=0 to Ollama to free VRAM after crew completes."""
     import requests as _req
+
     try:
         model = os.getenv("MODEL", "qwen3.5:9b").replace("ollama/", "")
         _req.post(
@@ -90,13 +91,17 @@ def _maybe_unload_ollama():
     """Unload Ollama only if image generation used GPU this request (non-blocking)."""
     from researcher.crew import _image_was_generated
     import researcher.crew as _crew_mod
+
     if _image_was_generated:
         _crew_mod._image_was_generated = False  # reset for next request
         import threading
+
         threading.Thread(target=_unload_ollama_model, daemon=True).start()
         logger.info("[VRAM] Scheduling Ollama unload (image gen used GPU)")
     else:
         logger.debug("[VRAM] Skipping Ollama unload (no image gen this request)")
+
+
 GENERATED_DIR = STATIC_DIR / "generated"
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 GENERATED_DIR.mkdir(parents=True, exist_ok=True)
@@ -207,6 +212,7 @@ async def lifespan(app: FastAPI):
     app.state.current_model = model
     app.state.research_crew = ResearchCrew(model=model)
     app.state.crew_semaphore = asyncio.Semaphore(1)  # serialise crew runs
+    app.state.cancel_event = threading.Event()  # crew cancellation flag
 
     # Wipe stale memory from previous server runs so old data cannot
     # contaminate new requests (users save sessions explicitly).
@@ -386,41 +392,56 @@ def _postprocess(response_text: str, verbose_log: str) -> str:
     # Early rescue: the user asked for an image but the agent never called the tool.
     # Detect this by checking for draw/image keywords in the request AND absence of
     # actual tool execution in the verbose log.
-    _draw_kw = re.search(
-        r'New request:\s*(.+)', verbose_log, re.IGNORECASE
-    )
+    _draw_kw = re.search(r"New request:\s*(.+)", verbose_log, re.IGNORECASE)
     if _draw_kw:
         _user_req = _draw_kw.group(1).strip().strip('"')
-        _is_image_request = bool(re.search(
-            r'\b(draw|paint|sketch|generate\s+(?:an?\s+)?image|create\s+(?:an?\s+)?image|'
-            r'illustration|picture\s+of|photo\s+of|render)\b',
-            _user_req, re.IGNORECASE,
-        ))
-        _tool_was_called = bool(re.search(
-            r'Tool:\s*generate_ai_image', verbose_log, re.IGNORECASE,
-        ))
+        _is_image_request = bool(
+            re.search(
+                r"\b(draw|paint|sketch|generate\s+(?:an?\s+)?image|create\s+(?:an?\s+)?image|"
+                r"illustration|picture\s+of|photo\s+of|render)\b",
+                _user_req,
+                re.IGNORECASE,
+            )
+        )
+        _tool_was_called = bool(
+            re.search(
+                r"Tool:\s*generate_ai_image",
+                verbose_log,
+                re.IGNORECASE,
+            )
+        )
         if _is_image_request and not _tool_was_called:
             sys.stderr.write(
                 "[postprocess] Early rescue: image request detected but tool was never called\n"
             )
             # Extract subject: strip conversational fluff
             _subj = re.sub(
-                r'^(thanks?,?\s*|please\s+|now\s+|can you\s+|could you\s+|ok\s+|'
-                r'sure,?\s*|hey,?\s*|hi,?\s*)+',
-                '', _user_req, flags=re.IGNORECASE,
+                r"^(thanks?,?\s*|please\s+|now\s+|can you\s+|could you\s+|ok\s+|"
+                r"sure,?\s*|hey,?\s*|hi,?\s*)+",
+                "",
+                _user_req,
+                flags=re.IGNORECASE,
             ).strip()
             if _subj:
                 _early_prompt = (
-                    f"{_subj}, photorealistic, highly detailed, "
-                    "professional photography, 8k resolution"
-                ) if len(_subj) < 60 else _subj
-                sys.stderr.write(f"[postprocess] Early rescue prompt: {_early_prompt[:120]}\n")
+                    (
+                        f"{_subj}, photorealistic, highly detailed, "
+                        "professional photography, 8k resolution"
+                    )
+                    if len(_subj) < 60
+                    else _subj
+                )
+                sys.stderr.write(
+                    f"[postprocess] Early rescue prompt: {_early_prompt[:120]}\n"
+                )
                 sys.stderr.flush()
                 try:
                     _early_result = _generate_ai_image_tool.run(_early_prompt)
                     if "![generated image]" in _early_result:
                         response_text = _early_result + "\n\n" + response_text
-                        sys.stderr.write(f"[postprocess] Early rescue succeeded: {_early_result}\n")
+                        sys.stderr.write(
+                            f"[postprocess] Early rescue succeeded: {_early_result}\n"
+                        )
                 except Exception as exc:
                     sys.stderr.write(f"[postprocess] Early rescue failed: {exc}\n")
 
@@ -458,7 +479,9 @@ def _postprocess(response_text: str, verbose_log: str) -> str:
             response_text += "\n\n" + "\n".join(images_in_log)
 
     # Validate that referenced images actually exist on disk
-    _had_img_before = bool(re.search(r"!\[[^\]]*\]\([^)]*generated[^)]*\)", response_text))
+    _had_img_before = bool(
+        re.search(r"!\[[^\]]*\]\([^)]*generated[^)]*\)", response_text)
+    )
 
     def _validate_img(match):
         rel = match.group(1).replace("/static/", "", 1)
@@ -469,18 +492,23 @@ def _postprocess(response_text: str, verbose_log: str) -> str:
         _validate_img,
         response_text,
     )
-    _has_img_after = bool(re.search(r"!\[[^\]]*\]\(/static/generated/[^)]+\)", response_text))
+    _has_img_after = bool(
+        re.search(r"!\[[^\]]*\]\(/static/generated/[^)]+\)", response_text)
+    )
 
     # Hallucination rescue: LLM faked an image path that didn't exist on disk.
     # Try to extract the prompt and actually generate the image.
     if _had_img_before and not _has_img_after:
-        sys.stderr.write("[postprocess] Detected hallucinated image path — attempting rescue\n")
+        sys.stderr.write(
+            "[postprocess] Detected hallucinated image path — attempting rescue\n"
+        )
         _rescue_prompt = None
 
         # 1) Look for a tool-call-style prompt in the verbose log
         _m = re.search(
             r"generate_ai_image.*?['\"]prompt['\"]:\s*['\"](.+?)['\"]",
-            verbose_log, re.IGNORECASE | re.DOTALL,
+            verbose_log,
+            re.IGNORECASE | re.DOTALL,
         )
         if _m:
             _rescue_prompt = _m.group(1).strip()
@@ -489,7 +517,8 @@ def _postprocess(response_text: str, verbose_log: str) -> str:
         if not _rescue_prompt:
             _m = re.search(
                 r'\{\s*"prompt"\s*:\s*"([^"]+)"',
-                response_text, re.IGNORECASE,
+                response_text,
+                re.IGNORECASE,
             )
             if _m:
                 _rescue_prompt = _m.group(1).strip()
@@ -497,16 +526,19 @@ def _postprocess(response_text: str, verbose_log: str) -> str:
         # 3) Fall back to the user's original request from the verbose log
         if not _rescue_prompt:
             _m = re.search(
-                r'New request:\s*(.+)',
-                verbose_log, re.IGNORECASE,
+                r"New request:\s*(.+)",
+                verbose_log,
+                re.IGNORECASE,
             )
             if _m:
                 raw = _m.group(1).strip().strip('"')
                 # Extract drawing subject: strip conversational fluff
                 _subj = re.sub(
-                    r'^(thanks?,?\s*|please\s+|now\s+|can you\s+|could you\s+|ok\s+|'
-                    r'sure,?\s*|hey,?\s*|hi,?\s*)+',
-                    '', raw, flags=re.IGNORECASE,
+                    r"^(thanks?,?\s*|please\s+|now\s+|can you\s+|could you\s+|ok\s+|"
+                    r"sure,?\s*|hey,?\s*|hi,?\s*)+",
+                    "",
+                    raw,
+                    flags=re.IGNORECASE,
                 ).strip()
                 if _subj:
                     _rescue_prompt = _subj
@@ -526,10 +558,12 @@ def _postprocess(response_text: str, verbose_log: str) -> str:
                 if "![generated image]" in _rescue_result:
                     # Strip any inline JSON prompt from the response before prepending
                     response_text = re.sub(
-                        r'\{\s*"prompt"\s*:\s*"[^"]+"\s*\}', '', response_text
+                        r'\{\s*"prompt"\s*:\s*"[^"]+"\s*\}', "", response_text
                     ).strip()
                     response_text = _rescue_result + "\n\n" + response_text
-                    sys.stderr.write(f"[postprocess] Rescue succeeded: {_rescue_result}\n")
+                    sys.stderr.write(
+                        f"[postprocess] Rescue succeeded: {_rescue_result}\n"
+                    )
             except Exception as exc:
                 sys.stderr.write(f"[postprocess] Rescue failed: {exc}\n")
         else:
@@ -869,6 +903,8 @@ async def chat(req: ChatRequest, request: Request):
         return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
     async def event_stream():
+        cancel = request.app.state.cancel_event
+        cancel.clear()  # reset from any previous cancellation
         async with semaphore:
             loop = asyncio.get_running_loop()
             future = loop.run_in_executor(None, _run_crew)
@@ -904,6 +940,10 @@ async def chat(req: ChatRequest, request: Request):
                 return True
 
             while not future.done():
+                if cancel.is_set():
+                    yield _sse("cancelled", "Request cancelled by user")
+                    # Let the crew thread finish in background; just stop streaming
+                    return
                 await asyncio.sleep(0.15)
                 while not q.empty():
                     try:
@@ -950,6 +990,13 @@ async def chat(req: ChatRequest, request: Request):
             _maybe_unload_ollama()
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.post("/chat/cancel")
+async def chat_cancel(request: Request):
+    """Signal the running crew to stop. The SSE stream will close gracefully."""
+    request.app.state.cancel_event.set()
+    return {"status": "cancelled"}
 
 
 # --- /chat/continue  LLM-direct continuation (no CrewAI) ---

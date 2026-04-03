@@ -2,8 +2,12 @@ research_task:
   description: >
     Analyze the user's request: "{topic}".
     First, determine if you can answer from your own knowledge.
-    If not, determine if it's a system question (use LocalSystemCheck)
-    or a world question (use InternetSearch).
+    If the request includes "=== ATTACHED FILE CONTENT" that IS the actual text
+    extracted from the user's uploaded file(s) — it is part of your prompt. Read
+    it directly and use it as your PRIMARY source. You CAN read it. Do NOT say
+    you cannot read, open, or access the file — the content is in your context.
+    If not answerable from your knowledge or attached files, determine if it's
+    a system question (use LocalSystemCheck) or a world question (use InternetSearch).
 
     LENGTH AND THOROUGHNESS:
     When the user specifies a page count, word count, or says "thorough" / "detailed",

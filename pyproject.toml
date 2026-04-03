@@ -1,6 +1,6 @@
 [project]
 name = "researcher-agent"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
     "crewai[tools]>=0.100.0",
     "litellm",

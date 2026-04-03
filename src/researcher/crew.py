@@ -486,7 +486,7 @@ def _get_zimage_pipe():
                 import sys as _sys
 
                 hf_token = os.getenv("HUGGINGFACE_TOKEN") or os.getenv("HF_TOKEN")
-                offline   = os.getenv("TRANSFORMERS_OFFLINE", "0") == "1"
+                offline = os.getenv("TRANSFORMERS_OFFLINE", "0") == "1"
 
                 print(
                     f"[ZIMG] Loading ZImagePipeline ({_ZIMAGE_MODEL_ID})"
@@ -527,7 +527,9 @@ def _get_zimage_pipe():
                             "[ZIMG] Flash Attention unavailable - using default\n"
                         )
                 # Do NOT call pipe.to('cuda') when CPU offload is enabled
-                if not hasattr(pipe, 'is_loaded') or not getattr(pipe, 'is_loaded', False):
+                if not hasattr(pipe, "is_loaded") or not getattr(
+                    pipe, "is_loaded", False
+                ):
                     pass
                 _zimage_pipe = pipe
                 print("[ZIMG] Pipeline ready.", flush=True)
@@ -609,6 +611,7 @@ def generate_ai_image(prompt: str) -> str:
         # Wait for Ollama to actually release VRAM (async unload)
         import time as _time
         import torch
+
         _sys.stderr.write("[ZIMG] Waiting for VRAM to free...\n")
         for _wait_i in range(15):
             torch.cuda.empty_cache()
@@ -871,7 +874,12 @@ class ResearchCrew:
             desc = (
                 f'Analyze the user\'s request: "{part}".\n'
                 "First, determine if you can answer from your own knowledge.\n"
-                "If not, determine if it's a system question (use LocalSystemCheck) "
+                "If the request includes '=== ATTACHED FILE CONTENT' that IS the "
+                "actual text extracted from the user's uploaded file(s). It is part "
+                "of your prompt — read it directly and use it as your PRIMARY source. "
+                "Do NOT say you cannot read or access the file.\n"
+                "If not answerable from your knowledge or attached files, determine "
+                "if it's a system question (use LocalSystemCheck) "
                 "or a world question (use InternetSearch).\n\n"
                 "LENGTH AND THOROUGHNESS:\n"
                 "When the user specifies a page count, word count, or says "

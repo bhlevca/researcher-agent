@@ -341,10 +341,20 @@ async def switch_model(req: ModelRequest, request: Request):
     user = await get_current_user(request)  # require login
     new_model = req.model if req.model.startswith("ollama/") else f"ollama/{req.model}"
     try:
-        request.app.state.research_crew = ResearchCrew(model=new_model)
+        new_crew = ResearchCrew(model=new_model)
+        # Restore user's saved LLM params on model switch
+        db = request.app.state.db
+        cursor = await db.execute("SELECT llm_params FROM users WHERE id = ?", (user["id"],))
+        row = await cursor.fetchone()
+        saved = row[0] if row and row[0] else None
+        if saved:
+            try:
+                new_crew.update_llm_params(json.loads(saved))
+            except (json.JSONDecodeError, TypeError):
+                pass
+        request.app.state.research_crew = new_crew
         request.app.state.current_model = new_model
 
-        db = request.app.state.db
         await db.execute(
             "UPDATE users SET model = ? WHERE id = ?",
             (new_model, user["id"]),
@@ -375,6 +385,68 @@ async def set_memory_depth(request: Request):
     _crew_mod.memory_depth = depth
     logger.info("Memory depth set to: %s", depth)
     return {"depth": depth}
+
+
+# --- LLM parameters ---
+
+
+@app.get("/llm-params")
+async def get_llm_params(request: Request):
+    """Return current LLM generation parameters (loads from DB if available)."""
+    user = await get_current_user(request)
+    research_crew = request.app.state.research_crew
+    # Load saved params from DB on first access
+    db = request.app.state.db
+    cursor = await db.execute("SELECT llm_params FROM users WHERE id = ?", (user["id"],))
+    row = await cursor.fetchone()
+    saved = row[0] if row and row[0] else None
+    if saved:
+        try:
+            saved_params = json.loads(saved)
+            # Apply saved params if they differ from current
+            research_crew.update_llm_params(saved_params)
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return {"params": research_crew.get_llm_params()}
+
+
+@app.post("/llm-params")
+async def set_llm_params(request: Request):
+    """Update LLM generation parameters. Accepts a partial dict. Persists to DB."""
+    user = await get_current_user(request)
+    body = await request.json()
+    params = body.get("params", {})
+    if not isinstance(params, dict):
+        raise HTTPException(status_code=400, detail="params must be a dict")
+    research_crew = request.app.state.research_crew
+    updated = research_crew.update_llm_params(params)
+    # Persist to DB
+    db = request.app.state.db
+    await db.execute(
+        "UPDATE users SET llm_params = ? WHERE id = ?",
+        (json.dumps(updated), user["id"]),
+    )
+    await db.commit()
+    logger.info("LLM params updated and saved: %s", params)
+    return {"params": updated}
+
+
+@app.post("/llm-params/reset")
+async def reset_llm_params(request: Request):
+    """Reset LLM parameters to defaults. Clears DB storage."""
+    user = await get_current_user(request)
+    from researcher.crew import ResearchCrew as _RC
+    research_crew = request.app.state.research_crew
+    updated = research_crew.update_llm_params(dict(_RC.DEFAULT_LLM_PARAMS))
+    # Clear saved params in DB
+    db = request.app.state.db
+    await db.execute(
+        "UPDATE users SET llm_params = '' WHERE id = ?",
+        (user["id"],),
+    )
+    await db.commit()
+    logger.info("LLM params reset to defaults")
+    return {"params": updated}
 
 
 # --- Post-processing helpers ---

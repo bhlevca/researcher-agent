@@ -692,27 +692,65 @@ class ResearchCrew:
     agents_config = "config/agents.yaml"
     tasks_config = "config/tasks.yaml"
 
+    # Default LLM parameter values (exposed via /llm-params API)
+    DEFAULT_LLM_PARAMS: dict = {
+        "temperature": 0.4,
+        "top_k": 40,
+        "top_p": 0.9,
+        "min_p": 0.0,
+        "seed": 0,
+        "num_predict": 4096,
+        "num_ctx": 32768,
+        "repeat_penalty": 1.1,
+        "frequency_penalty": 0.0,
+        "presence_penalty": 0.0,
+    }
+
     def __init__(self, model: str | None = None):
         self._model_name = model or os.getenv("MODEL", "ollama/qwen3.5:9b")
-        self.ollama_llm = self._make_llm(self._model_name)
+        self._llm_params: dict = dict(self.DEFAULT_LLM_PARAMS)
+        self.ollama_llm = self._make_llm(self._model_name, self._llm_params)
         self._is_multi_part = False
 
+    def get_llm_params(self) -> dict:
+        """Return current LLM parameters."""
+        return dict(self._llm_params)
+
+    def update_llm_params(self, params: dict) -> dict:
+        """Update LLM parameters and rebuild the LLM instance."""
+        for k, v in params.items():
+            if k in self.DEFAULT_LLM_PARAMS:
+                self._llm_params[k] = v
+        self.ollama_llm = self._make_llm(self._model_name, self._llm_params)
+        return dict(self._llm_params)
+
     @staticmethod
-    def _make_llm(model: str) -> LLM:
+    def _make_llm(model: str, params: dict | None = None) -> LLM:
+        if params is None:
+            params = ResearchCrew.DEFAULT_LLM_PARAMS
         is_thinking_model = any(k in model.lower() for k in ("qwen3", "deepseek-r1"))
         # Build extra_body with Ollama options (CrewAI 1.12 no longer accepts config=)
+        seed = int(params.get("seed", 0))
         ollama_options = {
-            "num_ctx": 32768,
+            "num_ctx": int(params.get("num_ctx", 32768)),
             "num_gpu": 99,
-            "num_predict": 4096,
+            "num_predict": int(params.get("num_predict", 4096)),
+            "top_k": int(params.get("top_k", 40)),
+            "top_p": float(params.get("top_p", 0.9)),
+            "min_p": float(params.get("min_p", 0.0)),
+            "repeat_penalty": float(params.get("repeat_penalty", 1.1)),
         }
+        if seed > 0:
+            ollama_options["seed"] = seed
         extra_body: dict = {"options": ollama_options}
         if is_thinking_model:
             extra_body["chat_template_kwargs"] = {"enable_thinking": True}
         return LLM(
             model=model,
             base_url="http://localhost:11434",
-            temperature=0.4,
+            temperature=float(params.get("temperature", 0.4)),
+            frequency_penalty=float(params.get("frequency_penalty", 0.0)),
+            presence_penalty=float(params.get("presence_penalty", 0.0)),
             extra_body=extra_body,
         )
 

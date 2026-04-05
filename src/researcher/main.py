@@ -456,6 +456,146 @@ _orphan_re = re.compile(
     r"Action:\s*(generate_?(?:ai_?)?image)\s*\n\s*Action\s*Input:\s*(\{.*\}|.+)",
     re.DOTALL | re.IGNORECASE,
 )
+# Detect when the LLM narrated a search tool call instead of executing it.
+# Matches patterns like:
+#   **InternetSearch** — ... Input: {"search_query": "..."}
+#   InternetSearch — Google search. Input: {"search_query": "..."}
+#   DuckDuckGoSearch — ... Input: {"query": "..."}
+_narrated_search_re = re.compile(
+    r"\*{0,2}(InternetSearch|DuckDuckGoSearch)\*{0,2}\s*[—\-]+.*?"
+    r'Input:\s*\{\s*"(?:search_query|query)"\s*:\s*"([^"]*?)"\s*\}',
+    re.IGNORECASE | re.DOTALL,
+)
+# Detect when the LLM narrated an image tool call instead of executing it.
+# Matches patterns like:
+#   **GenerateAIImage** — AI image generation. Input: {"prompt": "..."}
+#   GenerateAIImage — ... Input: {"prompt": "..."}
+#   **GenerateImage** — ... Input: {"instructions": "..."}
+_narrated_image_re = re.compile(
+    r"\*{0,2}(GenerateAIImage|GenerateImage)\*{0,2}\s*[—\-]+.*?"
+    r'Input:\s*\{\s*"(?:prompt|instructions)"\s*:\s*"([^"]*?)"\s*\}',
+    re.IGNORECASE | re.DOTALL,
+)
+
+# Detect JSON-narrated tool calls (llama pattern):
+#   {"name": "generate_ai_image", "parameters": {"prompt": "..."}}
+_narrated_json_image_re = re.compile(
+    r'\{\s*"name"\s*:\s*"(?:generate_ai_image|GenerateAIImage)"\s*,\s*'
+    r'"parameters"\s*:\s*\{\s*"prompt"\s*:\s*"([^"]+?)"\s*\}\s*\}',
+    re.IGNORECASE,
+)
+
+
+# ---------------------------------------------------------------------------
+# Refusal detection — LLM self-censored instead of generating the image
+# ---------------------------------------------------------------------------
+_REFUSAL_PATTERNS = re.compile(
+    r"(?:cannot|can't|unable to|I'm not able to|not permitted|not appropriate|"
+    r"safety (?:guidelines|policy|concerns)|copyright (?:concerns|issues|restriction)|"
+    r"I (?:must|have to) (?:decline|refuse|apologize)|"
+    r"ethic(?:al|s)|inappropriate|(?:cannot|can't) (?:fulfill|create|generate|produce)|"
+    r"against (?:my |the )?(?:guidelines|policies|rules)|"
+    r"I cannot (?:generate|create|produce|replicate)|transparent about (?:my )?(?:technical )?(?:capabilities|limitations)|"
+    r"(?:technical|image generation) limitations)",
+    re.IGNORECASE,
+)
+
+
+def _is_refusal_response(text: str) -> bool:
+    """Return True if the text looks like the LLM refused to generate an image."""
+    # Need at least 2 refusal-like phrases to avoid false positives
+    hits = _REFUSAL_PATTERNS.findall(text)
+    return len(hits) >= 2
+
+
+# ---------------------------------------------------------------------------
+# Build a quality SD/ZImage prompt from a raw user request
+# ---------------------------------------------------------------------------
+# Match: reproduction of [Artist's] [Title]
+# Uses a two-step approach to avoid possessive apostrophe ambiguity.
+_PAINTING_TRIGGER_RE = re.compile(
+    r"(?:reproduction|replica|version|copy|rendition|recreation)\s+of\s+"
+    r"(?:(?:the|a|an)\s+)?(?:(?:painting|masterpiece|artwork|work)\s+by\s+)?"
+    r"(.{5,120})",
+    re.IGNORECASE,
+)
+_POSSESSIVE_SPLIT_RE = re.compile(
+    r"^([A-Z\u00c0-\u017fa-z\u00e0-\u00ff. -]+?)(?:'s|\u2019s)\s+"
+    r"(?:painting\s+|masterpiece\s+|artwork\s+|work\s+)?"
+    r"(?:[\"\u201c\u201d'\u2018\u2019])?(.+?)(?:[\"\u201c\u201d'\u2018\u2019])?$",
+)
+_QUOTED_TITLE_RE = re.compile(
+    r"""[\"'\u2018\u2019\u201c\u201d]([^\"'\u2018\u2019\u201c\u201d]{3,80})[\"'\u2018\u2019\u201c\u201d]""",
+)
+
+
+def _build_image_prompt(subject: str) -> str:
+    """Convert a raw user request into a good image-generation prompt.
+
+    Text-to-image models (ZImage, SD) don't understand painting names or
+    art history references — they need visual descriptions.  Strategy:
+    1. Strip non-visual noise (copyright disclaimers, policy talk, questions)
+    2. Keep visual details (colors, composition, subjects, style references)
+    3. Add quality tokens
+    """
+    # Strip non-visual conversational noise that confuses the image model
+    prompt = re.sub(
+        r"(?i)\b(?:please|the\s+image\s+should|make\s+sure|needs?\s+to\s+be|"
+        r"I\s+want|I'd\s+like|could\s+you|can\s+you|"
+        r"create\s+(?:a\s+)?(?:reproduction|replica|version|copy)\s+of\s+|"
+        r"the\s+art\s+is\s+exempt.*?(?:\.|$)|"
+        r"copyright.*?(?:\.|$)|exempt\s+from.*?(?:\.|$)|"
+        r"don'?t\s+pull\s+the\s+explicit.*?(?:\.|$)|"
+        r"it\s+(?:is|does)\s+not\s+apply.*?(?:\.|$)|"
+        r"art\s+nudity\s+is\s+acceptable.*?(?:\.|$)|"
+        r"no\s+restrictions?\s+of\s+viewing.*?(?:\.|$)|"
+        r"since\s+it\s+was\s+produced\s+in\s+\d{4}.*?(?:\.|$)|"
+        r"so\s+don'?t\b.*?(?:\.|$)|"
+        r"there\s+is\s+no\s+copyright.*?(?:\.|$))",
+        "",
+        subject,
+    ).strip()
+
+    # Also strip question marks and leading/trailing junk
+    prompt = re.sub(r"\?", "", prompt)
+    prompt = re.sub(r"\s{2,}", " ", prompt).strip(" ,.")
+
+    # Extract artist name from possessive patterns like "Manet's ..." or "by Monet"
+    artist = ""
+    m_poss = re.search(
+        r"([A-Z\u00c0-\u017f][A-Za-z\u00c0-\u017f\u00e0-\u00ff. -]+?)(?:'s|\u2019s)\s",
+        prompt,
+    )
+    if m_poss:
+        artist = m_poss.group(1).strip()
+    else:
+        m_by = re.search(r"\bby\s+([A-Z\u00c0-\u017f][A-Za-z\u00c0-\u017f. -]+)", prompt)
+        if m_by:
+            artist = m_by.group(1).strip()
+
+    # Strip remaining noise words that don't help SD
+    prompt = re.sub(
+        r"\b(?:masterpiece|reproduction)\b",
+        "",
+        prompt,
+        flags=re.IGNORECASE,
+    )
+    prompt = re.sub(r"\s{2,}", " ", prompt).strip(" ,.") 
+    # Remove leading "of" left over from "reproduction of"
+    prompt = re.sub(r"^of\s+", "", prompt, flags=re.IGNORECASE).strip()
+
+    # Build the SD prompt: keep the visual description, add art tokens
+    parts = [prompt]
+    if artist:
+        parts.append(f"in the style of {artist}")
+    parts.extend([
+        "oil painting", "museum quality",
+        "rich colors", "detailed brushwork",
+        "masterpiece", "classical art style",
+        "highly detailed",
+    ])
+    result = ", ".join(p for p in parts if p)
+    return result
 
 
 def _postprocess(response_text: str, verbose_log: str) -> str:
@@ -465,16 +605,30 @@ def _postprocess(response_text: str, verbose_log: str) -> str:
     # Detect this by checking for draw/image keywords in the request AND absence of
     # actual tool execution in the verbose log.
     _draw_kw = re.search(r"New request:\s*(.+)", verbose_log, re.IGNORECASE)
+    # Also look at the full conversation context for earlier image requests
+    # (follow-up corrections like "no, this is a portrait not the painting"
+    # won't contain image keywords but the earlier request did)
+    _had_earlier_image_gen = bool(
+        re.search(
+            r"\[Generated an image using GenerateAIImage tool",
+            verbose_log,
+            re.IGNORECASE,
+        )
+    )
     if _draw_kw:
         _user_req = _draw_kw.group(1).strip().strip('"')
         _is_image_request = bool(
             re.search(
                 r"\b(draw|paint|sketch|generate\s+(?:an?\s+)?image|create\s+(?:an?\s+)?image|"
-                r"illustration|picture\s+of|photo\s+of|render)\b",
+                r"illustration|picture\s+of|photo\s+of|render|reproduction|z-image)\b",
                 _user_req,
                 re.IGNORECASE,
             )
         )
+        # If earlier messages generated an image and the current message is
+        # a correction/follow-up, treat it as an image request too
+        if not _is_image_request and _had_earlier_image_gen:
+            _is_image_request = True
         _tool_was_called = bool(
             re.search(
                 r"Tool:\s*generate_ai_image",
@@ -494,28 +648,139 @@ def _postprocess(response_text: str, verbose_log: str) -> str:
                 _user_req,
                 flags=re.IGNORECASE,
             ).strip()
-            if _subj:
-                _early_prompt = (
-                    (
-                        f"{_subj}, photorealistic, highly detailed, "
-                        "professional photography, 8k resolution"
-                    )
-                    if len(_subj) < 60
-                    else _subj
+            # Also strip tool-usage phrasing that confuses the image model
+            _subj = re.sub(
+                r"\b(use\s+the\s+)?(?:z-image|generate\s*ai\s*image|ai\s+image)\s+tool\s+to\s+",
+                "",
+                _subj,
+                flags=re.IGNORECASE,
+            ).strip()
+
+            # If this is a follow-up correction/complaint (no draw keywords
+            # in current msg but earlier image gen exists), the current _subj
+            # is probably a complaint, not a painting description.  Mine the
+            # earlier User: lines from the conversation context for the
+            # original image request.
+            if _had_earlier_image_gen and not re.search(
+                r"\b(draw|paint|sketch|generate\s+(?:an?\s+)?image|create\s+(?:an?\s+)?image|"
+                r"illustration|picture\s+of|photo\s+of|render|reproduction|z-image)\b",
+                _user_req,
+                re.IGNORECASE,
+            ):
+                _earlier_user_lines = re.findall(
+                    r"User:\s*(.+)", verbose_log, re.IGNORECASE
                 )
+                for _eline in _earlier_user_lines:
+                    if re.search(
+                        r"\b(draw|paint|sketch|generate\s+(?:an?\s+)?image|"
+                        r"create\s+(?:an?\s+)?image|reproduction|z-image|"
+                        r"picture\s+of|photo\s+of|render)\b",
+                        _eline,
+                        re.IGNORECASE,
+                    ):
+                        _subj = re.sub(
+                            r"\b(use\s+the\s+)?(?:z-image|generate\s*ai\s*image|"
+                            r"ai\s+image)\s+tool\s+to\s+",
+                            "",
+                            _eline.strip(),
+                            flags=re.IGNORECASE,
+                        ).strip()
+                        sys.stderr.write(
+                            f"[postprocess] Follow-up: using earlier request: {_subj[:120]}\n"
+                        )
+                        break
+
+            if _subj:
+                # Use LLM to convert user request into a good image prompt
+                _early_prompt = _build_image_prompt(_subj)
                 sys.stderr.write(
-                    f"[postprocess] Early rescue prompt: {_early_prompt[:120]}\n"
+                    f"[postprocess] Early rescue prompt: {_early_prompt[:200]}\n"
                 )
                 sys.stderr.flush()
                 try:
                     _early_result = _generate_ai_image_tool.run(_early_prompt)
                     if "![generated image]" in _early_result:
-                        response_text = _early_result + "\n\n" + response_text
+                        # Detect if the response is a refusal essay — if so, replace entirely
+                        if _is_refusal_response(response_text):
+                            sys.stderr.write(
+                                "[postprocess] Detected refusal response — replacing with image\n"
+                            )
+                            response_text = _early_result
+                        else:
+                            response_text = _early_result + "\n\n" + response_text
                         sys.stderr.write(
                             f"[postprocess] Early rescue succeeded: {_early_result}\n"
                         )
                 except Exception as exc:
                     sys.stderr.write(f"[postprocess] Early rescue failed: {exc}\n")
+
+    # Narrated image rescue: LLM wrote GenerateAIImage/GenerateImage as prose
+    # instead of using Action/Action Input. Extract prompt and execute directly.
+    # This runs BEFORE orphan rescue and hallucination rescue because we have
+    # the exact prompt the LLM intended, producing better results.
+    narrated_img = _narrated_image_re.search(response_text)
+    if narrated_img:
+        _ni_tool = narrated_img.group(1)
+        _ni_prompt = narrated_img.group(2)
+        sys.stderr.write(
+            f"[narrated-image-rescue] Detected narrated {_ni_tool}: {_ni_prompt[:120]}\n"
+        )
+        sys.stderr.flush()
+        try:
+            if "ai" in _ni_tool.lower():
+                _ni_result = _generate_ai_image_tool.run(_ni_prompt)
+            else:
+                _ni_result = _generate_image_tool.run(_ni_prompt)
+            if "![generated image]" in _ni_result:
+                # Strip the narrated tool call and fake image paths from response
+                _cleaned = _narrated_image_re.sub("", response_text)
+                _cleaned = re.sub(
+                    r"!\[[^\]]*\]\(/static/generated/[^)]+\)", "", _cleaned
+                ).strip()
+                response_text = _ni_result + ("\n\n" + _cleaned if _cleaned else "")
+                sys.stderr.write(
+                    f"[narrated-image-rescue] Success: {_ni_result}\n"
+                )
+            else:
+                sys.stderr.write(
+                    f"[narrated-image-rescue] Tool returned no image: {_ni_result[:200]}\n"
+                )
+        except Exception as exc:
+            sys.stderr.write(f"[narrated-image-rescue] Error: {exc}\n")
+            sys.stderr.flush()
+
+    # JSON-narrated image rescue: llama-style models output raw JSON like
+    # {"name": "generate_ai_image", "parameters": {"prompt": "..."}}
+    # Check both response_text and verbose_log (the JSON may be in an
+    # earlier task's Final Answer, not the final crew output).
+    if "![generated image]" not in response_text:
+        _json_narr = _narrated_json_image_re.search(response_text) or \
+                      _narrated_json_image_re.search(verbose_log)
+        if _json_narr:
+            _jn_prompt = _json_narr.group(1)
+            sys.stderr.write(
+                f"[json-narrated-rescue] Detected JSON tool call: {_jn_prompt[:120]}\n"
+            )
+            sys.stderr.flush()
+            # Build a proper image prompt from the raw text
+            _jn_prompt = _build_image_prompt(_jn_prompt)
+            sys.stderr.write(
+                f"[json-narrated-rescue] Built prompt: {_jn_prompt[:200]}\n"
+            )
+            try:
+                _jn_result = _generate_ai_image_tool.run(_jn_prompt)
+                if "![generated image]" in _jn_result:
+                    response_text = _jn_result
+                    sys.stderr.write(
+                        f"[json-narrated-rescue] Success: {_jn_result}\n"
+                    )
+                else:
+                    sys.stderr.write(
+                        f"[json-narrated-rescue] Tool returned no image: {_jn_result[:200]}\n"
+                    )
+            except Exception as exc:
+                sys.stderr.write(f"[json-narrated-rescue] Error: {exc}\n")
+                sys.stderr.flush()
 
     # Orphan rescue — run tool server-side if LLM described action but never executed
     orphan = _orphan_re.search(response_text)
@@ -542,6 +807,72 @@ def _postprocess(response_text: str, verbose_log: str) -> str:
                     response_text = _generate_image_tool.run(raw_input)
         except Exception as exc:
             sys.stderr.write(f"[orphan-rescue] Error: {exc}\n")
+            sys.stderr.flush()
+
+    # Narrated search rescue: the LLM wrote a search tool call as text instead
+    # of actually executing it. Detect and execute the search server-side.
+    narrated = _narrated_search_re.search(response_text)
+    if narrated:
+        tool_name = narrated.group(1)
+        search_query = narrated.group(2)
+        sys.stderr.write(
+            f"[narrated-search-rescue] Detected narrated {tool_name}: {search_query[:120]}\n"
+        )
+        sys.stderr.flush()
+        try:
+            from researcher.crew import serper_search_wrapped, ddg_search_wrapped
+
+            if "duckduckgo" in tool_name.lower():
+                search_result = ddg_search_wrapped.run(search_query)
+            else:
+                search_result = serper_search_wrapped.run(search_query)
+            # The search result is raw — feed it through a lightweight LLM call
+            # to produce a proper answer based on the user's original question
+            _user_req_match = re.search(
+                r"New request:\s*(.+)", verbose_log, re.IGNORECASE
+            )
+            user_question = (
+                _user_req_match.group(1).strip().strip('"')
+                if _user_req_match
+                else search_query
+            )
+            sys.stderr.write(
+                f"[narrated-search-rescue] Synthesising answer for: {user_question[:120]}\n"
+            )
+            import litellm
+
+            model = os.getenv("MODEL", "ollama/qwen3.5:9b")
+            litellm_model = (
+                "ollama_chat/" + model[len("ollama/") :]
+                if model.startswith("ollama/")
+                else model
+            )
+            synth_resp = litellm.completion(
+                model=litellm_model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Based on these search results, answer the question concisely "
+                            f"with proper markdown formatting.\n\n"
+                            f"Question: {user_question}\n\n"
+                            f"Search results:\n{search_result[:4000]}"
+                        ),
+                    }
+                ],
+                api_base="http://localhost:11434",
+                num_retries=0,
+                temperature=0.3,
+            )
+            synth_text = synth_resp.choices[0].message.content or ""
+            synth_text = re.sub(r"<think>[\s\S]*?</think>\s*", "", synth_text).strip()
+            if synth_text:
+                response_text = synth_text
+                sys.stderr.write("[narrated-search-rescue] Success — replaced response\n")
+            else:
+                sys.stderr.write("[narrated-search-rescue] Synthesis returned empty\n")
+        except Exception as exc:
+            sys.stderr.write(f"[narrated-search-rescue] Error: {exc}\n")
             sys.stderr.flush()
 
     # Pull images from verbose log if response has none
@@ -706,6 +1037,9 @@ def _extract_usage(result) -> dict:
 _IMG_CTX_RE = re.compile(r"!\[[^\]]*\]\(/static/generated/[^)]+\)")
 
 
+_MAX_ASSISTANT_CONTEXT_CHARS = 600
+
+
 def _clean_assistant_text(text: str) -> str:
     """Strip image markdown and thinking tags from assistant text.
 
@@ -713,11 +1047,17 @@ def _clean_assistant_text(text: str) -> str:
     image tag), collapse it to a short summary.  This prevents the LLM from
     seeing a detailed template and copying it with a made-up filename
     instead of actually calling the tool on subsequent requests.
+
+    Long assistant responses are truncated to prevent prompt bloat that
+    causes the LLM to narrate tool calls instead of executing them.
     """
     text = re.sub(r"<think>[\s\S]*?</think>\s*", "", text)
     if _IMG_CTX_RE.search(text):
         return "[Generated an image using GenerateAIImage tool — YOU MUST call the tool again for new images]"
-    return text.strip()
+    text = text.strip()
+    if len(text) > _MAX_ASSISTANT_CONTEXT_CHARS:
+        text = text[:_MAX_ASSISTANT_CONTEXT_CHARS] + " [... response truncated for context ...]"
+    return text
 
 
 def _heuristic_shorten(text: str, max_len: int = 400) -> str:

@@ -499,18 +499,38 @@ def _get_zimage_pipe():
                     token=hf_token,
                     local_files_only=offline,
                 )
-                # Leverage diffusers memory optimizations for low VRAM
+                # Leverage diffusers memory optimizations for low VRAM.
+                # Use sequential CPU offload (moves individual layers to GPU
+                # one at a time) for minimal peak VRAM — essential when sharing
+                # the GPU with Ollama.
+                try:
+                    pipe.enable_sequential_cpu_offload()
+                    _sys.stderr.write("[ZIMG] Sequential CPU offload enabled\n")
+                except Exception:
+                    # Fallback to model-level offload
+                    try:
+                        pipe.enable_model_cpu_offload()
+                        _sys.stderr.write("[ZIMG] Model CPU offload enabled (fallback)\n")
+                    except Exception:
+                        _sys.stderr.write("[ZIMG] CPU offload unavailable\n")
+
                 try:
                     pipe.enable_attention_slicing()
                     _sys.stderr.write("[ZIMG] Attention slicing enabled\n")
                 except Exception:
                     _sys.stderr.write("[ZIMG] Attention slicing unavailable\n")
 
+                # VAE tiling + slicing: decode latents in tiles to slash VRAM
                 try:
-                    pipe.enable_model_cpu_offload()
-                    _sys.stderr.write("[ZIMG] Model CPU offload enabled\n")
+                    pipe.enable_vae_tiling()
+                    _sys.stderr.write("[ZIMG] VAE tiling enabled\n")
                 except Exception:
-                    _sys.stderr.write("[ZIMG] Model CPU offload unavailable\n")
+                    _sys.stderr.write("[ZIMG] VAE tiling unavailable\n")
+                try:
+                    pipe.enable_vae_slicing()
+                    _sys.stderr.write("[ZIMG] VAE slicing enabled\n")
+                except Exception:
+                    _sys.stderr.write("[ZIMG] VAE slicing unavailable\n")
 
                 # Flash Attention - try pipeline-level, then transformer-level
                 try:
@@ -526,11 +546,6 @@ def _get_zimage_pipe():
                         _sys.stderr.write(
                             "[ZIMG] Flash Attention unavailable - using default\n"
                         )
-                # Do NOT call pipe.to('cuda') when CPU offload is enabled
-                if not hasattr(pipe, "is_loaded") or not getattr(
-                    pipe, "is_loaded", False
-                ):
-                    pass
                 _zimage_pipe = pipe
                 print("[ZIMG] Pipeline ready.", flush=True)
     return _zimage_pipe
@@ -595,29 +610,49 @@ def generate_ai_image(prompt: str) -> str:
         # Ollama is used only to unload/reload the LLM around inference to free VRAM.
         import requests as _requests
 
-        qwen_model = os.getenv("MODEL", "qwen3.5:9b").replace("ollama/", "")
-
-        # Unload the LLM to free VRAM for the image pipeline
+        # Query Ollama for ALL currently loaded models and unload each one.
+        # Using /api/ps avoids model-name mismatches when the user switched
+        # models via the UI (the ENV var may be stale).
+        _ollama_base = OLLAMA_IMAGE_URL.rsplit("/", 2)[0]  # http://host:port
+        _unloaded_models = []
         try:
-            _requests.post(
-                OLLAMA_IMAGE_URL,
-                json={"model": qwen_model, "keep_alive": 0, "prompt": ""},
-                timeout=30,
-            )
-            _sys.stderr.write(f"[ZIMG] Unloaded LLM: {qwen_model}\n")
+            _ps_resp = _requests.get(f"{_ollama_base}/api/ps", timeout=10)
+            _ps_resp.raise_for_status()
+            for _m in _ps_resp.json().get("models", []):
+                _mname = _m.get("name", "")
+                if _mname:
+                    _requests.post(
+                        OLLAMA_IMAGE_URL,
+                        json={"model": _mname, "keep_alive": 0, "prompt": ""},
+                        timeout=30,
+                    )
+                    _unloaded_models.append(_mname)
+            _sys.stderr.write(f"[ZIMG] Unloaded LLM(s): {_unloaded_models}\n")
         except Exception as e:
-            _sys.stderr.write(f"[ZIMG] Failed to unload LLM: {e}\n")
+            _sys.stderr.write(f"[ZIMG] Failed to unload LLM via /api/ps: {e}\n")
+            # Fallback: try the ENV model name
+            _fallback_model = os.getenv("MODEL", "qwen3.5:9b").replace("ollama/", "")
+            try:
+                _requests.post(
+                    OLLAMA_IMAGE_URL,
+                    json={"model": _fallback_model, "keep_alive": 0, "prompt": ""},
+                    timeout=30,
+                )
+                _unloaded_models.append(_fallback_model)
+                _sys.stderr.write(f"[ZIMG] Unloaded LLM (fallback): {_fallback_model}\n")
+            except Exception as e2:
+                _sys.stderr.write(f"[ZIMG] Fallback unload also failed: {e2}\n")
 
         # Wait for Ollama to actually release VRAM (async unload)
         import time as _time
         import torch
 
         _sys.stderr.write("[ZIMG] Waiting for VRAM to free...\n")
-        for _wait_i in range(15):
+        for _wait_i in range(20):
             torch.cuda.empty_cache()
             _free = torch.cuda.mem_get_info()[0] / (1024**3)
             _sys.stderr.write(f"[ZIMG]   free VRAM: {_free:.2f} GiB\n")
-            if _free > 12.0:  # enough for ZImage
+            if _free > 4.0:  # sequential CPU offload needs much less peak VRAM
                 break
             _time.sleep(1)
         else:
@@ -628,22 +663,45 @@ def generate_ai_image(prompt: str) -> str:
         pipe = None
         try:
             pipe = _get_zimage_pipe()
-            _sys.stderr.write(f"[ZIMG] Running inference: {prompt[:80]}\n")
-            _sys.stderr.flush()
 
             width = int(os.getenv("ZIMAGE_WIDTH", "512"))
             height = int(os.getenv("ZIMAGE_HEIGHT", "512"))
 
-            with torch.inference_mode():
-                result = pipe(prompt=prompt, width=width, height=height)
+            # Try configured resolution first; on OOM, retry at smaller sizes
+            _sizes = [(width, height)]
+            if (width, height) != (384, 384):
+                _sizes.append((384, 384))
+            if (width, height) != (256, 256):
+                _sizes.append((256, 256))
 
-            img = result.images[0]
+            for _w, _h in _sizes:
+                try:
+                    _sys.stderr.write(
+                        f"[ZIMG] Running inference ({_w}x{_h}): {prompt[:80]}\n"
+                    )
+                    _sys.stderr.flush()
 
-            fname = f"{_uuid.uuid4().hex[:12]}.png"
-            img.save(_GENERATED_DIR / fname)
-            img_tag = f"![generated image](/static/generated/{fname})"
-            _sys.stderr.write(f"[ZIMG] Done: {img_tag}\n")
-            _sys.stderr.flush()
+                    with torch.inference_mode():
+                        result = pipe(prompt=prompt, width=_w, height=_h)
+
+                    img = result.images[0]
+
+                    fname = f"{_uuid.uuid4().hex[:12]}.png"
+                    img.save(_GENERATED_DIR / fname)
+                    img_tag = f"![generated image](/static/generated/{fname})"
+                    _sys.stderr.write(f"[ZIMG] Done: {img_tag}\n")
+                    _sys.stderr.flush()
+                    break  # success
+                except RuntimeError as oom_exc:
+                    if "out of memory" in str(oom_exc).lower():
+                        _sys.stderr.write(
+                            f"[ZIMG] OOM at {_w}x{_h}, trying smaller...\n"
+                        )
+                        torch.cuda.empty_cache()
+                        gc.collect()
+                        last_exc = oom_exc
+                        continue
+                    raise  # non-OOM RuntimeError — don't retry
 
         except Exception as e:
             last_exc = e
@@ -669,16 +727,17 @@ def generate_ai_image(prompt: str) -> str:
             _free = torch.cuda.mem_get_info()[0] / (1024**3)
             _sys.stderr.write(f"[ZIMG] GPU freed — {_free:.2f} GiB available\n")
 
-            # Reload the LLM now that VRAM is free
-            try:
-                _requests.post(
-                    OLLAMA_IMAGE_URL,
-                    json={"model": qwen_model, "prompt": ""},
-                    timeout=30,
-                )
-                _sys.stderr.write(f"[ZIMG] Reloaded LLM: {qwen_model}\n")
-            except Exception as e:
-                _sys.stderr.write(f"[ZIMG] Failed to reload LLM: {e}\n")
+            # Reload the LLM(s) now that VRAM is free
+            for _mname in (_unloaded_models or [os.getenv("MODEL", "qwen3.5:9b").replace("ollama/", "")]):
+                try:
+                    _requests.post(
+                        OLLAMA_IMAGE_URL,
+                        json={"model": _mname, "prompt": ""},
+                        timeout=30,
+                    )
+                    _sys.stderr.write(f"[ZIMG] Reloaded LLM: {_mname}\n")
+                except Exception as e:
+                    _sys.stderr.write(f"[ZIMG] Failed to reload LLM {_mname}: {e}\n")
 
         if img_tag:
             return img_tag
@@ -772,7 +831,10 @@ class ResearchCrew:
                 "write 'Tool: direct generation'. NEVER write 'Tool: None'.\n"
                 "Do NOT include tables, matrices, or checklists — just the numbered steps.\n"
                 "This task can be answered from your own knowledge — you do NOT "
-                "need to search the internet unless the task explicitly requires it.\n\n"
+                "need to search the internet unless the task explicitly requires it.\n"
+                "If the task asks you to generate an image, your plan MUST include "
+                "a step that calls the image tool. Do NOT plan to explain limitations "
+                "or safety policies — just plan to execute the request.\n\n"
                 "End your response with EXACTLY this line:\n"
                 "READY: I am ready to execute the task.\n"
             ),
@@ -919,6 +981,13 @@ class ResearchCrew:
                 "If not answerable from your knowledge or attached files, determine "
                 "if it's a system question (use LocalSystemCheck) "
                 "or a world question (use InternetSearch).\n\n"
+                "CRITICAL TOOL EXECUTION RULE:\n"
+                "If you decide to use a tool, you MUST actually execute it using "
+                "the Action/Action Input format. NEVER write the tool name or "
+                "input as plain text in your Final Answer. If your Final Answer "
+                "contains text like 'InternetSearch — ...' or 'Input: {...}' "
+                "that means you FAILED to execute the tool. You must STOP and "
+                "actually call the tool first.\n\n"
                 "LENGTH AND THOROUGHNESS:\n"
                 "When the user specifies a page count, word count, or says "
                 '"thorough" / "detailed", you MUST produce the full requested '

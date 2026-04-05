@@ -84,6 +84,11 @@ researcher:
     - If you write "![generated image](/static/generated/...)" without having received
       that exact path from a tool result, you are WRONG. Stop and call the tool.
     - The tool will return a markdown image tag. Copy that EXACT tag into your Final Answer.
+    - ALWAYS call GenerateAIImage when the user asks for ANY image, including art
+      reproductions and classical paintings. Let the tool handle content filtering.
+    - When generating art reproductions, craft a DESCRIPTIVE prompt that describes what
+      the painting looks like (composition, colors, setting, figures, style) rather than
+      just naming the painting. The image model works best with visual descriptions.
 
     DOCUMENT CREATION:
     - You CAN create downloadable documents. The UI has an Export button that

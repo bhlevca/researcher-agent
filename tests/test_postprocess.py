@@ -1,10 +1,10 @@
-"""Tests for the post-processing logic in main.py."""
+"""Tests for the post-processing logic in postprocess.py."""
 
 import re
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 
-from researcher.main import (
+from researcher.postprocess import (
     _postprocess,
     _extract_usage,
     _narrated_search_re,
@@ -160,7 +160,7 @@ class TestNarratedJsonImageRegex:
 class TestJsonNarratedRescue:
     """Verify _postprocess detects JSON-narrated image calls and executes the tool."""
 
-    @patch("researcher.main._generate_ai_image_tool")
+    @patch("researcher.postprocess._generate_ai_image_tool")
     def test_json_narration_in_response(self, mock_tool):
         gen_dir = STATIC_DIR / "generated"
         gen_dir.mkdir(parents=True, exist_ok=True)
@@ -179,7 +179,7 @@ class TestJsonNarratedRescue:
         finally:
             real_img.unlink(missing_ok=True)
 
-    @patch("researcher.main._generate_ai_image_tool")
+    @patch("researcher.postprocess._generate_ai_image_tool")
     def test_json_narration_in_verbose_log(self, mock_tool):
         gen_dir = STATIC_DIR / "generated"
         gen_dir.mkdir(parents=True, exist_ok=True)
@@ -209,7 +209,7 @@ class TestJsonNarratedRescue:
 class TestNarratedImageRescue:
     """Verify _postprocess detects narrated image calls and executes the tool."""
 
-    @patch("researcher.main._generate_ai_image_tool")
+    @patch("researcher.postprocess._generate_ai_image_tool")
     def test_narrated_ai_image_is_rescued(self, mock_tool):
         # Create a real file on disk so image validation doesn't strip it
         gen_dir = STATIC_DIR / "generated"
@@ -232,7 +232,7 @@ class TestNarratedImageRescue:
         finally:
             real_img.unlink(missing_ok=True)
 
-    @patch("researcher.main._generate_ai_image_tool")
+    @patch("researcher.postprocess._generate_ai_image_tool")
     def test_narrated_ai_image_preserves_text(self, mock_tool):
         gen_dir = STATIC_DIR / "generated"
         gen_dir.mkdir(parents=True, exist_ok=True)
@@ -252,7 +252,7 @@ class TestNarratedImageRescue:
         finally:
             real_img.unlink(missing_ok=True)
 
-    @patch("researcher.main._generate_ai_image_tool")
+    @patch("researcher.postprocess._generate_ai_image_tool")
     def test_narrated_image_tool_error_graceful(self, mock_tool):
         mock_tool.run.side_effect = RuntimeError("GPU out of memory")
         response = '**GenerateAIImage** — AI image. Input: {"prompt": "test"}'
@@ -265,7 +265,7 @@ class TestNarratedSearchRescue:
     """Verify _postprocess detects narrated search calls and executes them."""
 
     @patch("litellm.completion")
-    @patch("researcher.crew.serper_search_wrapped")
+    @patch("researcher.postprocess.serper_search_wrapped")
     def test_narrated_search_is_rescued(self, mock_serper, mock_litellm_completion):
         mock_serper.run.return_value = '{"organic": [{"title": "Test", "snippet": "result"}]}'
         mock_resp = MagicMock()
@@ -283,7 +283,7 @@ class TestNarratedSearchRescue:
         assert "answer based on search" in result
 
     @patch("litellm.completion")
-    @patch("researcher.crew.ddg_search_wrapped")
+    @patch("researcher.postprocess.ddg_search_wrapped")
     def test_narrated_duckduckgo_is_rescued(self, mock_ddg, mock_litellm_completion):
         mock_ddg.run.return_value = "DuckDuckGo results here"
         mock_resp = MagicMock()
@@ -304,7 +304,7 @@ class TestNarratedSearchRescue:
 class TestEarlyRescueFollowUp:
     """Verify early rescue triggers for follow-up image corrections."""
 
-    @patch("researcher.main._generate_ai_image_tool")
+    @patch("researcher.postprocess._generate_ai_image_tool")
     def test_correction_triggers_early_rescue(self, mock_tool):
         """When earlier messages generated an image and user gives
         a correction like 'no this is wrong', early rescue should trigger."""
@@ -327,7 +327,7 @@ class TestEarlyRescueFollowUp:
         finally:
             real_img.unlink(missing_ok=True)
 
-    @patch("researcher.main._generate_ai_image_tool")
+    @patch("researcher.postprocess._generate_ai_image_tool")
     def test_reproduction_keyword_triggers_early_rescue(self, mock_tool):
         gen_dir = STATIC_DIR / "generated"
         gen_dir.mkdir(parents=True, exist_ok=True)
@@ -340,6 +340,204 @@ class TestEarlyRescueFollowUp:
             result = _postprocess(response, log)
             mock_tool.run.assert_called()
             assert "/static/generated/repro123.png" in result
+        finally:
+            real_img.unlink(missing_ok=True)
+
+    @patch("researcher.postprocess._generate_ai_image_tool")
+    def test_redraw_keyword_triggers_early_rescue(self, mock_tool):
+        """'redraw' should match the image request pattern."""
+        gen_dir = STATIC_DIR / "generated"
+        gen_dir.mkdir(parents=True, exist_ok=True)
+        real_img = gen_dir / "redraw1.png"
+        real_img.write_bytes(b"fake png data")
+        try:
+            mock_tool.run.return_value = "![generated image](/static/generated/redraw1.png)"
+            response = "![generated image](/static/generated/renoir_fake.png)"
+            log = (
+                "New request: Lise on the Bank of the Seine Pierre-Auguste Renoir "
+                "depicts a nude woman with a towel in her hand looking at the river "
+                "Seine. Please redraw the painting closer to the original."
+            )
+            result = _postprocess(response, log)
+            mock_tool.run.assert_called()
+            prompt_arg = mock_tool.run.call_args[0][0]
+            # The current message's visual details should be in the prompt
+            assert "woman" in prompt_arg.lower()
+            assert "towel" in prompt_arg.lower()
+        finally:
+            real_img.unlink(missing_ok=True)
+
+    @patch("researcher.postprocess._generate_ai_image_tool")
+    def test_painting_keyword_triggers_early_rescue(self, mock_tool):
+        """'painting' should match the image request pattern."""
+        gen_dir = STATIC_DIR / "generated"
+        gen_dir.mkdir(parents=True, exist_ok=True)
+        real_img = gen_dir / "paint1.png"
+        real_img.write_bytes(b"fake png data")
+        try:
+            mock_tool.run.return_value = "![generated image](/static/generated/paint1.png)"
+            response = "Some text."
+            log = "New request: generate a painting of a sunset over the ocean"
+            result = _postprocess(response, log)
+            mock_tool.run.assert_called()
+        finally:
+            real_img.unlink(missing_ok=True)
+
+    @patch("researcher.postprocess._generate_ai_image_tool")
+    def test_depict_keyword_triggers_early_rescue(self, mock_tool):
+        """'depict' should match the image request pattern."""
+        gen_dir = STATIC_DIR / "generated"
+        gen_dir.mkdir(parents=True, exist_ok=True)
+        real_img = gen_dir / "depict1.png"
+        real_img.write_bytes(b"fake png data")
+        try:
+            mock_tool.run.return_value = "![generated image](/static/generated/depict1.png)"
+            response = "Some text."
+            log = "New request: depict a medieval castle at dusk"
+            result = _postprocess(response, log)
+            mock_tool.run.assert_called()
+        finally:
+            real_img.unlink(missing_ok=True)
+
+    @patch("researcher.postprocess._generate_ai_image_tool")
+    def test_followup_combines_current_and_earlier(self, mock_tool):
+        """Follow-up correction should combine current visual details with earlier request."""
+        gen_dir = STATIC_DIR / "generated"
+        gen_dir.mkdir(parents=True, exist_ok=True)
+        real_img = gen_dir / "combo1.png"
+        real_img.write_bytes(b"fake png data")
+        try:
+            mock_tool.run.return_value = "![generated image](/static/generated/combo1.png)"
+            response = "I apologize for the mistake."
+            log = (
+                "User: draw a reproduction of Lise on the Bank of the Seine by Renoir\n"
+                "Assistant: [Generated an image using GenerateAIImage tool — "
+                "YOU MUST call the tool again for new images]\n"
+                "New request: the woman should be standing near the river with a towel"
+            )
+            result = _postprocess(response, log)
+            mock_tool.run.assert_called()
+            prompt_arg = mock_tool.run.call_args[0][0]
+            # Should contain BOTH current visual details AND earlier context
+            assert "towel" in prompt_arg.lower()
+            assert "renoir" in prompt_arg.lower()
+        finally:
+            real_img.unlink(missing_ok=True)
+
+    @patch("researcher.postprocess._generate_ai_image_tool")
+    def test_feedback_stripped_from_rescue_prompt(self, mock_tool):
+        """Real Renoir scenario: 'good first try but inaccurate...' feedback
+        must NOT appear in the image prompt sent to ZImage."""
+        gen_dir = STATIC_DIR / "generated"
+        gen_dir.mkdir(parents=True, exist_ok=True)
+        real_img = gen_dir / "feedback1.png"
+        real_img.write_bytes(b"fake png data")
+        try:
+            mock_tool.run.return_value = "![generated image](/static/generated/feedback1.png)"
+            response = "![generated image](/static/generated/hallucinated.png)"
+            log = (
+                "New request: good first try but it is innacurate compared to the "
+                "original, Now draw a better reproduction of Lise on the Bank of the "
+                "Seine by Pierre-Auguste Renoir. The pose is an artistic nude woman "
+                "standing by the river with a towel in her right hand."
+            )
+            result = _postprocess(response, log)
+            mock_tool.run.assert_called()
+            prompt_arg = mock_tool.run.call_args[0][0].lower()
+            # Feedback words must NOT be in the prompt
+            assert "good first try" not in prompt_arg
+            assert "innacurate" not in prompt_arg
+            assert "inaccurate" not in prompt_arg
+            # Visual content MUST be preserved
+            assert "woman" in prompt_arg
+            assert "towel" in prompt_arg
+            assert "renoir" in prompt_arg
+        finally:
+            real_img.unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# LLM visual prompt extraction tests
+# ---------------------------------------------------------------------------
+
+class TestExtractLlmVisualPrompt:
+    """Verify _extract_llm_visual_prompt finds composed prompts in LLM output."""
+
+    def test_extracts_from_code_block(self):
+        from researcher.postprocess import _extract_llm_visual_prompt
+        response = (
+            "## Visual Prompt Used\n\n"
+            "```\n"
+            "nude woman standing by the river Seine, holding a white towel in her "
+            "right hand, left hand covering pelvic area, head slightly turned toward "
+            "the river, Impressionist style, soft brushstrokes, in the style of "
+            "Pierre-Auguste Renoir, oil painting, museum quality\n"
+            "```\n"
+        )
+        result = _extract_llm_visual_prompt(response, "")
+        assert result is not None
+        assert "woman" in result.lower()
+        assert "renoir" in result.lower()
+        assert "river" in result.lower()
+
+    def test_extracts_from_prompt_heading(self):
+        from researcher.postprocess import _extract_llm_visual_prompt
+        response = (
+            "## Image Generation\n\n"
+            "![generated image](/static/generated/fake.png)\n\n"
+            "Prompt used:\n"
+            "nude woman standing by the river Seine, holding a towel, "
+            "Impressionist style, soft brushstrokes, dappled natural light, "
+            "in the style of Pierre-Auguste Renoir, oil painting, museum quality\n\n"
+            "## Notes\n"
+        )
+        result = _extract_llm_visual_prompt(response, "")
+        assert result is not None
+        assert "woman" in result.lower()
+        assert "renoir" in result.lower()
+
+    def test_returns_none_without_prompt(self):
+        from researcher.postprocess import _extract_llm_visual_prompt
+        response = "Here is some text about art history with no visual prompt."
+        assert _extract_llm_visual_prompt(response, "") is None
+
+
+class TestEarlyRescueUsesLlmPrompt:
+    """Verify early rescue prefers the LLM's composed prompt over re-deriving."""
+
+    @patch("researcher.postprocess._generate_ai_image_tool")
+    def test_uses_llm_code_block_prompt(self, mock_tool):
+        """When LLM composed a clean prompt in a code block, use THAT."""
+        gen_dir = STATIC_DIR / "generated"
+        gen_dir.mkdir(parents=True, exist_ok=True)
+        real_img = gen_dir / "llmprompt1.png"
+        real_img.write_bytes(b"fake png data")
+        try:
+            mock_tool.run.return_value = "![generated image](/static/generated/llmprompt1.png)"
+            llm_prompt = (
+                "nude woman standing by the river Seine, holding a white towel, "
+                "Impressionist style, soft brushstrokes, in the style of Renoir, "
+                "oil painting, museum quality, rich colors, highly detailed"
+            )
+            response = (
+                "## Image Generation\n\n"
+                "![generated image](/static/generated/renoir_fake.png)\n\n"
+                "## Visual Prompt Used\n\n"
+                f"```\n{llm_prompt}\n```\n\n"
+                "## Notes\nThis is a reproduction."
+            )
+            log = (
+                "New request: draw a better reproduction of Lise on the Bank "
+                "of the Seine by Pierre-Auguste Renoir. This was painted in 1870"
+            )
+            result = _postprocess(response, log)
+            mock_tool.run.assert_called()
+            prompt_arg = mock_tool.run.call_args[0][0]
+            # Should use the LLM's clean prompt, not the noisy user message
+            assert "nude woman standing by the river" in prompt_arg.lower()
+            # Should NOT contain user noise
+            assert "1870" not in prompt_arg
+            assert "copyright" not in prompt_arg.lower()
         finally:
             real_img.unlink(missing_ok=True)
 
@@ -472,7 +670,7 @@ class TestBuildImagePrompt:
 class TestFollowUpSubjectExtraction:
     """Verify that follow-up complaints mine the original request for the painting subject."""
 
-    @patch("researcher.main._generate_ai_image_tool")
+    @patch("researcher.postprocess._generate_ai_image_tool")
     def test_complaint_uses_earlier_request(self, mock_tool):
         """When user complains about refusal, the earlier request with image
         keywords should be used for the prompt, not the complaint text."""
@@ -513,7 +711,7 @@ class TestFollowUpSubjectExtraction:
         finally:
             real_img.unlink(missing_ok=True)
 
-    @patch("researcher.main._generate_ai_image_tool")
+    @patch("researcher.postprocess._generate_ai_image_tool")
     def test_direct_image_request_not_affected(self, mock_tool):
         """When user directly asks for an image (not a follow-up),
         the current request should be used."""
@@ -542,7 +740,7 @@ class TestFollowUpSubjectExtraction:
 class TestRefusalRescueEndToEnd:
     """Test the full flow: refusal detected + early rescue replaces the essay."""
 
-    @patch("researcher.main._generate_ai_image_tool")
+    @patch("researcher.postprocess._generate_ai_image_tool")
     def test_refusal_essay_replaced_by_image(self, mock_tool):
         """When agent writes a refusal essay and early rescue succeeds,
         the essay should be completely replaced by the image."""
@@ -567,7 +765,7 @@ class TestRefusalRescueEndToEnd:
         finally:
             real_img.unlink(missing_ok=True)
 
-    @patch("researcher.main._generate_ai_image_tool")
+    @patch("researcher.postprocess._generate_ai_image_tool")
     def test_non_refusal_response_preserved_with_image(self, mock_tool):
         """When agent writes a useful response but forgot to generate,
         the response should be preserved alongside the image."""

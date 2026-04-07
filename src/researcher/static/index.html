@@ -629,6 +629,11 @@
                 <div class="llm-param-hint">Random seed for reproducible outputs. 0 = random each time. Set a fixed number for consistent results.</div>
                 <input type="number" id="param-seed" min="0" max="999999999" step="1" value="0" oninput="updateParamDisplay('seed')">
             </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Planning Max Attempts</span><span class="llm-param-value" id="val-planning_max_attempts">3</span></div>
+                <div class="llm-param-hint">Maximum planning attempts before the agent proceeds. Higher = more retries if planning fails. 1-5 recommended.</div>
+                <input type="range" id="param-planning_max_attempts" min="1" max="5" step="1" value="3" oninput="updateParamDisplay('planning_max_attempts')">
+            </div>
         </div>
         <div class="llm-settings-actions">
             <button class="llm-btn-reset" onclick="resetLlmParams()">↺ Reset Defaults</button>
@@ -997,7 +1002,7 @@
         const LLM_PARAM_KEYS = [
             'temperature', 'top_k', 'top_p', 'min_p',
             'repeat_penalty', 'frequency_penalty', 'presence_penalty',
-            'num_predict', 'num_ctx', 'seed'
+            'num_predict', 'num_ctx', 'seed', 'planning_max_attempts'
         ];
 
         function updateParamDisplay(key) {
@@ -1020,7 +1025,7 @@
             for (const key of LLM_PARAM_KEYS) {
                 const el = document.getElementById('param-' + key);
                 if (el) {
-                    params[key] = ['top_k', 'num_predict', 'num_ctx', 'seed'].includes(key)
+                    params[key] = ['top_k', 'num_predict', 'num_ctx', 'seed', 'planning_max_attempts'].includes(key)
                         ? parseInt(el.value, 10)
                         : parseFloat(el.value);
                 }

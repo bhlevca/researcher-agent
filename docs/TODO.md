@@ -19,6 +19,36 @@
 - [ ] Add type hints where missing
 - [ ] Ensure tests pass after refactoring
 
+## v1.4.0 — High-Resolution Tiled Image Generation
+
+- [ ] Research tiled diffusion approaches:
+  - [ ] MultiDiffusion / Mixture of Diffusers (overlapping tiles with blended seams)
+  - [ ] diffusers `StableDiffusionPanoramaPipeline` or equivalent for ZImage
+  - [ ] img2img upscaling: generate 512x512, then tile-upscale to 4K with overlap
+- [ ] Implement tiled generation:
+  - [ ] Split target canvas (e.g. 2048x2048 or 3840x2160) into overlapping tiles
+  - [ ] Generate each tile sequentially (fits in VRAM)
+  - [ ] Blend overlapping regions (linear/gaussian feathering) to eliminate seams
+  - [ ] Stitch into final high-res image
+- [ ] Shared prompt conditioning: ensure all tiles use same latent noise schedule / global composition prompt
+- [ ] Add `ZIMAGE_HIRES` env var or API param to opt into 4K generation
+- [ ] Add tests for tile stitching and overlap blending
+
+## v1.5.0 — Music Composer
+
+- [ ] Research music generation models:
+  - [ ] Meta MusicGen (text-to-music, MIT license, runs on GPU)
+  - [ ] Riffusion (Stable Diffusion fine-tuned on spectrograms)
+  - [ ] AudioCraft / MusicGen-Melody (melody-conditioned generation)
+- [ ] Implement music generation backend:
+  - [ ] Lazy-load model with same VRAM management pattern as ZImage
+  - [ ] Ollama unload/reload around inference
+  - [ ] Generate audio from text prompt
+  - [ ] Save as WAV/MP3, serve from `/static/generated/`
+- [ ] Add CrewAI tool: `GenerateMusic` (prompt → audio file)
+- [ ] Add audio player support in frontend
+- [ ] Add music generation tests
+
 ## v2.0.0 — Language Tutor Agent
 
 - [ ] Design tutor agent architecture:

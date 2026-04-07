@@ -12,7 +12,8 @@ import pytest
 import httpx
 from fastapi.testclient import TestClient
 
-from researcher.main import app, DB_PATH
+from researcher.main import app
+from researcher.config import DB_PATH
 from researcher import auth as auth_module
 
 
@@ -25,6 +26,7 @@ def _patch_external_services(tmp_path, monkeypatch):
     """Patch CrewAI, Ollama, SD preload so tests don't need real services."""
     # Use temp DB for tests
     test_db = tmp_path / "test_sessions.db"
+    monkeypatch.setattr("researcher.config.DB_PATH", test_db)
     monkeypatch.setattr("researcher.main.DB_PATH", test_db)
     test_db.parent.mkdir(parents=True, exist_ok=True)
 
@@ -290,7 +292,7 @@ class TestTranscribe:
     def test_returns_text(self, client, auth_headers, monkeypatch):
         mock_model = MagicMock()
         mock_model.transcribe.return_value = {"text": "Hello from whisper"}
-        monkeypatch.setattr("researcher.main._get_whisper", lambda: mock_model)
+        monkeypatch.setattr("researcher.routes.speech._get_whisper", lambda: mock_model)
 
         # Create a minimal fake audio file
         files = {"file": ("test.webm", b"\x00" * 100, "audio/webm")}
@@ -301,7 +303,7 @@ class TestTranscribe:
     def test_language_param_forwarded(self, client, auth_headers, monkeypatch):
         mock_model = MagicMock()
         mock_model.transcribe.return_value = {"text": "Bonjour"}
-        monkeypatch.setattr("researcher.main._get_whisper", lambda: mock_model)
+        monkeypatch.setattr("researcher.routes.speech._get_whisper", lambda: mock_model)
 
         files = {"file": ("test.webm", b"\x00" * 100, "audio/webm")}
         resp = client.post("/transcribe?language=fr", files=files, headers=auth_headers)

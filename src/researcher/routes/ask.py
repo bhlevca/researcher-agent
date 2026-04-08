@@ -12,6 +12,7 @@ from researcher.config import AskRequest, _QueueWriter, _maybe_unload_ollama
 from researcher.postprocess import _extract_usage
 from researcher.auth import get_current_user
 from researcher.ingestion import get_file_context
+from researcher.image import load_image_params_from_json
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,15 @@ def register_ask_routes(app):
 
         topic = file_context + req.topic
         research_crew = request.app.state.research_crew
+
+        # Ensure image params from DB are applied before generation
+        db = request.app.state.db
+        cursor = await db.execute(
+            "SELECT image_params FROM users WHERE id = ?", (user["id"],)
+        )
+        row = await cursor.fetchone()
+        load_image_params_from_json(row[0] if row and row[0] else None)
+
         crew = research_crew.build_crew(topic)
         semaphore = request.app.state.crew_semaphore
 

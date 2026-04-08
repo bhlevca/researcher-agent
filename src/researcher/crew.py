@@ -283,11 +283,11 @@ _logger.info(
 )
 
 # --- Save: truncate before LLM extraction ---
-from crewai.agents.agent_builder.base_agent_executor_mixin import (  # noqa: E402
-    CrewAgentExecutorMixin,
+from crewai.agents.agent_builder.base_agent_executor import (  # noqa: E402
+    BaseAgentExecutor as _BaseAgentExecutor,
 )
 
-_orig_save_to_memory = CrewAgentExecutorMixin._save_to_memory
+_orig_save_to_memory = _BaseAgentExecutor._save_to_memory
 
 
 def _patched_save_to_memory(self, output) -> None:
@@ -316,7 +316,7 @@ def _patched_save_to_memory(self, output) -> None:
         self.agent._logger.log("error", f"Failed to save to memory: {e}")
 
 
-CrewAgentExecutorMixin._save_to_memory = _patched_save_to_memory
+_BaseAgentExecutor._save_to_memory = _patched_save_to_memory
 _logger.info(
     "Patched _save_to_memory: content capped at %d chars", _MAX_SAVE_CONTENT_CHARS
 )

@@ -151,3 +151,57 @@ def register_model_routes(app):
         await db.commit()
         logger.info("LLM params reset to defaults")
         return {"params": updated}
+
+    # --- Image generation parameters ---
+
+    from researcher.image import (
+        get_image_params,
+        update_image_params,
+        DEFAULT_IMAGE_PARAMS,
+        load_image_params_from_json,
+    )
+
+    @app.get("/image-params")
+    async def get_img_params(request: Request):
+        """Return current image generation parameters (loads from DB if available)."""
+        user = await get_current_user(request)
+        db = request.app.state.db
+        cursor = await db.execute(
+            "SELECT image_params FROM users WHERE id = ?", (user["id"],)
+        )
+        row = await cursor.fetchone()
+        saved = row[0] if row and row[0] else None
+        load_image_params_from_json(saved)
+        return {"params": get_image_params()}
+
+    @app.post("/image-params")
+    async def set_img_params(request: Request):
+        """Update image generation parameters. Persists to DB."""
+        user = await get_current_user(request)
+        body = await request.json()
+        params = body.get("params", {})
+        if not isinstance(params, dict):
+            raise HTTPException(status_code=400, detail="params must be a dict")
+        updated = update_image_params(params)
+        db = request.app.state.db
+        await db.execute(
+            "UPDATE users SET image_params = ? WHERE id = ?",
+            (json.dumps(updated), user["id"]),
+        )
+        await db.commit()
+        logger.info("Image params updated and saved: %s", params)
+        return {"params": updated}
+
+    @app.post("/image-params/reset")
+    async def reset_img_params(request: Request):
+        """Reset image parameters to defaults. Clears DB storage."""
+        user = await get_current_user(request)
+        updated = update_image_params(dict(DEFAULT_IMAGE_PARAMS))
+        db = request.app.state.db
+        await db.execute(
+            "UPDATE users SET image_params = '' WHERE id = ?",
+            (user["id"],),
+        )
+        await db.commit()
+        logger.info("Image params reset to defaults")
+        return {"params": updated}

@@ -1,40 +1,51 @@
 # TODO
 
-## v1.1.0 — Code Refactoring
+## v1.1.0 — Code Refactoring (DONE)
 
-- [ ] Split `crew.py` into smaller modules:
-  - [ ] `llm.py` — LLM construction (`_make_llm`, model config)
-  - [ ] `image.py` — Image generation backends (SD, ZImage, VRAM management)
-  - [ ] `tools.py` — Tool definitions (search wrappers, image tools, system tools)
-  - [ ] `crew.py` — Crew/Agent/Task orchestration only
-- [ ] Split `main.py` into smaller modules:
-  - [ ] `routes/chat.py` — `/chat`, `/chat/continue` endpoints
-  - [ ] `routes/ask.py` — `/ask` endpoint
-  - [ ] `routes/auth.py` — Authentication endpoints
-  - [ ] `routes/files.py` — File upload/management endpoints
-  - [ ] `postprocess.py` — Response postprocessing, hallucination rescue
-  - [ ] `context.py` — Conversation context builder (3-tier)
-  - [ ] `main.py` — App factory, startup, middleware only
-- [ ] Extract shared constants/config into `config.py`
-- [ ] Add type hints where missing
-- [ ] Ensure tests pass after refactoring
+- [x] Split `crew.py` into smaller modules:
+  - [x] `image.py` — Image generation backends (SD, ZImage, VRAM management)
+  - [x] `tools.py` — Tool definitions (search wrappers, image tools, system tools)
+  - [x] `postprocess.py` — Response postprocessing, hallucination rescue, context builder
+  - [x] `crew.py` — Crew/Agent/Task orchestration only
 
-## v1.4.0 — High-Resolution Tiled Image Generation
+## v1.3.1 — Image Generation Fixes (DONE)
+
+- [x] Fix monkey-patch target: `OpenAICompatibleCompletion` (not `crewai.llm.LLM`)
+- [x] Fix ZImage scheduler crash: 4 steps, guidance 0.0 for FLUX-distilled turbo model
+- [x] Fix post-tool LLM loop: `result_as_answer = True` on `generate_ai_image`
+- [x] Fix planning LLM: dedicated `_make_planning_llm()` with `_allow_fc = True` bypass
+
+## v1.4.0 — main.py Refactoring (DONE)
+
+- [x] Split `main.py` into route modules:
+  - [x] `routes/chat.py` — `/chat`, `/chat/cancel`, `/chat/continue` (SSE streaming)
+  - [x] `routes/ask.py` — `/ask` programmatic API
+  - [x] `routes/sessions.py` — Sessions CRUD endpoints
+  - [x] `routes/models.py` — `/info`, `/models`, `/model`, `/memory-depth`, `/llm-params`
+  - [x] `routes/speech.py` — `/transcribe` Whisper endpoint
+- [x] Extract `config.py` — shared constants, Pydantic models, utilities
+- [x] Slim `main.py` to app factory + lifespan + route registration (1030 → 160 lines)
+- [x] Auth (`auth.py`), files (`ingestion.py`), TTS (`tts.py`) already extracted
+- [x] All 200 tests pass
+
+## v1.5.0 — High-Resolution Tiled Image Generation
 
 - [ ] Research tiled diffusion approaches:
   - [ ] MultiDiffusion / Mixture of Diffusers (overlapping tiles with blended seams)
-  - [ ] diffusers `StableDiffusionPanoramaPipeline` or equivalent for ZImage
-  - [ ] img2img upscaling: generate 512x512, then tile-upscale to 4K with overlap
-- [ ] Implement tiled generation:
-  - [ ] Split target canvas (e.g. 2048x2048 or 3840x2160) into overlapping tiles
-  - [ ] Generate each tile sequentially (fits in VRAM)
-  - [ ] Blend overlapping regions (linear/gaussian feathering) to eliminate seams
-  - [ ] Stitch into final high-res image
-- [ ] Shared prompt conditioning: ensure all tiles use same latent noise schedule / global composition prompt
-- [ ] Add `ZIMAGE_HIRES` env var or API param to opt into 4K generation
+  - [ ] Check if diffusers `StableDiffusionPanoramaPipeline` is compatible with FLUX/Z-Image
+  - [ ] img2img upscaling: generate 1024x1024, then tile-upscale to 4K with overlap
+- [ ] Implement tiled generation in `image.py`:
+  - [ ] Add `target_width` / `target_height` params to `generate_ai_image`
+  - [ ] Calculate grid layout: tile count, overlap regions (~128px per edge)
+  - [ ] Generate each tile sequentially (fits in 5070 Ti VRAM)
+  - [ ] Blend overlapping regions (cosine/gaussian alpha feathering) to eliminate seams
+  - [ ] Stitch into final high-res image (Pillow compositing)
+- [ ] Coherence strategy: shared seed + positional sub-prompts, or MultiDiffusion if FLUX-compatible
+- [ ] UI: aspect ratio picker or width/height sliders, preset sizes (portrait, landscape, panorama)
+- [ ] Add `ZIMAGE_HIRES` env var or API param to opt into large generation
 - [ ] Add tests for tile stitching and overlap blending
 
-## v1.5.0 — Music Composer
+## v1.6.0 — Music Composer
 
 - [ ] Research music generation models:
   - [ ] Meta MusicGen (text-to-music, MIT license, runs on GPU)

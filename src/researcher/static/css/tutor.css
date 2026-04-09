@@ -1,0 +1,337 @@
+/* ── Language Tutor — additional styles ── */
+
+/* ── Tab navigation ── */
+.tutor-tabs {
+    display: flex; gap: 0; background: #16213e;
+    border-bottom: 1px solid #0f3460; padding: 0 1rem;
+}
+.tutor-tab {
+    background: none; border: none; border-bottom: 2px solid transparent;
+    color: #64748b; padding: 0.6rem 1rem; font-size: 0.82rem;
+    cursor: pointer; transition: all 0.15s; font-family: inherit;
+}
+.tutor-tab:hover { color: #e0e0e0; }
+.tutor-tab.active { color: #e94560; border-bottom-color: #e94560; }
+
+/* ── Tab panels ── */
+.tutor-panel { display: none; flex: 1; overflow: hidden; flex-direction: column; }
+.tutor-panel.active { display: flex; }
+
+/* ── Chat panel ── */
+#tutor-chat {
+    flex: 1; overflow-y: auto; padding: 1rem 1.5rem;
+    display: flex; flex-direction: column; gap: 0.75rem;
+}
+
+#tutor-input-area {
+    padding: 0.75rem 1.5rem; background: #16213e;
+    border-top: 1px solid #0f3460; display: flex; gap: 0.75rem;
+}
+#tutor-input-area textarea {
+    flex: 1; background: #1a1a2e; border: 1px solid #0f3460; color: #e0e0e0;
+    padding: 0.6rem 0.85rem; border-radius: 0.6rem; font-family: inherit;
+    font-size: 0.9rem; resize: none; outline: none;
+    min-height: 2.5rem; max-height: 8rem;
+}
+#tutor-input-area textarea:focus { border-color: #e94560; }
+#tutor-input-area button {
+    background: #e94560; color: white; border: none; padding: 0 1rem;
+    border-radius: 0.6rem; font-size: 0.9rem; cursor: pointer;
+}
+#tutor-input-area button:hover { background: #c73652; }
+#tutor-input-area button:disabled { background: #4a4a5a; cursor: not-allowed; }
+
+/* ── Session config bar ── */
+.tutor-config {
+    display: flex; gap: 0.5rem; padding: 0.5rem 1rem;
+    background: #0d1b2e; align-items: center; flex-wrap: wrap;
+}
+.tutor-config select, .tutor-config input {
+    background: #1a1a2e; border: 1px solid #0f3460; color: #e0e0e0;
+    padding: 0.3rem 0.5rem; border-radius: 0.4rem; font-size: 0.78rem;
+    font-family: inherit; outline: none;
+}
+.tutor-config select:focus, .tutor-config input:focus { border-color: #e94560; }
+.tutor-config label {
+    font-size: 0.72rem; color: #64748b; display: flex;
+    align-items: center; gap: 0.3rem;
+}
+.tutor-config button {
+    background: #0f3460; color: #94a3b8; border: 1px solid #1a3a6e;
+    padding: 0.3rem 0.6rem; border-radius: 0.4rem; font-size: 0.72rem;
+    cursor: pointer;
+}
+.tutor-config button:hover { background: #1a3a6e; color: #e0e0e0; }
+.tutor-config .active-session {
+    font-size: 0.72rem; color: #60a5fa; margin-left: auto;
+}
+
+/* ── Lessons panel ── */
+.lessons-content { flex: 1; overflow-y: auto; padding: 1rem 1.5rem; }
+.lesson-form {
+    display: flex; gap: 0.5rem; padding: 0.75rem 1.5rem;
+    background: #0d1b2e; border-bottom: 1px solid #0f3460; flex-wrap: wrap;
+    align-items: center;
+}
+.lesson-form input, .lesson-form select {
+    background: #1a1a2e; border: 1px solid #0f3460; color: #e0e0e0;
+    padding: 0.35rem 0.6rem; border-radius: 0.4rem; font-size: 0.8rem;
+    font-family: inherit; outline: none;
+}
+.lesson-form input { flex: 1; min-width: 150px; }
+.lesson-form input:focus, .lesson-form select:focus { border-color: #e94560; }
+.lesson-form button {
+    background: #e94560; color: white; border: none;
+    padding: 0.35rem 0.8rem; border-radius: 0.4rem; font-size: 0.8rem;
+    cursor: pointer;
+}
+.lesson-form button:hover { background: #c73652; }
+
+.lesson-card {
+    background: #16213e; border: 1px solid #0f3460; border-radius: 0.5rem;
+    padding: 0.75rem 1rem; margin-bottom: 0.5rem; cursor: pointer;
+    transition: border-color 0.15s;
+}
+.lesson-card:hover { border-color: #e94560; }
+.lesson-card-title { font-size: 0.88rem; color: #e0e0e0; font-weight: 500; }
+.lesson-card-meta { font-size: 0.7rem; color: #64748b; margin-top: 0.2rem; }
+
+.lesson-viewer {
+    background: #16213e; border: 1px solid #0f3460; border-radius: 0.5rem;
+    padding: 1rem 1.25rem; line-height: 1.6; font-size: 0.9rem;
+}
+.lesson-viewer h1, .lesson-viewer h2, .lesson-viewer h3 { color: #e94560; margin: 0.8em 0 0.4em; }
+.lesson-viewer p { margin: 0.5em 0; }
+.lesson-viewer code { background: #0d1b2e; padding: 0.15em 0.35em; border-radius: 0.25em; font-size: 0.88em; }
+.lesson-viewer pre { background: #0d1b2e; padding: 0.75rem; border-radius: 0.5rem; overflow-x: auto; margin: 0.5em 0; }
+.lesson-viewer table { border-collapse: collapse; width: 100%; margin: 0.75em 0; }
+.lesson-viewer th, .lesson-viewer td { border: 1px solid #0f3460; padding: 0.4rem 0.6rem; text-align: left; font-size: 0.82rem; }
+.lesson-viewer th { background: #0d1b2e; color: #60a5fa; }
+
+/* ── Vocabulary panel ── */
+.vocab-content { flex: 1; overflow-y: auto; padding: 1rem 1.5rem; }
+.vocab-toolbar {
+    display: flex; gap: 0.5rem; padding: 0.75rem 1.5rem;
+    background: #0d1b2e; border-bottom: 1px solid #0f3460; align-items: center;
+}
+.vocab-toolbar input {
+    flex: 1; background: #1a1a2e; border: 1px solid #0f3460; color: #e0e0e0;
+    padding: 0.35rem 0.6rem; border-radius: 0.4rem; font-size: 0.8rem;
+    font-family: inherit; outline: none;
+}
+.vocab-toolbar input:focus { border-color: #e94560; }
+.vocab-toolbar .vocab-count { font-size: 0.72rem; color: #64748b; }
+
+.vocab-table { width: 100%; border-collapse: collapse; }
+.vocab-table th, .vocab-table td {
+    border: 1px solid #0f3460; padding: 0.4rem 0.6rem;
+    text-align: left; font-size: 0.82rem;
+}
+.vocab-table th { background: #0d1b2e; color: #60a5fa; position: sticky; top: 0; }
+.vocab-table tr:hover { background: #1e2240; }
+.vocab-table .mastery {
+    display: inline-block; width: 2rem; text-align: center;
+    padding: 0.15rem 0.3rem; border-radius: 0.25rem;
+    font-size: 0.72rem; font-weight: 600;
+}
+.mastery-0 { background: #3b1020; color: #fca5a5; }
+.mastery-1 { background: #4a2020; color: #f9a8d4; }
+.mastery-2 { background: #3a3010; color: #fde68a; }
+.mastery-3 { background: #1a3a1a; color: #86efac; }
+.mastery-4 { background: #0a3a2a; color: #6ee7b7; }
+.mastery-5 { background: #064e3b; color: #34d399; }
+
+/* ── Quiz panel ── */
+.quiz-content { flex: 1; overflow-y: auto; padding: 1rem 1.5rem; }
+.quiz-form {
+    display: flex; gap: 0.5rem; padding: 0.75rem 1.5rem;
+    background: #0d1b2e; border-bottom: 1px solid #0f3460; flex-wrap: wrap;
+    align-items: center;
+}
+.quiz-form select, .quiz-form input {
+    background: #1a1a2e; border: 1px solid #0f3460; color: #e0e0e0;
+    padding: 0.35rem 0.6rem; border-radius: 0.4rem; font-size: 0.8rem;
+    font-family: inherit; outline: none;
+}
+.quiz-form select:focus, .quiz-form input:focus { border-color: #e94560; }
+.quiz-form button {
+    background: #e94560; color: white; border: none;
+    padding: 0.35rem 0.8rem; border-radius: 0.4rem; font-size: 0.8rem;
+    cursor: pointer;
+}
+.quiz-form button:hover { background: #c73652; }
+
+.quiz-question {
+    background: #16213e; border: 1px solid #0f3460; border-radius: 0.5rem;
+    padding: 0.85rem 1rem; margin-bottom: 0.75rem;
+}
+.quiz-question-text { font-size: 0.9rem; color: #e0e0e0; margin-bottom: 0.5rem; }
+.quiz-question-num { font-size: 0.72rem; color: #e94560; font-weight: 600; margin-bottom: 0.3rem; }
+.quiz-option {
+    display: block; padding: 0.4rem 0.6rem; margin: 0.25rem 0;
+    background: #1a1a2e; border: 1px solid #0f3460; border-radius: 0.35rem;
+    color: #e0e0e0; font-size: 0.82rem; cursor: pointer;
+    transition: all 0.15s;
+}
+.quiz-option:hover { border-color: #e94560; }
+.quiz-option.selected { border-color: #e94560; background: #2a1a3e; }
+.quiz-option.correct { border-color: #34d399; background: #064e3b; }
+.quiz-option.incorrect { border-color: #ef4444; background: #3b1020; }
+.quiz-option input[type="radio"] { display: none; }
+.quiz-option input[type="text"] {
+    background: #0d1b2e; border: 1px solid #0f3460; color: #e0e0e0;
+    padding: 0.3rem 0.5rem; border-radius: 0.3rem; width: 100%;
+    font-size: 0.82rem; outline: none; margin-top: 0.3rem;
+}
+.quiz-submit-bar {
+    display: flex; gap: 0.5rem; padding: 0.75rem 1.5rem;
+    background: #0d1b2e; border-top: 1px solid #0f3460;
+}
+.quiz-submit-bar button {
+    background: #e94560; color: white; border: none;
+    padding: 0.45rem 1rem; border-radius: 0.4rem; font-size: 0.85rem;
+    cursor: pointer;
+}
+.quiz-submit-bar button:hover { background: #c73652; }
+.quiz-results {
+    background: #16213e; border: 1px solid #0f3460; border-radius: 0.5rem;
+    padding: 1rem; margin-top: 0.75rem;
+}
+.quiz-score { font-size: 1.2rem; color: #e94560; font-weight: 700; text-align: center; margin-bottom: 0.5rem; }
+
+/* ── Stats / Appraisal panel ── */
+.stats-content { flex: 1; overflow-y: auto; padding: 1rem 1.5rem; }
+.stats-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 0.75rem; margin-bottom: 1rem;
+}
+.stat-card {
+    background: #16213e; border: 1px solid #0f3460; border-radius: 0.5rem;
+    padding: 0.75rem; text-align: center;
+}
+.stat-value { font-size: 1.4rem; font-weight: 700; color: #e94560; }
+.stat-label { font-size: 0.72rem; color: #64748b; margin-top: 0.2rem; }
+.appraisal-viewer {
+    background: #16213e; border: 1px solid #0f3460; border-radius: 0.5rem;
+    padding: 1rem 1.25rem; line-height: 1.6; font-size: 0.9rem;
+    margin-top: 0.75rem;
+}
+
+/* ── Tutor sessions panel ── */
+.tutor-sessions-overlay {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,0.4); z-index: 49; display: none;
+}
+.tutor-sessions-overlay.open { display: block; }
+.tutor-sessions-panel {
+    position: fixed; top: 0; right: -340px; width: 340px; height: 100%;
+    background: #16213e; border-left: 1px solid #0f3460; z-index: 50;
+    display: flex; flex-direction: column; transition: right 0.25s ease;
+}
+.tutor-sessions-panel.open { right: 0; }
+
+/* ── SSE streaming ── */
+.tutor-streaming {
+    background: #0d1b2e; border: 1px solid #1a2a4e; border-radius: 0.5rem;
+    padding: 0.65rem 0.85rem; font-size: 0.8rem; line-height: 1.5;
+    color: #94a3b8; max-height: 300px; overflow-y: auto;
+    white-space: pre-wrap; word-wrap: break-word;
+}
+.tutor-streaming-label {
+    font-size: 0.75rem; color: #e94560; font-weight: 600;
+    margin-bottom: 0.3rem; display: flex; align-items: center; gap: 0.4rem;
+}
+.tutor-streaming-label .pulse {
+    width: 8px; height: 8px; border-radius: 50%; background: #e94560;
+    animation: pulse 1s infinite;
+}
+
+/* ── Past quiz list ── */
+.quiz-card {
+    background: #16213e; border: 1px solid #0f3460; border-radius: 0.5rem;
+    padding: 0.65rem 0.85rem; margin-bottom: 0.5rem; cursor: pointer;
+    transition: border-color 0.15s;
+}
+.quiz-card:hover { border-color: #e94560; }
+.quiz-card-meta { font-size: 0.7rem; color: #64748b; margin-top: 0.15rem; }
+
+/* ── Translate panel ── */
+.translate-container { display: flex; flex-direction: column; gap: 1rem; }
+.translate-pane { background: #16213e; border: 1px solid #0f3460; border-radius: 0.75rem; padding: 1rem; }
+.translate-header {
+    display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem;
+}
+.translate-header select {
+    flex: 1; background: #1a1a2e; color: #e2e8f0; border: 1px solid #0f3460;
+    border-radius: 0.4rem; padding: 0.35rem 0.5rem; font-size: 0.85rem;
+}
+.swap-btn {
+    background: none; border: 1px solid #0f3460; color: #e94560;
+    border-radius: 50%; width: 2rem; height: 2rem; font-size: 1.1rem;
+    cursor: pointer; transition: background 0.15s, transform 0.15s;
+    display: flex; align-items: center; justify-content: center;
+}
+.swap-btn:hover { background: #0f3460; transform: rotate(180deg); }
+.translate-boxes {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;
+}
+@media (max-width: 680px) {
+    .translate-boxes { grid-template-columns: 1fr; }
+}
+.translate-box-wrap {
+    display: flex; flex-direction: column; min-height: 0;
+}
+.translate-box-label {
+    font-size: 0.72rem; color: #64748b; text-transform: uppercase;
+    letter-spacing: 0.05em; margin-bottom: 0.25rem;
+}
+.translate-box-wrap textarea {
+    background: #1a1a2e; color: #e2e8f0; border: 1px solid #0f3460;
+    border-radius: 0.5rem; padding: 0.65rem; font-size: 0.88rem;
+    resize: vertical; min-height: 7rem; font-family: inherit;
+}
+.translate-box-wrap textarea:focus { outline: none; border-color: #e94560; }
+.translate-output-text {
+    background: #1a1a2e; color: #e2e8f0; border: 1px solid #0f3460;
+    border-radius: 0.5rem; padding: 0.65rem; font-size: 0.88rem;
+    min-height: 7rem; white-space: pre-wrap; word-break: break-word;
+}
+.translate-box-actions {
+    display: flex; gap: 0.35rem; margin-top: 0.35rem;
+}
+.translate-box-actions button {
+    background: #0f3460; color: #e2e8f0; border: none; border-radius: 0.35rem;
+    padding: 0.25rem 0.55rem; font-size: 0.75rem; cursor: pointer;
+    transition: background 0.15s;
+}
+.translate-box-actions button:hover { background: #e94560; }
+.translate-box-actions button.recording {
+    background: #e94560; animation: pulse-mic 1s infinite;
+}
+@keyframes pulse-mic {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+.translate-actions {
+    margin-top: 0.75rem; text-align: center;
+}
+#translate-btn {
+    background: #e94560; color: white; border: none; border-radius: 0.5rem;
+    padding: 0.5rem 2rem; font-size: 0.9rem; cursor: pointer;
+    transition: background 0.15s;
+}
+#translate-btn:hover { background: #d63851; }
+#translate-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* translate history */
+.translate-history { max-height: 18rem; overflow-y: auto; }
+.translate-history-item {
+    background: #16213e; border: 1px solid #0f3460; border-radius: 0.45rem;
+    padding: 0.5rem 0.7rem; margin-bottom: 0.35rem; cursor: pointer;
+    transition: border-color 0.15s; font-size: 0.8rem;
+}
+.translate-history-item:hover { border-color: #e94560; }
+.th-langs { color: #64748b; font-size: 0.72rem; display: flex; justify-content: space-between; }
+.th-time { color: #475569; }
+.th-source { color: #94a3b8; margin-top: 0.15rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.th-target { color: #e94560; margin-top: 0.1rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

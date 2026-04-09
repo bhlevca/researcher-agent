@@ -1,10 +1,9 @@
-"""Tests for memory configuration — ensuring no OPENAI_API_KEY dependency.
+"""Tests for memory and planning configuration — ensuring no OPENAI_API_KEY dependency.
 
 These tests verify that:
 1. The Agent does NOT have memory=True (which creates Memory() with default gpt-4o-mini)
-2. The Crew's Memory instance uses the Ollama LLM, not the OpenAI default
-3. The Crew's Memory has a proper embedder config (not None/OpenAI default)
-4. PlanningConfig is properly bounded (max_attempts is not None/unlimited)
+2. The Crew has memory=False (intentional — avoids OpenAI dependency and context bloat)
+3. PlanningConfig is properly bounded (max_attempts is not None/unlimited)
 """
 
 import os
@@ -25,7 +24,7 @@ def crew_instance():
     Patches the Ollama base_url to a dummy so the LLM
     object can be created without a running Ollama server.
     """
-    from researcher.crew_old3 import ResearchCrew
+    from researcher.crew import ResearchCrew
 
     rc = ResearchCrew(model="ollama/qwen3.5:9b")
     return rc
@@ -58,68 +57,25 @@ class TestAgentMemoryNotBoolean:
             )
 
 
-class TestCrewMemoryConfig:
-    """Crew's Memory must be configured with Ollama LLM and embedder."""
+class TestCrewMemoryDisabled:
+    """Crew memory is intentionally False to avoid OpenAI dependency and context bloat.
 
-    def test_crew_memory_is_memory_instance(self, crew_instance):
-        from crewai.memory.unified_memory import Memory
+    Memory recall/save is handled via monkey-patches in crew.py instead.
+    """
 
+    def test_crew_memory_is_false(self, crew_instance):
         crew = crew_instance.crew()
-        # crew.memory is the public field; _memory is the resolved private attr
-        mem = getattr(crew, "_memory", crew.memory)
-        assert isinstance(
-            mem, Memory
-        ), f"Crew memory should be a Memory instance, got {type(mem)}"
+        assert crew.memory is False, (
+            "Crew memory should be False (intentional design). "
+            "Memory operations are handled via monkey-patched recall/save."
+        )
 
-    def test_crew_memory_llm_is_not_openai_default(self, crew_instance):
-        """The Memory LLM must not be the default 'gpt-4o-mini'."""
-        from crewai.memory.unified_memory import Memory
-
+    def test_crew_does_not_create_memory_instance(self, crew_instance):
         crew = crew_instance.crew()
-        mem = getattr(crew, "_memory", crew.memory)
-        if isinstance(mem, Memory):
-            # LLM field: either a string (model name) or an LLM instance
-            llm_val = mem.llm
-            if isinstance(llm_val, str):
-                assert (
-                    "gpt" not in llm_val.lower()
-                ), f"Crew Memory LLM defaults to OpenAI: {llm_val}"
-            else:
-                # It's an LLM object — check its model attribute
-                model_name = getattr(llm_val, "model", "")
-                assert (
-                    "gpt" not in model_name.lower()
-                ), f"Crew Memory LLM uses OpenAI model: {model_name}"
-
-    def test_crew_memory_has_embedder(self, crew_instance):
-        """Memory must have an embedder config (not None which defaults to OpenAI)."""
-        from crewai.memory.unified_memory import Memory
-
-        crew = crew_instance.crew()
-        mem = getattr(crew, "_memory", crew.memory)
-        if isinstance(mem, Memory):
-            assert mem.embedder is not None, (
-                "Crew Memory embedder is None — defaults to OpenAI embeddings. "
-                "Pass embedder config for Ollama."
-            )
-
-    def test_crew_memory_embedder_is_ollama(self, crew_instance):
-        """The embedder should use the 'ollama' provider."""
-        from crewai.memory.unified_memory import Memory
-
-        crew = crew_instance.crew()
-        mem = getattr(crew, "_memory", crew.memory)
-        if isinstance(mem, Memory) and isinstance(mem.embedder, dict):
-            assert (
-                mem.embedder.get("provider") == "ollama"
-            ), f"Embedder provider should be 'ollama', got: {mem.embedder.get('provider')}"
-
-    def test_crew_embedder_config_present(self, crew_instance):
-        """Crew-level embedder config must also be set for knowledge/tools."""
-        crew = crew_instance.crew()
-        assert crew.embedder is not None, "Crew embedder config is None"
-        if isinstance(crew.embedder, dict):
-            assert crew.embedder.get("provider") == "ollama"
+        mem = getattr(crew, "_memory", None)
+        assert mem is None or mem is False, (
+            f"Crew should not have a Memory instance, got {type(mem)}"
+        )
 
 
 class TestPlanningConfigBounded:
@@ -175,7 +131,7 @@ class TestNoOpenAIKeyRequired:
             # Re-set required test env vars
             os.environ["CREWAI_TRACING_ENABLED"] = "false"
             os.environ["SERPER_API_KEY"] = "test-key-not-real"
-            from researcher.crew_old3 import ResearchCrew
+            from researcher.crew import ResearchCrew
 
             # This should not raise
             rc = ResearchCrew(model="ollama/qwen3.5:9b")

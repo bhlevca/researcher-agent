@@ -26,9 +26,9 @@ TASKS_YAML = Path(__file__).resolve().parent.parent / "src" / "researcher" / "co
 @pytest.fixture
 def run(request):
     """Helper to run async coroutines in sync tests."""
-    def _run(coro):
-        return asyncio.get_event_loop().run_until_complete(coro)
-    return _run
+    loop = asyncio.new_event_loop()
+    yield loop.run_until_complete
+    loop.close()
 
 
 @pytest.fixture

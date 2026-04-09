@@ -2,7 +2,7 @@
 
 import re
 import queue
-from researcher.main import _clean_line, _QueueWriter, _SESSION_ID_RE
+from researcher.config import _clean_line, _QueueWriter, _SESSION_ID_RE
 
 
 class TestCleanLine:

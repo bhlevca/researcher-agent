@@ -160,6 +160,20 @@ async def migrate_sessions_table(db):
         await db.commit()
         logger.info("Migrated sessions table: added user_id column")
 
+    # Add llm_params column to users table (stores JSON)
+    cursor = await db.execute("PRAGMA table_info(users)")
+    ucols = {row[1] for row in await cursor.fetchall()}
+    if "llm_params" not in ucols:
+        await db.execute("ALTER TABLE users ADD COLUMN llm_params TEXT DEFAULT '' ")
+        await db.commit()
+        logger.info("Migrated users table: added llm_params column")
+
+    # Add image_params column to users table (stores JSON)
+    if "image_params" not in ucols:
+        await db.execute("ALTER TABLE users ADD COLUMN image_params TEXT DEFAULT '' ")
+        await db.commit()
+        logger.info("Migrated users table: added image_params column")
+
 
 # ---------------------------------------------------------------------------
 # Pydantic models

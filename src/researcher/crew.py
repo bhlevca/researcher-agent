@@ -2,7 +2,6 @@ import os
 import gc
 import re as _re
 import json as _json
-import uuid as _uuid
 import logging
 import threading
 from pathlib import Path
@@ -11,13 +10,66 @@ from crewai.memory import Memory
 from crewai.agent.planning_config import PlanningConfig
 from crewai.project import CrewBase, agent, crew, task
 
-from crewai.tools import tool
-from crewai_tools import SerperDevTool
-
-from langchain_community.tools import DuckDuckGoSearchRun
-from PIL import Image, ImageDraw, ImageFont
+from researcher.tools import (
+    serper_search_wrapped,
+    ddg_search_wrapped,
+    generate_image,
+)
+from researcher.image import (
+    generate_ai_image,
+    preload_sd,
+    preload_zimage,
+    _image_was_generated,
+    IMAGE_BACKEND,
+    OLLAMA_IMAGE_URL,
+)
 
 _logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Monkey-patch: Force ReAct text-based tool calling for Ollama models.
+#
+# Problem: CrewAI calls llm.supports_function_calling() which returns True
+# for qwen3.5 via litellm/Ollama.  In native mode, CrewAI sends OpenAI-style
+# tool schemas and expects structured tool_call JSON objects back.  But
+# qwen3.5 (and many Ollama models) returns PLAIN TEXT describing tool calls
+# instead of structured objects — so CrewAI treats it as "final answer"
+# and never actually executes the tool.
+#
+# Fix: Override supports_function_calling() to return False for Ollama
+# models, forcing CrewAI into ReAct mode (Action: / Action Input: text
+# pattern) which works reliably with these models.
+#
+# NOTE: CrewAI's LLM.__new__ routes "ollama/" models to
+# OpenAICompatibleCompletion (not the LLM class itself).  The runtime
+# instance has provider="ollama" and model="qwen3.5:9b" (prefix stripped).
+# We must patch OpenAICompatibleCompletion — patching LLM has no effect.
+# ---------------------------------------------------------------------------
+from crewai.llms.providers.openai_compatible.completion import (  # noqa: E402
+    OpenAICompatibleCompletion as _OAICompat,
+)
+
+_orig_supports_fc = _OAICompat.supports_function_calling
+
+
+def _patched_supports_fc(self):
+    """Return False for Ollama models to force ReAct text-based tool calling.
+
+    Instances with ``_allow_fc = True`` (e.g. the planning LLM) are
+    exempted because the planning JSON-schema tool works fine with Ollama.
+    """
+    if getattr(self, "_allow_fc", False):
+        return _orig_supports_fc(self)
+    provider = getattr(self, "provider", "") or ""
+    if provider == "ollama":
+        return False
+    return _orig_supports_fc(self)
+
+
+_OAICompat.supports_function_calling = _patched_supports_fc
+_logger.info("Patched OpenAICompatibleCompletion.supports_function_calling: Ollama → ReAct")
+# ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # Monkey-patch: CrewAI's READY detection requires the EXACT substring
@@ -231,11 +283,11 @@ _logger.info(
 )
 
 # --- Save: truncate before LLM extraction ---
-from crewai.agents.agent_builder.base_agent_executor_mixin import (  # noqa: E402
-    CrewAgentExecutorMixin,
+from crewai.agents.agent_builder.base_agent_executor import (  # noqa: E402
+    BaseAgentExecutor as _BaseAgentExecutor,
 )
 
-_orig_save_to_memory = CrewAgentExecutorMixin._save_to_memory
+_orig_save_to_memory = _BaseAgentExecutor._save_to_memory
 
 
 def _patched_save_to_memory(self, output) -> None:
@@ -264,427 +316,11 @@ def _patched_save_to_memory(self, output) -> None:
         self.agent._logger.log("error", f"Failed to save to memory: {e}")
 
 
-CrewAgentExecutorMixin._save_to_memory = _patched_save_to_memory
+_BaseAgentExecutor._save_to_memory = _patched_save_to_memory
 _logger.info(
     "Patched _save_to_memory: content capped at %d chars", _MAX_SAVE_CONTENT_CHARS
 )
 # ---------------------------------------------------------------------------
-
-# --- Smart TrueType font discovery ---
-_FONT_SEARCH_PATHS = [
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",  # Debian / Ubuntu / openSUSE
-    "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",  # Fedora / RHEL
-    "/usr/share/fonts/truetype/DejaVuSans.ttf",  # openSUSE alt
-    "/usr/share/fonts/TTF/DejaVuSans.ttf",  # Arch
-    "/usr/share/fonts/dejavu/DejaVuSans.ttf",  # Generic Linux
-    "/System/Library/Fonts/Helvetica.ttc",  # macOS
-    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-]
-
-
-def _find_truetype_font() -> str | None:
-    for p in _FONT_SEARCH_PATHS:
-        if Path(p).is_file():
-            return p
-    _logger.warning(
-        "No TrueType font found in standard paths; "
-        "text rendering will use Pillow default bitmap font"
-    )
-    return None
-
-
-_TRUETYPE_FONT_PATH = _find_truetype_font()
-
-# Instantiate once, reuse across calls
-_ddg_search = DuckDuckGoSearchRun()
-_serper_raw = SerperDevTool()
-
-_GENERATED_DIR = Path(__file__).parent / "static" / "generated"
-_GENERATED_DIR.mkdir(parents=True, exist_ok=True)
-
-
-@tool("InternetSearch")
-def serper_search_wrapped(search_query: str) -> str:
-    """Search the internet using Google (Serper). Input must be a single search query string."""
-    # LLMs sometimes send JSON or arrays instead of a plain string — handle gracefully
-    q = search_query.strip()
-    if q.startswith("[") or q.startswith("{"):
-        try:
-            parsed = _json.loads(q)
-            if isinstance(parsed, list):
-                results = []
-                for item in parsed:
-                    sq = (
-                        item.get("search_query", "")
-                        if isinstance(item, dict)
-                        else str(item)
-                    )
-                    if sq:
-                        results.append(_serper_raw.run(search_query=sq))
-                return "\n---\n".join(results)
-            elif isinstance(parsed, dict) and "search_query" in parsed:
-                q = parsed["search_query"]
-        except (_json.JSONDecodeError, Exception):
-            pass
-    return _serper_raw.run(search_query=q)
-
-
-@tool("DuckDuckGoSearch")
-def ddg_search_wrapped(query: str) -> str:
-    """Search the web using DuckDuckGo. Use as fallback if Serper fails. Input must be a single search query string."""
-    q = query.strip()
-    if q.startswith("[") or q.startswith("{"):
-        try:
-            parsed = _json.loads(q)
-            if isinstance(parsed, list):
-                results = []
-                for item in parsed:
-                    sq = (
-                        item.get("query", item.get("search_query", ""))
-                        if isinstance(item, dict)
-                        else str(item)
-                    )
-                    if sq:
-                        results.append(_ddg_search.run(sq))
-                return "\n---\n".join(results)
-            elif isinstance(parsed, dict):
-                q = parsed.get("query", parsed.get("search_query", q))
-        except (_json.JSONDecodeError, Exception):
-            pass
-    return _ddg_search.run(q)
-
-
-@tool("GenerateImage")
-def generate_image(instructions: str) -> str:
-    """Draw geometric shapes. Input: JSON string with width, height, background, shapes array.
-    Shape types: rectangle, circle, triangle, polygon, line, text. Copy the returned image tag into Final Answer.
-    """
-    try:
-        spec = _json.loads(instructions)
-    except _json.JSONDecodeError:
-        return "Error: instructions must be valid JSON"
-    w = min(int(spec.get("width", 512)), 2048)
-    h = min(int(spec.get("height", 512)), 2048)
-    bg = spec.get("background", "white")
-    img = Image.new("RGB", (w, h), bg)
-    draw = ImageDraw.Draw(img)
-    for shape in spec.get("shapes", []):
-        t = shape.get("type", "")
-        fill = shape.get("fill", None)
-        outline = shape.get("outline", None)
-        if t == "rectangle":
-            x, y = int(shape.get("x", 0)), int(shape.get("y", 0))
-            sw, sh = int(shape.get("width", 100)), int(shape.get("height", 100))
-            draw.rectangle([x, y, x + sw, y + sh], fill=fill, outline=outline)
-        elif t == "circle":
-            cx, cy = int(shape.get("cx", 100)), int(shape.get("cy", 100))
-            r = int(shape.get("radius", 50))
-            draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=fill, outline=outline)
-        elif t == "line":
-            x1, y1 = int(shape.get("x1", 0)), int(shape.get("y1", 0))
-            x2, y2 = int(shape.get("x2", 100)), int(shape.get("y2", 100))
-            lw = int(shape.get("width", 2))
-            draw.line([x1, y1, x2, y2], fill=fill or "black", width=lw)
-        elif t in ("triangle", "polygon"):
-            pts = shape.get("points", shape.get("vertices", []))
-            if pts and len(pts) >= 3:
-                flat = [tuple(p) for p in pts]
-                draw.polygon(flat, fill=fill, outline=outline)
-        elif t == "text":
-            x, y = int(shape.get("x", 10)), int(shape.get("y", 10))
-            txt = str(shape.get("text", ""))
-            size = int(shape.get("size", 20))
-            if _TRUETYPE_FONT_PATH:
-                try:
-                    font = ImageFont.truetype(_TRUETYPE_FONT_PATH, size)
-                except (IOError, OSError):
-                    font = ImageFont.load_default()
-            else:
-                font = ImageFont.load_default()
-            draw.text((x, y), txt, fill=fill or "black", font=font)
-    fname = f"{_uuid.uuid4().hex[:12]}.png"
-    img.save(_GENERATED_DIR / fname)
-    return f"![generated image](/static/generated/{fname})"
-
-
-# --------------- Stable Diffusion AI image generation ---------------
-_sd_pipe = None
-_sd_lock = threading.Lock()  # guards lazy pipeline init
-_vram_lock = threading.Lock()  # serialises GPU-heavy inference
-
-# Image backend selection
-IMAGE_BACKEND = os.getenv("IMAGE_BACKEND", "sd")  # "sd" or "zimage"
-# OLLAMA_IMAGE_URL is used ONLY for unloading/reloading the LLM via keep_alive=0.
-# It is NOT used for image generation when IMAGE_BACKEND=zimage.
-OLLAMA_IMAGE_URL = os.getenv("OLLAMA_IMAGE_URL", "http://localhost:11434/api/generate")
-_SD_MODEL_ID = os.getenv("SD_MODEL", "stable-diffusion-v1-5/stable-diffusion-v1-5")
-
-
-def _get_sd_pipe():
-    """Lazy-load SD pipeline. Uses CPU offload so VRAM is only used during generation."""
-    global _sd_pipe
-    if _sd_pipe is None:
-        with _sd_lock:
-            if _sd_pipe is None:  # double-check
-                import torch
-                from diffusers import StableDiffusionPipeline
-
-                import sys as _sys
-                import warnings
-
-                print("[SD] Loading Stable Diffusion pipeline…", flush=True)
-                # Suppress the harmless "position_ids UNEXPECTED" load report
-                _real_stdout = _sys.stdout
-                _sys.stdout = open(os.devnull, "w")
-                try:
-                    with warnings.catch_warnings():
-                        warnings.filterwarnings("ignore", message=".*position_ids.*")
-                        _sd_pipe = StableDiffusionPipeline.from_pretrained(
-                            _SD_MODEL_ID,
-                            torch_dtype=torch.float16,
-                            safety_checker=None,
-                            requires_safety_checker=False,
-                        )
-                finally:
-                    _sys.stdout.close()
-                    _sys.stdout = _real_stdout
-                _sd_pipe.enable_model_cpu_offload()
-                print("[SD] Pipeline ready.", flush=True)
-    return _sd_pipe
-
-
-def preload_sd():
-    """Call from the server to warm up the SD pipeline in a background thread."""
-    threading.Thread(target=_get_sd_pipe, daemon=True).start()
-
-
-# --------------- ZImagePipeline backend (diffusers + CUDA) ---------------
-# Used when IMAGE_BACKEND=zimage.
-# Reads:
-#   ZIMAGE_MODEL          — HuggingFace repo id (default: mrfakename/Z-Image-Turbo)
-#   HUGGINGFACE_TOKEN     — HF token for gated repos
-#   TRANSFORMERS_OFFLINE  — set to "1" to skip network after first download
-# Ollama is NOT involved for image generation; it is only used to
-# unload/reload the qwen3 LLM around inference to free VRAM.
-_ZIMAGE_MODEL_ID = os.getenv("ZIMAGE_MODEL", "mrfakename/Z-Image-Turbo")
-_zimage_pipe = None
-_zimage_init_lock = threading.Lock()
-
-# Flag set by generate_ai_image when GPU image generation ran.
-# Checked by main.py to decide whether to unload Ollama after the request.
-_image_was_generated = False
-
-
-def _get_zimage_pipe():
-    """Lazy-load ZImagePipeline once with bfloat16 + Flash Attention."""
-    global _zimage_pipe
-    if _zimage_pipe is None:
-        with _zimage_init_lock:
-            if _zimage_pipe is None:
-                import torch
-                from diffusers import ZImagePipeline
-                import sys as _sys
-
-                hf_token = os.getenv("HUGGINGFACE_TOKEN") or os.getenv("HF_TOKEN")
-                offline = os.getenv("TRANSFORMERS_OFFLINE", "0") == "1"
-
-                print(
-                    f"[ZIMG] Loading ZImagePipeline ({_ZIMAGE_MODEL_ID})"
-                    f"{' [offline]' if offline else ''}...",
-                    flush=True,
-                )
-                pipe = ZImagePipeline.from_pretrained(
-                    _ZIMAGE_MODEL_ID,
-                    torch_dtype=torch.bfloat16,
-                    token=hf_token,
-                    local_files_only=offline,
-                )
-                # Leverage diffusers memory optimizations for low VRAM
-                try:
-                    pipe.enable_attention_slicing()
-                    _sys.stderr.write("[ZIMG] Attention slicing enabled\n")
-                except Exception:
-                    _sys.stderr.write("[ZIMG] Attention slicing unavailable\n")
-
-                try:
-                    pipe.enable_model_cpu_offload()
-                    _sys.stderr.write("[ZIMG] Model CPU offload enabled\n")
-                except Exception:
-                    _sys.stderr.write("[ZIMG] Model CPU offload unavailable\n")
-
-                # Flash Attention - try pipeline-level, then transformer-level
-                try:
-                    pipe.enable_flash_attention()
-                    _sys.stderr.write("[ZIMG] Flash Attention enabled\n")
-                except AttributeError:
-                    try:
-                        pipe.transformer.enable_flash_attn()
-                        _sys.stderr.write(
-                            "[ZIMG] Flash Attention enabled (transformer)\n"
-                        )
-                    except Exception:
-                        _sys.stderr.write(
-                            "[ZIMG] Flash Attention unavailable - using default\n"
-                        )
-                # Do NOT call pipe.to('cuda') when CPU offload is enabled
-                if not hasattr(pipe, "is_loaded") or not getattr(
-                    pipe, "is_loaded", False
-                ):
-                    pass
-                _zimage_pipe = pipe
-                print("[ZIMG] Pipeline ready.", flush=True)
-    return _zimage_pipe
-
-
-def preload_zimage():
-    """Warm up the ZImagePipeline in a background thread."""
-    threading.Thread(target=_get_zimage_pipe, daemon=True).start()
-
-
-@tool("GenerateAIImage")
-def generate_ai_image(prompt: str) -> str:
-    """Generate a realistic image from a text prompt using Stable Diffusion AI or Ollama z-image.
-    Use for animals, landscapes, people, objects, scenes. Add style keywords like photorealistic, 8k.
-    Copy the returned image tag EXACTLY into your Final Answer."""
-    import sys as _sys
-    import requests
-
-    global _image_was_generated
-    backend = IMAGE_BACKEND.lower()
-    _sys.stderr.write(
-        f"[IMG] generate_ai_image called (backend={backend}): {prompt[:100]}\n"
-    )
-    _sys.stderr.flush()
-    _image_was_generated = True
-    if backend == "sd":
-        try:
-            pipe = _get_sd_pipe()
-            _sys.stderr.write("[SD] Pipeline acquired, acquiring VRAM lock...\n")
-            _sys.stderr.flush()
-            with _vram_lock:
-                _sys.stderr.write("[SD] Starting inference...\n")
-                _sys.stderr.flush()
-                result = pipe(
-                    prompt,
-                    num_inference_steps=25,
-                    guidance_scale=7.5,
-                    width=512,
-                    height=512,
-                )
-                img = result.images[0]
-                # Free GPU memory inside the lock so nothing else grabs VRAM first
-                import torch
-
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                    torch.cuda.synchronize()
-                gc.collect()
-            fname = f"{_uuid.uuid4().hex[:12]}.png"
-            img.save(_GENERATED_DIR / fname)
-            tag = f"![generated image](/static/generated/{fname})"
-            _sys.stderr.write(f"[SD] Done: {tag}\n")
-            _sys.stderr.flush()
-            return tag
-        except Exception as e:
-            _sys.stderr.write(f"[SD] ERROR: {e}\n")
-            _sys.stderr.flush()
-            return f"Error generating image: {e}"
-    elif backend == "zimage":
-        # ZImagePipeline via diffusers + CUDA.
-        # Controlled by .env: ZIMAGE_MODEL, HUGGINGFACE_TOKEN, TRANSFORMERS_OFFLINE.
-        # Ollama is used only to unload/reload the LLM around inference to free VRAM.
-        import requests as _requests
-
-        qwen_model = os.getenv("MODEL", "qwen3.5:9b").replace("ollama/", "")
-
-        # Unload the LLM to free VRAM for the image pipeline
-        try:
-            _requests.post(
-                OLLAMA_IMAGE_URL,
-                json={"model": qwen_model, "keep_alive": 0, "prompt": ""},
-                timeout=30,
-            )
-            _sys.stderr.write(f"[ZIMG] Unloaded LLM: {qwen_model}\n")
-        except Exception as e:
-            _sys.stderr.write(f"[ZIMG] Failed to unload LLM: {e}\n")
-
-        # Wait for Ollama to actually release VRAM (async unload)
-        import time as _time
-        import torch
-
-        _sys.stderr.write("[ZIMG] Waiting for VRAM to free...\n")
-        for _wait_i in range(15):
-            torch.cuda.empty_cache()
-            _free = torch.cuda.mem_get_info()[0] / (1024**3)
-            _sys.stderr.write(f"[ZIMG]   free VRAM: {_free:.2f} GiB\n")
-            if _free > 12.0:  # enough for ZImage
-                break
-            _time.sleep(1)
-        else:
-            _sys.stderr.write("[ZIMG] Warning: VRAM may still be tight\n")
-
-        img_tag = None
-        last_exc = None
-        pipe = None
-        try:
-            pipe = _get_zimage_pipe()
-            _sys.stderr.write(f"[ZIMG] Running inference: {prompt[:80]}\n")
-            _sys.stderr.flush()
-
-            width = int(os.getenv("ZIMAGE_WIDTH", "512"))
-            height = int(os.getenv("ZIMAGE_HEIGHT", "512"))
-
-            with torch.inference_mode():
-                result = pipe(prompt=prompt, width=width, height=height)
-
-            img = result.images[0]
-
-            fname = f"{_uuid.uuid4().hex[:12]}.png"
-            img.save(_GENERATED_DIR / fname)
-            img_tag = f"![generated image](/static/generated/{fname})"
-            _sys.stderr.write(f"[ZIMG] Done: {img_tag}\n")
-            _sys.stderr.flush()
-
-        except Exception as e:
-            last_exc = e
-            _sys.stderr.write(f"[ZIMG] ERROR: {e}\n")
-            _sys.stderr.flush()
-
-        finally:
-            # Free ZImage pipeline from GPU BEFORE reloading LLM
-            global _zimage_pipe
-            try:
-                if _zimage_pipe is not None:
-                    _zimage_pipe.to("cpu")
-                    _sys.stderr.write("[ZIMG] Moved pipeline to CPU\n")
-            except Exception:
-                pass
-            _zimage_pipe = None
-            if pipe is not None:
-                del pipe
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                torch.cuda.synchronize()
-            _free = torch.cuda.mem_get_info()[0] / (1024**3)
-            _sys.stderr.write(f"[ZIMG] GPU freed — {_free:.2f} GiB available\n")
-
-            # Reload the LLM now that VRAM is free
-            try:
-                _requests.post(
-                    OLLAMA_IMAGE_URL,
-                    json={"model": qwen_model, "prompt": ""},
-                    timeout=30,
-                )
-                _sys.stderr.write(f"[ZIMG] Reloaded LLM: {qwen_model}\n")
-            except Exception as e:
-                _sys.stderr.write(f"[ZIMG] Failed to reload LLM: {e}\n")
-
-        if img_tag:
-            return img_tag
-        return f"Error generating image via ZImagePipeline: {last_exc}"
-    else:
-        return f"Error: Unknown IMAGE_BACKEND '{backend}'. Use 'sd' or 'ollama'."
 
 
 @CrewBase
@@ -692,34 +328,102 @@ class ResearchCrew:
     agents_config = "config/agents.yaml"
     tasks_config = "config/tasks.yaml"
 
+    # Default LLM parameter values (exposed via /llm-params API)
+    DEFAULT_LLM_PARAMS: dict = {
+        "temperature": 0.4,
+        "top_k": 40,
+        "top_p": 0.9,
+        "min_p": 0.0,
+        "seed": 0,
+        "num_predict": 4096,
+        "num_ctx": 32768,
+        "repeat_penalty": 1.1,
+        "frequency_penalty": 0.0,
+        "presence_penalty": 0.0,
+        "planning_max_attempts": 3,
+    }
+
     def __init__(self, model: str | None = None):
         self._model_name = model or os.getenv("MODEL", "ollama/qwen3.5:9b")
-        self.ollama_llm = self._make_llm(self._model_name)
+        self._llm_params: dict = dict(self.DEFAULT_LLM_PARAMS)
+        self.ollama_llm = self._make_llm(self._model_name, self._llm_params)
         self._is_multi_part = False
 
+    def get_llm_params(self) -> dict:
+        """Return current LLM parameters."""
+        return dict(self._llm_params)
+
+    def update_llm_params(self, params: dict) -> dict:
+        """Update LLM parameters and rebuild the LLM instance."""
+        for k, v in params.items():
+            if k in self.DEFAULT_LLM_PARAMS:
+                self._llm_params[k] = v
+        self.ollama_llm = self._make_llm(self._model_name, self._llm_params)
+        return dict(self._llm_params)
+
     @staticmethod
-    def _make_llm(model: str) -> LLM:
+    def _make_llm(model: str, params: dict | None = None) -> LLM:
+        if params is None:
+            params = ResearchCrew.DEFAULT_LLM_PARAMS
         is_thinking_model = any(k in model.lower() for k in ("qwen3", "deepseek-r1"))
         # Build extra_body with Ollama options (CrewAI 1.12 no longer accepts config=)
+        seed = int(params.get("seed", 0))
         ollama_options = {
-            "num_ctx": 32768,
+            "num_ctx": int(params.get("num_ctx", 32768)),
             "num_gpu": 99,
-            "num_predict": 4096,
+            "num_predict": int(params.get("num_predict", 4096)),
+            "top_k": int(params.get("top_k", 40)),
+            "top_p": float(params.get("top_p", 0.9)),
+            "min_p": float(params.get("min_p", 0.0)),
+            "repeat_penalty": float(params.get("repeat_penalty", 1.1)),
         }
+        if seed > 0:
+            ollama_options["seed"] = seed
         extra_body: dict = {"options": ollama_options}
         if is_thinking_model:
             extra_body["chat_template_kwargs"] = {"enable_thinking": True}
         return LLM(
             model=model,
             base_url="http://localhost:11434",
-            temperature=0.4,
+            temperature=float(params.get("temperature", 0.4)),
+            frequency_penalty=float(params.get("frequency_penalty", 0.0)),
+            presence_penalty=float(params.get("presence_penalty", 0.0)),
             extra_body=extra_body,
+        )
+
+    @staticmethod
+    def _make_planning_llm(model: str) -> LLM:
+        """Lightweight LLM for the planning phase only.
+
+        Thinking is DISABLED and context is small so each planning call
+        completes in ~10-20 s instead of 3-4 min.  This LLM is NOT
+        affected by the supports_function_calling patch (provider is
+        still 'ollama'), but PlanningConfig's function-calling path
+        only sends a JSON-schema tool which Ollama handles fine.
+        """
+        return LLM(
+            model=model,
+            base_url="http://localhost:11434",
+            temperature=0.2,
+            extra_body={
+                "options": {
+                    "num_ctx": 8192,
+                    "num_gpu": 99,
+                    "num_predict": 2048,
+                },
+                "chat_template_kwargs": {"enable_thinking": False},
+            },
         )
 
     @agent
     def researcher(self) -> Agent:
+        planning_llm = self._make_planning_llm(self._model_name)
+        # Allow native function calling for planning — the single JSON-schema
+        # tool works fine with Ollama; only task-execution tools are broken.
+        planning_llm._allow_fc = True
         planning = PlanningConfig(
-            max_attempts=3,
+            llm=planning_llm,
+            max_attempts=int(self._llm_params.get("planning_max_attempts", 3)),
             max_steps=6,
             reasoning_effort="medium",
             plan_prompt=(
@@ -734,7 +438,10 @@ class ResearchCrew:
                 "write 'Tool: direct generation'. NEVER write 'Tool: None'.\n"
                 "Do NOT include tables, matrices, or checklists — just the numbered steps.\n"
                 "This task can be answered from your own knowledge — you do NOT "
-                "need to search the internet unless the task explicitly requires it.\n\n"
+                "need to search the internet unless the task explicitly requires it.\n"
+                "If the task asks you to generate an image, your plan MUST include "
+                "a step that calls the image tool. Do NOT plan to explain limitations "
+                "or safety policies — just plan to execute the request.\n\n"
                 "End your response with EXACTLY this line:\n"
                 "READY: I am ready to execute the task.\n"
             ),
@@ -881,6 +588,13 @@ class ResearchCrew:
                 "If not answerable from your knowledge or attached files, determine "
                 "if it's a system question (use LocalSystemCheck) "
                 "or a world question (use InternetSearch).\n\n"
+                "CRITICAL TOOL EXECUTION RULE:\n"
+                "If you decide to use a tool, you MUST actually execute it using "
+                "the Action/Action Input format. NEVER write the tool name or "
+                "input as plain text in your Final Answer. If your Final Answer "
+                "contains text like 'InternetSearch — ...' or 'Input: {...}' "
+                "that means you FAILED to execute the tool. You must STOP and "
+                "actually call the tool first.\n\n"
                 "LENGTH AND THOROUGHNESS:\n"
                 "When the user specifies a page count, word count, or says "
                 '"thorough" / "detailed", you MUST produce the full requested '

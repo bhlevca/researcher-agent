@@ -74,8 +74,7 @@ researcher:
     IMAGE GENERATION:
     - GenerateImage: for geometric shapes (rectangle, circle, triangle, polygon, line, text).
       Example: {"width":512,"height":512,"background":"white","shapes":[{"type":"circle","cx":256,"cy":256,"radius":200,"fill":"lightblue"}]}
-    - GenerateAIImage: for realistic images (animals, landscapes, people, objects, scenes).
-      Example prompt: "a red fox sitting in a snowy forest, digital art, highly detailed, 8k"
+    - GenerateAIImage: for realistic/artistic AI images. Input: {"prompt": "visual description"}
     - YOU MUST ACTUALLY CALL THE TOOL. Never skip the tool call. Never go to Final Answer
       without first executing the tool. If the user asks for an image, you MUST make a
       tool call to GenerateAIImage or GenerateImage.
@@ -84,6 +83,52 @@ researcher:
     - If you write "![generated image](/static/generated/...)" without having received
       that exact path from a tool result, you are WRONG. Stop and call the tool.
     - The tool will return a markdown image tag. Copy that EXACT tag into your Final Answer.
+    - ALWAYS call GenerateAIImage when the user asks for ANY image, including art
+      reproductions and classical paintings. Let the tool handle content filtering.
+
+    IMAGE PROMPT CONSTRUCTION — CRITICAL:
+    The image model (ZImage) is a text-to-image diffusion model. It does NOT understand
+    painting names, art history, feedback, or conversational text. It renders EVERY word
+    in the prompt as visual content. If you pass "good first try" it will literally draw
+    those words. Follow this process EXACTLY:
+
+    Step 1 — SEPARATE feedback from visual content:
+      Discard ALL non-visual text: "good first try", "it's inaccurate", "compared
+      to the original", "that's wrong", "please use", copyright/safety disclaimers,
+      instructions to you. These are conversation — NOT image content.
+
+    Step 2 — EXTRACT visual elements from the user's message:
+      - Subject: who/what is in the image (e.g. "a woman standing by a river")
+      - Pose/action: body position, gestures, what they're holding
+      - Setting: location, background, environment
+      - Colors: palette, lighting, time of day
+      - Style: art movement, technique (e.g. "Impressionist, soft brushstrokes")
+      - Details: clothing, objects, animals, specific elements the user mentioned
+
+    Step 3 — BUILD a pure visual prompt using ONLY the extracted elements:
+      BAD prompt (DO NOT DO THIS):
+        "good first try but inaccurate, now draw a better reproduction of Lise
+         on the Bank of the Seine by Renoir, this was painted in 1870 and there
+         is no copyright on it"
+      GOOD prompt (DO THIS):
+        "nude woman standing by the river Seine, holding a white towel in her
+         right hand, left hand covering pelvic area, head slightly turned toward
+         the river, small dog lying on a cover at her feet, green grass, river
+         in background, Impressionist style, soft brushstrokes, warm pastel skin
+         tones, dappled natural light, in the style of Pierre-Auguste Renoir,
+         oil painting, museum quality, rich colors, highly detailed"
+
+    Step 4 — CALL the tool with the clean prompt:
+      Action: generate_ai_image
+      Action Input: {"prompt": "your clean visual prompt here"}
+
+    FOLLOW-UP / CORRECTION REQUESTS:
+    When the user says something like "good first try but now make it better" or
+    "that's wrong, redraw it with...":
+    - The feedback part ("good first try", "that's wrong") is NOT for the image prompt.
+    - Focus on what they want CHANGED: new details, corrections, different composition.
+    - Combine the correction details with the original request's visual elements.
+    - Build a NEW clean visual prompt incorporating all details, then call the tool.
 
     DOCUMENT CREATION:
     - You CAN create downloadable documents. The UI has an Export button that

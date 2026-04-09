@@ -1,0 +1,130 @@
+conversation_task:
+  description: >
+    You are having a conversation in {target_lang} with a {level}-level student
+    whose native language is {native_lang}.
+
+    Conversation context:
+    {context}
+
+    Student's message: "{message}"
+
+    Respond naturally in {target_lang}. If the student made grammatical or
+    vocabulary errors, correct them kindly — show the mistake and the fix with
+    a brief {native_lang} explanation. Introduce 1-3 new vocabulary items when
+    appropriate.
+
+    At the end of your response, add a section:
+    ### New Vocabulary
+    | Word | Translation | Part of Speech |
+    |------|-------------|----------------|
+    (list any new words you introduced or that the student should learn)
+
+    If the student wrote in {native_lang} and seems to want help translating or
+    is asking a question about the language, answer helpfully and then encourage
+    them to try expressing the same idea in {target_lang}.
+  expected_output: >
+    A natural conversational reply in {target_lang} with inline corrections if
+    needed, followed by a New Vocabulary markdown table. The response should be
+    warm, encouraging, and at the appropriate {level} complexity.
+  agent: language_tutor
+
+lesson_task:
+  description: >
+    Create a structured {lesson_type} lesson plan for a {level}-level student
+    learning {target_lang} (native language: {native_lang}).
+
+    Topic: {topic}
+
+    The lesson MUST include:
+    1. **Lesson Title** and **Objectives** (what the student will learn)
+    2. **Introduction** — brief context and motivation for this topic
+    3. **Grammar Explanation** — clear rules with examples (if applicable)
+       - Use conjugation tables where relevant
+       - Show sentence patterns
+    4. **Vocabulary** — a comprehensive table:
+       | Word/Phrase | Translation | Part of Speech | Example Sentence |
+       |-------------|-------------|----------------|------------------|
+       Include at least 15-20 vocabulary items.
+    5. **Typical Situations / Dialogues** — 2-3 realistic example dialogues
+       using the lesson vocabulary and grammar in context
+    6. **Practice Exercises** — at least 5 exercises:
+       - Fill-in-the-blank
+       - Translation (both directions)
+       - Sentence construction
+       - Error correction
+    7. **Solutions** — answers to all exercises
+    8. **Summary** — key takeaways
+
+    Use markdown formatting throughout. Make it thorough and complete.
+  expected_output: >
+    A complete, well-structured lesson plan in markdown with all 8 sections.
+    The vocabulary table must have at least 15 entries. Exercises must have
+    solutions provided. Content must match the {level} CEFR band.
+  agent: language_tutor
+
+quiz_task:
+  description: >
+    Generate a {quiz_type} quiz for a {level}-level student of {target_lang}
+    (native language: {native_lang}).
+
+    Number of questions: {num_questions}
+
+    {vocabulary_context}
+
+    {lesson_context}
+
+    Generate the quiz as a JSON array wrapped in ```json fences.
+    Each question object MUST have:
+    - "id": sequential integer starting from 0
+    - "type": one of "vocabulary", "grammar", "translation"
+    - "question": the question text
+    - "options": array of 4 choices (for vocabulary/grammar) or null (for translation)
+    - "correct_answer": the correct answer string
+
+    For vocabulary questions: give a word in {target_lang}, ask for
+    the {native_lang} translation (or vice versa).
+
+    For grammar questions: provide a sentence with a blank and 4 options.
+
+    For translation questions: provide a sentence in one language and ask
+    the student to translate it to the other.
+
+    Mix difficulty within the {level} CEFR band.
+  expected_output: >
+    A valid JSON array of {num_questions} question objects inside ```json fences.
+    Each object has id, type, question, options (array or null), and correct_answer.
+    The JSON must be parseable by json.loads().
+  agent: language_tutor
+
+appraisal_task:
+  description: >
+    Evaluate the progress of a {level}-level student learning {target_lang}
+    (native language: {native_lang}).
+
+    Student statistics (current session AND cross-session totals):
+    {stats}
+
+    The statistics include a "cross_session" section with data aggregated
+    across ALL the student's {target_lang} sessions — use this to assess
+    long-term progress, consistency, and overall trajectory.
+
+    Recent conversation excerpts (current session):
+    {recent_messages}
+
+    Provide a comprehensive appraisal including:
+    1. **Overall Assessment** — current estimated CEFR sub-level and trajectory
+    2. **Strengths** — what the student does well
+    3. **Areas for Improvement** — specific weaknesses to address
+    4. **Vocabulary Progress** — analysis of word mastery and retention across sessions
+    5. **Grammar Analysis** — common error patterns observed
+    6. **Quiz Performance** — trends and problem areas across all sessions
+    7. **Session History** — comment on study consistency and frequency
+    8. **Recommendations** — specific topics, exercises, or focus areas for next lessons
+    9. **Encouragement** — positive, motivating closing remarks
+
+    Be specific and actionable. Reference actual data from the statistics.
+  expected_output: >
+    A detailed, structured appraisal in markdown with all 9 sections.
+    Must reference concrete numbers from both current and cross-session
+    statistics and provide specific, actionable recommendations.
+  agent: language_tutor

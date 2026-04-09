@@ -71,6 +71,11 @@ def register_model_routes(app):
             request.app.state.research_crew = new_crew
             request.app.state.current_model = new_model
 
+            # Also switch the tutor crew model if present
+            if hasattr(request.app.state, "tutor_crew"):
+                from researcher.tutor.crew import TutorCrew
+                request.app.state.tutor_crew = TutorCrew(model=new_model)
+
             await db.execute(
                 "UPDATE users SET model = ? WHERE id = ?",
                 (new_model, user["id"]),

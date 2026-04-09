@@ -23,6 +23,8 @@ import aiosqlite
 from researcher.crew import ResearchCrew
 from researcher.image import preload_sd
 from researcher.config import STATIC_DIR, DB_PATH
+from researcher.tutor.crew import TutorCrew
+from researcher.tutor.storage import init_tutor_tables
 
 from researcher.auth import (
     register_auth_routes,
@@ -38,6 +40,7 @@ from researcher.routes.ask import register_ask_routes
 from researcher.routes.sessions import register_session_routes
 from researcher.routes.models import register_model_routes
 from researcher.routes.speech import register_speech_routes
+from researcher.routes.tutor import register_tutor_routes
 from researcher.tts import register_tts_routes
 
 load_dotenv()
@@ -53,6 +56,7 @@ async def lifespan(app: FastAPI):
     model = os.getenv("MODEL", "ollama/qwen3.5:9b")
     app.state.current_model = model
     app.state.research_crew = ResearchCrew(model=model)
+    app.state.tutor_crew = TutorCrew(model=model)
     app.state.crew_semaphore = asyncio.Semaphore(1)  # serialise crew runs
     app.state.cancel_event = threading.Event()  # crew cancellation flag
 
@@ -119,6 +123,9 @@ async def lifespan(app: FastAPI):
     # Files table
     await init_files_table(db)
 
+    # Tutor tables
+    await init_tutor_tables(db)
+
     # Warm up Stable Diffusion in background
     preload_sd()
 
@@ -138,15 +145,21 @@ register_ask_routes(app)
 register_session_routes(app)
 register_model_routes(app)
 register_speech_routes(app)
+register_tutor_routes(app)
 register_tts_routes(app)
 
 
-# --- Chat UI ---
+# --- UI pages ---
 
 
 @app.get("/")
 async def index():
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/tutor")
+async def tutor_page():
+    return FileResponse(STATIC_DIR / "tutor.html")
 
 
 # --- Static files & server entry point ---

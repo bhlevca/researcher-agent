@@ -266,6 +266,7 @@ def register_tts_routes(app):
         matching voice so foreign words are pronounced correctly.
         """
         import edge_tts
+        import re as _re
 
         clean = req.text.strip()
         if not clean:
@@ -286,12 +287,18 @@ def register_tts_routes(app):
 
         buf = io.BytesIO()
         for lang, text in segments:
+            # Skip segments that have no speakable content (only punctuation/symbols)
+            if not _re.search(r'[a-zA-Z\u00C0-\u024F\u0400-\u04FF\u4E00-\u9FFF\u3040-\u309F\u30A0-\u30FF\uAC00-\uD7AF\u0600-\u06FF\u0900-\u097F]', text):
+                continue
             voice = _pick_voice_for_lang(lang, req.voice, voices)
             logger.warning("[TTS] segment lang=%s voice=%s text=%.60s", lang, voice, text)
             communicate = edge_tts.Communicate(text, voice)
-            async for chunk in communicate.stream():
-                if chunk["type"] == "audio":
-                    buf.write(chunk["data"])
+            try:
+                async for chunk in communicate.stream():
+                    if chunk["type"] == "audio":
+                        buf.write(chunk["data"])
+            except Exception as e:
+                logger.warning("[TTS] segment skipped (no audio): %s", e)
 
         if buf.tell() == 0:
             raise HTTPException(status_code=500, detail="TTS produced no audio")

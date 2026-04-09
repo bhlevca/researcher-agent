@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Language Tutor</title>
+    <link rel="stylesheet" href="/static/css/main.css">
+    <link rel="stylesheet" href="/static/css/tutor.css">
+</head>
+<body>
+    <header>
+        <h1>📚 Language Tutor</h1>
+        <select id="tutor-model-select" title="Switch model">
+            <option>loading models...</option>
+        </select>
+        <span class="model-info" id="tutor-model-info"></span>
+        <div class="voice-controls">
+            <select id="voice-select" title="TTS voice"><option>loading voices...</option></select>
+            <select id="lang-select" title="Speech recognition language">
+                <option value="en" selected>EN</option>
+                <option value="fr">FR</option>
+                <option value="de">DE</option>
+                <option value="es">ES</option>
+                <option value="pt">PT</option>
+                <option value="it">IT</option>
+                <option value="nl">NL</option>
+                <option value="ru">RU</option>
+                <option value="zh">ZH</option>
+                <option value="ja">JA</option>
+                <option value="ro">RO</option>
+            </select>
+            <button id="dialog-toggle" onclick="toggleDialogMode()" title="Dialog mode: auto-speak responses &amp; auto-record">🗣️ Dialog</button>
+        </div>
+        <div class="tutor-config">
+            <label>Target
+                <select id="tutor-target-lang">
+                    <option value="French" selected>French</option>
+                    <option value="German">German</option>
+                    <option value="Spanish">Spanish</option>
+                    <option value="Italian">Italian</option>
+                    <option value="Portuguese">Portuguese</option>
+                    <option value="Dutch">Dutch</option>
+                    <option value="Russian">Russian</option>
+                    <option value="Chinese">Chinese</option>
+                    <option value="Japanese">Japanese</option>
+                    <option value="Romanian">Romanian</option>
+                    <option value="Korean">Korean</option>
+                    <option value="Arabic">Arabic</option>
+                    <option value="Turkish">Turkish</option>
+                    <option value="Polish">Polish</option>
+                    <option value="Swedish">Swedish</option>
+                    <option value="Greek">Greek</option>
+                    <option value="Hindi">Hindi</option>
+                </select>
+            </label>
+            <label>Native
+                <select id="tutor-native-lang">
+                    <option value="English" selected>English</option>
+                    <option value="French">French</option>
+                    <option value="German">German</option>
+                    <option value="Spanish">Spanish</option>
+                    <option value="Romanian">Romanian</option>
+                    <option value="Portuguese">Portuguese</option>
+                    <option value="Italian">Italian</option>
+                    <option value="Dutch">Dutch</option>
+                    <option value="Russian">Russian</option>
+                    <option value="Chinese">Chinese</option>
+                    <option value="Japanese">Japanese</option>
+                </select>
+            </label>
+            <label>Level
+                <select id="tutor-level">
+                    <option value="A1">A1 – Beginner</option>
+                    <option value="A2" selected>A2 – Elementary</option>
+                    <option value="B1">B1 – Intermediate</option>
+                    <option value="B2">B2 – Upper Intermediate</option>
+                    <option value="C1">C1 – Advanced</option>
+                    <option value="C2">C2 – Proficiency</option>
+                </select>
+            </label>
+        </div>
+        <div class="header-spacer"></div>
+        <div class="session-controls">
+            <span id="tutor-active-session" style="color:#60a5fa;font-size:0.78rem;display:none;"></span>
+            <button onclick="createTutorSession()" title="New tutor session">🗒️ New</button>
+            <button onclick="saveTutorSession()" title="Save session">💾 Save</button>
+            <button onclick="openTutorSessionsPanel()" title="Saved tutor sessions">📂 Sessions</button>
+            <a href="/" class="nav-link" title="Back to Research Agent">🔬 Research</a>
+        </div>
+        <div class="user-badge" id="user-badge" style="display:none;">
+            <span>👤</span><span class="username" id="user-badge-name"></span>
+            <button onclick="logout()" title="Log out">✕</button>
+        </div>
+        <button id="login-btn" onclick="openAuthModal('login')" style="background:#0f3460;color:#94a3b8;border:1px solid #1a3a6e;padding:0.35rem 0.65rem;border-radius:0.5rem;font-size:0.75rem;cursor:pointer;">🔑 Login</button>
+    </header>
+
+    <!-- Auth modal (shared) -->
+    <div class="auth-overlay" id="auth-overlay" onclick="if(event.target===this)closeAuthModal()">
+        <div class="auth-box">
+            <h2 id="auth-title">Login</h2>
+            <div class="auth-error" id="auth-error"></div>
+            <input type="text" id="auth-username" placeholder="Username" autocomplete="username">
+            <input type="password" id="auth-password" placeholder="Password" autocomplete="current-password">
+            <input type="text" id="auth-invite" placeholder="Invite code" style="display:none;">
+            <!-- Honeypot -->
+            <input type="text" id="auth-website" name="website" autocomplete="off" tabindex="-1" style="position:absolute;left:-9999px;opacity:0;height:0;width:0;">
+            <div class="auth-actions">
+                <button class="auth-btn-primary" id="auth-submit" onclick="submitAuth()">Login</button>
+                <button class="auth-btn-secondary" id="auth-toggle" onclick="switchAuthMode()">Need an account? Register</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tutor sessions panel (overlay, slides from right like research sessions) -->
+    <div class="tutor-sessions-overlay" id="tutor-sessions-overlay" onclick="closeTutorSessionsPanel()"></div>
+    <div class="tutor-sessions-panel" id="tutor-sessions-panel">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
+            <h3 style="margin:0;color:#e0e0e0;font-size:0.95rem;">Tutor Sessions</h3>
+            <button onclick="closeTutorSessionsPanel()" style="background:none;border:none;color:#94a3b8;font-size:1rem;cursor:pointer;">✕</button>
+        </div>
+        <div id="tutor-sessions-list"></div>
+    </div>
+
+    <!-- Tab navigation -->
+    <div class="tutor-tabs">
+        <button class="tutor-tab active" data-tab="chat" onclick="switchTutorTab('chat')">💬 Chat</button>
+        <button class="tutor-tab" data-tab="lessons" onclick="switchTutorTab('lessons')">📖 Lessons</button>
+        <button class="tutor-tab" data-tab="vocab" onclick="switchTutorTab('vocab')">📝 Vocabulary</button>
+        <button class="tutor-tab" data-tab="quiz" onclick="switchTutorTab('quiz')">❓ Quiz</button>
+        <button class="tutor-tab" data-tab="translate" onclick="switchTutorTab('translate')">🔄 Translate</button>
+        <button class="tutor-tab" data-tab="stats" onclick="switchTutorTab('stats')">📊 Stats</button>
+    </div>
+
+    <!-- ═══════ CHAT panel ═══════ -->
+    <div class="tutor-panel active" id="panel-chat">
+        <div id="tutor-chat" class="chat-container"></div>
+        <div id="visualizer-container">
+            <div class="viz-label"><span class="pulse"></span> Recording</div>
+            <canvas id="audio-visualizer"></canvas>
+            <span id="viz-timer">0:00</span>
+        </div>
+        <div id="tutor-input-area" class="tutor-input-area">
+            <textarea id="tutor-input" rows="2" placeholder="Type a message to your tutor..."></textarea>
+            <button id="mic-btn" onclick="toggleMic()" title="Voice input">🎤</button>
+            <button id="stop-speak-btn" onclick="stopSpeaking()" title="Stop speaking">⏹</button>
+            <button id="tutor-send-btn" onclick="sendTutorMessage()">Send</button>
+        </div>
+    </div>
+
+    <!-- ═══════ LESSONS panel ═══════ -->
+    <div class="tutor-panel" id="panel-lessons">
+        <div class="lesson-form">
+            <input type="text" id="lesson-topic" placeholder="Topic (e.g. greetings, past tense, at the restaurant...)" style="flex:1;">
+            <select id="lesson-type">
+                <option value="grammar">Grammar</option>
+                <option value="situation">Situation</option>
+                <option value="vocabulary">Vocabulary</option>
+                <option value="pronunciation">Pronunciation</option>
+                <option value="culture">Culture</option>
+            </select>
+            <button onclick="generateLesson()">📖 Generate</button>
+        </div>
+        <div id="lessons-content"></div>
+        <div id="lessons-list" style="margin-top:1rem;"></div>
+    </div>
+
+    <!-- ═══════ VOCABULARY panel ═══════ -->
+    <div class="tutor-panel" id="panel-vocab">
+        <div class="vocab-toolbar">
+            <input type="text" id="vocab-search" placeholder="Search vocabulary..." oninput="filterVocabulary()">
+            <span id="vocab-count" style="color:#64748b;font-size:0.78rem;">0 words</span>
+            <button onclick="addVocabManual()">+ Add Word</button>
+        </div>
+        <div id="vocab-list"></div>
+    </div>
+
+    <!-- ═══════ QUIZ panel ═══════ -->
+    <div class="tutor-panel" id="panel-quiz">
+        <div class="quiz-form">
+            <select id="quiz-type">
+                <option value="multiple_choice">Multiple Choice</option>
+                <option value="fill_blank">Fill in the Blank</option>
+                <option value="translation">Translation</option>
+                <option value="mixed">Mixed</option>
+            </select>
+            <label style="display:flex;align-items:center;gap:0.3rem;font-size:0.78rem;color:#94a3b8;">
+                Questions:
+                <input type="number" id="quiz-num" value="5" min="1" max="20" style="width:3rem;background:#1a1a2e;color:#e0e0e0;border:1px solid #0f3460;border-radius:0.3rem;padding:0.2rem;text-align:center;">
+            </label>
+            <button onclick="generateQuiz()">❓ Generate Quiz</button>
+        </div>
+        <div id="quiz-content"></div>
+        <div id="quiz-submit-bar" class="quiz-submit-bar" style="display:none;">
+            <button onclick="submitQuiz()">✅ Submit Answers</button>
+        </div>
+        <div id="quiz-history" style="margin-top:1rem;"></div>
+    </div>
+
+    <!-- ═══════ TRANSLATE panel ═══════ -->
+    <div class="tutor-panel" id="panel-translate">
+        <div class="translate-container">
+            <div class="translate-pane">
+                <div class="translate-header">
+                    <select id="translate-source-lang"></select>
+                    <button onclick="swapTranslateLangs()" class="swap-btn" title="Swap languages">⇄</button>
+                    <select id="translate-target-lang"></select>
+                </div>
+                <div class="translate-boxes">
+                    <div class="translate-box-wrap">
+                        <label class="translate-box-label">Source</label>
+                        <textarea id="translate-input" rows="5" placeholder="Enter text or click 🎤 to speak..."></textarea>
+                        <div class="translate-box-actions">
+                            <button id="translate-mic-btn" onclick="translateVoiceInput()" title="Record your voice and transcribe">🎤 Speak</button>
+                            <button onclick="speakTranslation('source')" title="Read the source text aloud">🔊 Listen</button>
+                            <button onclick="clearTranslateInput()" title="Clear input">✕</button>
+                        </div>
+                    </div>
+                    <div class="translate-box-wrap">
+                        <label class="translate-box-label">Translation</label>
+                        <div id="translate-output" class="translate-output-text">Translation will appear here</div>
+                        <div class="translate-box-actions">
+                            <button onclick="speakTranslation('target')" title="Read the translation aloud">🔊 Listen</button>
+                            <button onclick="copyTranslation()" title="Copy translation to clipboard">📋 Copy</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="translate-actions">
+                    <button onclick="doTranslate()" id="translate-btn">🔄 Translate</button>
+                </div>
+            </div>
+            <div id="translate-history" class="translate-history"></div>
+        </div>
+    </div>
+
+    <!-- ═══════ STATS panel ═══════ -->
+    <div class="tutor-panel" id="panel-stats">
+        <div id="stats-grid" class="stats-grid"></div>
+        <div style="margin-top:1.5rem;">
+            <button onclick="generateAppraisal()" style="background:#e94560;color:white;border:none;padding:0.5rem 1.2rem;border-radius:0.5rem;cursor:pointer;font-size:0.85rem;">📊 Generate Appraisal</button>
+        </div>
+        <div id="appraisal-content" style="margin-top:1rem;"></div>
+    </div>
+
+    <!-- Toast -->
+    <div class="toast" id="toast"></div>
+
+    <!-- Shared JS (auth, utils, TTS) -->
+    <script src="/static/js/state.js"></script>
+    <script src="/static/js/utils.js"></script>
+    <script src="/static/js/auth.js"></script>
+    <script src="/static/js/tts.js"></script>
+    <script src="/static/js/audio.js"></script>
+
+    <!-- Tutor JS -->
+    <script src="/static/js/tutor-state.js"></script>
+    <script src="/static/js/tutor-sessions.js"></script>
+    <script src="/static/js/tutor-chat.js"></script>
+    <script src="/static/js/tutor-lessons.js"></script>
+    <script src="/static/js/tutor-vocab.js"></script>
+    <script src="/static/js/tutor-quiz.js"></script>
+    <script src="/static/js/tutor-translate.js"></script>
+    <script src="/static/js/tutor-stats.js"></script>
+
+    <!-- Tutor init -->
+    <script>
+    // ── Tutor model selector ──
+    const tutorModelSelect = document.getElementById('tutor-model-select');
+    const tutorModelInfo = document.getElementById('tutor-model-info');
+
+    async function loadTutorModels() {
+        try {
+            const resp = await fetch('/models', { headers: tutorAuthHeaders() });
+            const data = await resp.json();
+            tutorModelSelect.innerHTML = '';
+            data.models.forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m.name;
+                opt.textContent = m.name + ' (' + m.params + ', ' + m.size_gb + ' GB)';
+                const litellmName = 'ollama/' + m.name;
+                if (litellmName === data.current || m.name === data.current) {
+                    opt.selected = true;
+                    tutorModelInfo.textContent = m.family;
+                }
+                tutorModelSelect.appendChild(opt);
+            });
+        } catch (e) {
+            tutorModelSelect.innerHTML = '<option>error loading models</option>';
+        }
+    }
+
+    tutorModelSelect.addEventListener('change', async () => {
+        const chosen = tutorModelSelect.value;
+        tutorModelSelect.disabled = true;
+        tutorModelInfo.textContent = 'switching...';
+        try {
+            const resp = await fetch('/model', {
+                method: 'POST',
+                headers: tutorJsonHeaders(),
+                body: JSON.stringify({ model: chosen }),
+            });
+            if (resp.ok) {
+                const data = await resp.json();
+                tutorModelInfo.textContent = 'active: ' + data.model;
+                tutorShowToast('Model switched to ' + data.model);
+            } else {
+                const err = await resp.json();
+                tutorModelInfo.textContent = 'switch failed';
+                tutorShowToast('Switch failed: ' + (err.detail || 'unknown error'));
+            }
+        } catch (e) {
+            tutorModelInfo.textContent = 'switch failed';
+            tutorShowToast('Connection error');
+        } finally { tutorModelSelect.disabled = false; }
+    });
+
+    (async function initTutor() {
+        // Check auth config
+        try {
+            const r = await fetch('/auth/config');
+            const cfg = await r.json();
+            inviteRequired = cfg.invite_required;
+        } catch (e) { /* proceed */ }
+
+        // Validate stored token
+        const token = localStorage.getItem('authToken');
+        if (token) {
+            try {
+                const r = await fetch('/auth/me', { headers: { Authorization: 'Bearer ' + token } });
+                if (!r.ok) {
+                    setAuthState(null, null);
+                }
+            } catch (e) {
+                setAuthState(null, null);
+            }
+        }
+        updateAuthUI();
+
+        // If not logged in, force the login modal open
+        if (!authUser) {
+            openAuthModal('login');
+        } else {
+            loadTutorModels();
+        }
+
+        // Voice list for TTS
+        if (typeof loadVoices === 'function') loadVoices();
+
+        // Sync speech recognition language to initial target language
+        document.getElementById('tutor-target-lang').dispatchEvent(new Event('change'));
+    })();
+
+    // Enter key sends message in chat
+    document.getElementById('tutor-input').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendTutorMessage();
+        }
+    });
+
+    // Auto-resize textarea
+    document.getElementById('tutor-input').addEventListener('input', function () {
+        this.style.height = 'auto';
+        this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+    });
+
+    // Voice select change handler
+    document.getElementById('voice-select').addEventListener('change', function () {
+        selectedVoiceName = this.value;
+        localStorage.setItem('ttsVoice', selectedVoiceName);
+    });
+
+    // Auto-set speech recognition language from target language & reload vocab
+    document.getElementById('tutor-target-lang').addEventListener('change', function () {
+        const langMap = {
+            French: 'fr', German: 'de', Spanish: 'es', Italian: 'it',
+            Portuguese: 'pt', Dutch: 'nl', Russian: 'ru', Chinese: 'zh',
+            Japanese: 'ja', Romanian: 'ro', Korean: 'ko', Arabic: 'ar',
+            Turkish: 'tr', Polish: 'pl', Swedish: 'sv', Greek: 'el', Hindi: 'hi',
+        };
+        const code = langMap[this.value];
+        if (code) {
+            const langSel = document.getElementById('lang-select');
+            for (const opt of langSel.options) {
+                if (opt.value === code) { opt.selected = true; break; }
+            }
+        }
+        // Reload vocabulary for the new language
+        if (typeof loadVocabulary === 'function') loadVocabulary();
+    });
+    </script>
+</body>
+</html>

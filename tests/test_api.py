@@ -291,7 +291,11 @@ class TestTTSSpeak:
 class TestTranscribe:
     def test_returns_text(self, client, auth_headers, monkeypatch):
         mock_model = MagicMock()
-        mock_model.transcribe.return_value = {"text": "Hello from whisper"}
+        mock_model.transcribe.return_value = {
+            "text": "Hello from whisper",
+            "language": "en",
+            "segments": [{"text": "Hello from whisper", "no_speech_prob": 0.05, "avg_logprob": -0.3}],
+        }
         monkeypatch.setattr("researcher.routes.speech._get_whisper", lambda: mock_model)
 
         # Create a minimal fake audio file
@@ -302,17 +306,123 @@ class TestTranscribe:
 
     def test_language_param_forwarded(self, client, auth_headers, monkeypatch):
         mock_model = MagicMock()
-        mock_model.transcribe.return_value = {"text": "Bonjour"}
+        mock_model.transcribe.return_value = {
+            "text": "Bonjour",
+            "language": "fr",
+            "segments": [{"text": "Bonjour", "no_speech_prob": 0.1, "avg_logprob": -0.3}],
+        }
         monkeypatch.setattr("researcher.routes.speech._get_whisper", lambda: mock_model)
 
         files = {"file": ("test.webm", b"\x00" * 100, "audio/webm")}
         resp = client.post("/transcribe?language=fr", files=files, headers=auth_headers)
         assert resp.status_code == 200
-        # Verify the language was passed through
-        mock_model.transcribe.assert_called_once()
-        call_kwargs = mock_model.transcribe.call_args
-        assert call_kwargs[1]["language"] == "fr" or call_kwargs[0][1] == "fr" or \
-               any("fr" in str(a) for a in call_kwargs)
+        kwargs = mock_model.transcribe.call_args[1]
+        assert kwargs["language"] == "fr"
+
+    def test_auto_detect_omits_language(self, client, auth_headers, monkeypatch):
+        """language=auto lets Whisper detect the spoken language."""
+        mock_model = MagicMock()
+        mock_model.transcribe.return_value = {
+            "text": "Hello",
+            "language": "en",
+            "segments": [{"text": "Hello", "no_speech_prob": 0.05, "avg_logprob": -0.3}],
+        }
+        monkeypatch.setattr("researcher.routes.speech._get_whisper", lambda: mock_model)
+
+        files = {"file": ("test.webm", b"\x00" * 100, "audio/webm")}
+        resp = client.post("/transcribe?language=auto", files=files, headers=auth_headers)
+        assert resp.status_code == 200
+        kwargs = mock_model.transcribe.call_args[1]
+        assert "language" not in kwargs
+
+    def test_filters_hallucinated_segments(self, client, auth_headers, monkeypatch):
+        """Segments with high no_speech_prob are filtered out (anti-hallucination)."""
+        mock_model = MagicMock()
+        mock_model.transcribe.return_value = {
+            "text": "Real speech. Hallucinated noise.",
+            "language": "en",
+            "segments": [
+                {"text": "Real speech.", "no_speech_prob": 0.1, "avg_logprob": -0.3},
+                {"text": "Hallucinated noise.", "no_speech_prob": 0.9, "avg_logprob": -0.3},
+            ],
+        }
+        monkeypatch.setattr("researcher.routes.speech._get_whisper", lambda: mock_model)
+
+        files = {"file": ("test.webm", b"\x00" * 100, "audio/webm")}
+        resp = client.post("/transcribe?language=en", files=files, headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.json()["text"] == "Real speech."
+
+    def test_filters_script_mismatch(self, client, auth_headers, monkeypatch):
+        """Segments with wrong Unicode script (e.g. CJK in French) are filtered."""
+        mock_model = MagicMock()
+        mock_model.transcribe.return_value = {
+            "text": "Bonjour \u304b\u3063\u305f",
+            "language": "fr",
+            "segments": [
+                {"text": "Bonjour", "no_speech_prob": 0.1, "avg_logprob": -0.3},
+                {"text": "\u304b\u3063\u305f\u3002", "no_speech_prob": 0.1, "avg_logprob": -0.3},
+            ],
+        }
+        monkeypatch.setattr("researcher.routes.speech._get_whisper", lambda: mock_model)
+
+        files = {"file": ("test.webm", b"\x00" * 100, "audio/webm")}
+        resp = client.post("/transcribe?language=fr", files=files, headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.json()["text"] == "Bonjour"
+
+    def test_filters_low_confidence_segments(self, client, auth_headers, monkeypatch):
+        """Segments with very low avg_logprob are filtered out."""
+        mock_model = MagicMock()
+        mock_model.transcribe.return_value = {
+            "text": "Real. Garbage.",
+            "language": "en",
+            "segments": [
+                {"text": "Real.", "no_speech_prob": 0.1, "avg_logprob": -0.5},
+                {"text": "Garbage.", "no_speech_prob": 0.1, "avg_logprob": -1.5},
+            ],
+        }
+        monkeypatch.setattr("researcher.routes.speech._get_whisper", lambda: mock_model)
+
+        files = {"file": ("test.webm", b"\x00" * 100, "audio/webm")}
+        resp = client.post("/transcribe?language=en", files=files, headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.json()["text"] == "Real."
+
+    def test_all_silence_returns_empty(self, client, auth_headers, monkeypatch):
+        """When all segments are silence/noise, return empty text."""
+        mock_model = MagicMock()
+        mock_model.transcribe.return_value = {
+            "text": "Thank you for watching.",
+            "language": "en",
+            "segments": [
+                {"text": "Thank you for watching.", "no_speech_prob": 0.95, "avg_logprob": -0.3},
+            ],
+        }
+        monkeypatch.setattr("researcher.routes.speech._get_whisper", lambda: mock_model)
+
+        files = {"file": ("test.webm", b"\x00" * 100, "audio/webm")}
+        resp = client.post("/transcribe?language=en", files=files, headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.json()["text"] == ""
+
+    def test_anti_hallucination_params(self, client, auth_headers, monkeypatch):
+        """Verify condition_on_previous_text=False is passed to prevent loops."""
+        mock_model = MagicMock()
+        mock_model.transcribe.return_value = {
+            "text": "OK",
+            "language": "en",
+            "segments": [{"text": "OK", "no_speech_prob": 0.0, "avg_logprob": -0.3}],
+        }
+        monkeypatch.setattr("researcher.routes.speech._get_whisper", lambda: mock_model)
+
+        files = {"file": ("test.webm", b"\x00" * 100, "audio/webm")}
+        client.post("/transcribe?language=en", files=files, headers=auth_headers)
+
+        kwargs = mock_model.transcribe.call_args[1]
+        assert kwargs["condition_on_previous_text"] is False
+        assert kwargs["no_speech_threshold"] == 0.6
+        assert kwargs["compression_ratio_threshold"] == 2.4
 
 
 # ---------------------------------------------------------------------------

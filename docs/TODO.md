@@ -105,3 +105,30 @@
 - [x] Add tutor Pydantic models (`tutor/models.py`)
 - [x] Register tutor in `main.py` (lifespan, routes)
 - [x] Add tutor tests (`tests/test_tutor.py`) — 24 tests, all passing
+
+## v2.1.0 — LLM Parameter Panels (DONE)
+
+- [x] Add configurable LLM params to TutorCrew and ComposerCrew (get/update methods)
+- [x] Add DB migration for `tutor_llm_params` and `composer_llm_params` columns
+- [x] Add backend routes: GET/POST/reset for `/tutor/llm-params` and `/composer/llm-params`
+- [x] Create reusable `page-settings.js` settings panel module
+- [x] Add settings panels to tutor.html and composer.html
+- [x] Model switch recreates ComposerCrew and TutorCrew with saved params
+
+## v2.2.0 — Composer Quality Improvements
+
+- [ ] Longer scores: increase minimum measure count, encourage 16-32 measure compositions
+- [ ] Better musical variety: richer chord progressions (beyond I-IV-V-I), more progression styles
+- [ ] Bass staff reliability: ensure two-voice (treble+bass) output consistently
+- [ ] Context window optimization: reduce token overhead so model can output more notes
+- [ ] Include music theory knowledge in LLM context (counterpoint rules, voice leading)
+
+## v3.0.0 — Music Tutor
+
+- [ ] Design music theory tutor agent:
+  - [ ] Teach scales, intervals, chords, progressions, form
+  - [ ] Interactive exercises: identify intervals, build chords, harmonize melodies
+  - [ ] Grade student answers with detailed explanations
+  - [ ] Progressive curriculum from beginner to advanced
+- [ ] Integrate with composer: tutor can generate example scores
+- [ ] Add ear training exercises with audio playback

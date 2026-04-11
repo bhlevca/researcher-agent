@@ -1,0 +1,110 @@
+compose_chat_task:
+  description: >
+    You are collaborating with a musician/composer.
+    Project defaults: {genre} style, {key_signature}, {time_signature} at {tempo} BPM.
+
+    Conversation context:
+    {context}
+
+    User's message: "{message}"
+
+    Respond helpfully. If the user asks about music theory, explain clearly.
+    If they ask you to compose, produce a JSON score.
+
+    GENRE RULE: Use {genre} style UNLESS the user explicitly requests a
+    different style in their message (e.g. "bossa nova", "jazz").
+    Pass the correct style to CompositionPrep.
+
+    MANDATORY TOOL WORKFLOW for composing:
+    Step 1: Call CompositionPrep ONCE (pass the correct style).
+    Step 2: STOP calling tools. Write "Final Answer:" with the complete JSON score.
+    Do NOT call any tool more than once.
+    Compose 16 measures unless the user specifies otherwise.
+
+    COMPOSITION APPROACH: Follow the BAR-BY-BAR ROADMAP from the tool output.
+    Create a MOTIF in bars 1-2, then develop it using the techniques provided.
+    Imitate the EXAMPLE BARS for genre-authentic rhythm and voicing.
+  expected_output: >
+    A helpful response about music composition. If notation was requested,
+    include a JSON score object. NEVER output XML.
+  agent: music_composer
+
+compose_score_task:
+  description: >
+    Compose a musical score based on this description:
+
+    "{description}"
+
+    Parameters:
+    - Genre/Style: {genre} {style}
+    - Key: {key_signature}
+    - Time signature: {time_signature}
+    - Tempo: {tempo} BPM
+    - Instruments: {instruments}
+    - Length: {measures} measures
+
+    MANDATORY TOOL WORKFLOW:
+    Step 1: Call CompositionPrep ONCE (use the genre/style above).
+    Step 2: STOP calling tools. Write "Final Answer:" with the complete
+    JSON score filled with {measures} measures of composed music.
+    Do NOT call any tool more than once.
+
+    Output the JSON score. Write ALL {measures} measures.
+    Follow the BAR-BY-BAR ROADMAP from the tool output.
+    Create a MOTIF in bars 1-2, then develop it using the techniques provided.
+    Imitate the EXAMPLE BARS for genre-authentic rhythm and voicing.
+    Before the JSON, briefly describe the composition's form and harmonic approach.
+  expected_output: >
+    A brief compositional description in markdown followed by a complete
+    JSON score object with {measures} measures for each instrument.
+    NEVER output XML.
+  agent: music_composer
+
+harmonize_task:
+  description: >
+    Harmonize the following melody:
+
+    {melody}
+
+    Style: {style}
+    Key: {key_signature}
+    Time signature: {time_signature}
+
+    Provide:
+    1. **Chord Analysis** — Roman numeral analysis of your harmonization
+    2. **Chord Symbols** — Standard chord symbols above the staff
+    3. **Voice Leading** — Explain your voice-leading decisions
+    4. **Full Score** — Complete JSON score object with the melody and
+       harmony parts as a JSON score object
+    5. **Alternative Harmonizations** — Suggest 2-3 reharmonization options
+
+    Output the score as JSON, NEVER as XML.
+  expected_output: >
+    A detailed harmonization analysis in markdown with chord analysis,
+    voice-leading explanations, and a complete JSON score object.
+    Include alternative harmonization suggestions. NEVER output XML.
+  agent: music_composer
+
+analyze_task:
+  description: >
+    Analyze the following musical content:
+
+    {content}
+
+    Provide a comprehensive musical analysis including:
+    1. **Form Analysis** — Overall structure (e.g., ABA, sonata, 12-bar blues)
+    2. **Harmonic Analysis** — Roman numeral analysis, key areas, modulations
+    3. **Melodic Analysis** — Motifs, sequences, contour, range
+    4. **Rhythmic Analysis** — Patterns, syncopation, meter
+    5. **Texture & Voicing** — Part writing, doublings, spacing
+    6. **Style & Context** — Genre characteristics, influences
+    7. **Strengths** — What works well in this passage
+    8. **Suggestions** — Concrete improvements or variations to consider
+
+    If the input includes MusicXML, parse and analyze the actual notation.
+    Use markdown tables for chord progressions and form diagrams.
+  expected_output: >
+    A detailed, structured musical analysis in markdown with all 8 sections.
+    Include specific measure references and musical examples where helpful.
+    Be precise with music theory terminology.
+  agent: music_composer

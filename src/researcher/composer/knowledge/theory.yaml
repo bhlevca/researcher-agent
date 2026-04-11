@@ -1,0 +1,93 @@
+# ── Universal Composition Theory ─────────────────────────────────
+# Rules, constraints, and techniques applicable across ALL genres.
+# Injected into every CompositionPrep output.
+
+voice_leading:
+  rules:
+    - "Resolve chord 7ths by step downward."
+    - "Leading tone (scale degree 7) resolves UP to tonic."
+    - "Move each voice to the nearest chord tone (minimal motion)."
+    - "Avoid parallel 5ths and parallel octaves between any two voices."
+    - "Contrary motion is strongest; oblique motion is safe; parallel 3rds/6ths are fine."
+    - "Bass may leap freely (4ths, 5ths, octaves); upper voices prefer steps."
+    - "Keep voices within their comfortable range; avoid crossing."
+  spacing:
+    - "Adjacent upper voices should be within an octave of each other."
+    - "Bass can be more than an octave from tenor."
+
+cadences:
+  authentic: "V -> I (both in root position for Perfect Authentic Cadence)"
+  half: "any chord -> V (resting point, question)"
+  plagal: "IV -> I (amen cadence)"
+  deceptive: "V -> vi (surprise resolution)"
+  placement:
+    - "Half cadence at bar 4 or 8 (phrase midpoint)."
+    - "Authentic cadence at bar 8 or 16 (phrase end)."
+    - "Deceptive cadence before final phrase for surprise."
+
+consonance_dissonance:
+  perfect_consonance: ["unison", "P5", "P8"]
+  imperfect_consonance: ["m3", "M3", "m6", "M6"]
+  mild_dissonance: ["M2", "m7"]
+  sharp_dissonance: ["m2", "M7", "tritone"]
+  treatment: "Dissonances should resolve by step to a consonance. Approach by step (passing tone) or by common tone (suspension)."
+
+motif_development:
+  techniques:
+    repetition: "Repeat the motif exactly at the same pitch."
+    sequence: "Repeat the motif transposed up or down by step (most common: up M2 or down m2)."
+    inversion: "Flip intervals (ascending 3rd becomes descending 3rd)."
+    retrograde: "Play motif backwards."
+    fragmentation: "Use only the first 2-3 notes of the motif."
+    augmentation: "Double all durations (quarter -> half)."
+    diminution: "Halve all durations (quarter -> eighth)."
+    extension: "Add notes to lengthen the motif."
+  workflow:
+    - "Bars 1-2: Expose the MOTIF (2-bar melodic idea, 4-8 notes)."
+    - "Bars 3-4: SEQUENCE the motif (transpose up or down by step)."
+    - "Bars 5-6: VARY the motif (change rhythm or last 2 notes)."
+    - "Bars 7-8: CADENTIAL phrase (approach half cadence on V)."
+    - "Bars 9-10: CONTRAST — new idea or inverted motif."
+    - "Bars 11-12: DEVELOP — fragment or combine motif elements."
+    - "Bars 13-14: RECAPITULATE — return to original motif."
+    - "Bars 15-16: CLIMAX and RESOLVE — highest note, then authentic cadence to tonic."
+
+phrase_structure:
+  basic: "4-bar phrase: 2 bars of idea + 2 bars of response."
+  period: "8-bar period: antecedent (ends on HC) + consequent (ends on PAC)."
+  sentence: "8-bar sentence: 2-bar idea + 2-bar repetition + 4-bar continuation/cadence."
+  double_period: "16-bar double period: two 8-bar periods, second ending more conclusively."
+
+melodic_principles:
+  contour:
+    - "Arc shape: rise to a climax note, then descend to resolve."
+    - "Each phrase should have ONE highest note (climax), not repeated."
+    - "End phrases on chord tones (root, 3rd, 5th)."
+  intervals:
+    - "70% steps (2nds), 25% small leaps (3rds), 5% large leaps (4ths+)."
+    - "After a large leap, reverse direction by step (leap recovery)."
+    - "Avoid augmented intervals melodically (aug2, aug4)."
+  rhythm:
+    - "Use at most 3-4 different note values per piece."
+    - "Longer notes on strong beats (1, 3 in 4/4), shorter on weak."
+    - "Syncopation: occasionally place emphasis on 'and' of beats 2 or 4."
+
+bass_independence:
+  rules:
+    - "Bass should NOT mirror the treble melody — it provides harmonic foundation."
+    - "Bass commonly plays: roots on beat 1, then moves to 5th or passing tone."
+    - "Walking bass: stepwise quarter notes connecting chord roots (jazz/blues)."
+    - "Alberti bass: broken chord in repeated pattern (C-G-E-G) for classical."
+    - "Oom-pah: root on beats 1&3, chord on 2&4 (waltz, ragtime, march)."
+    - "Contrary motion with melody is ideal — when melody rises, bass descends."
+
+harmonic_rhythm:
+  rules:
+    - "Default: one chord per bar (simplest)."
+    - "Variation: two chords per bar at cadences for momentum."
+    - "Slow sections: one chord per two bars."
+    - "Climax: accelerate harmonic rhythm (more chords per bar)."
+
+dynamics_expression:
+  arc: "Start mp, build to f at climax (bar 12-13), diminish to p at end."
+  phrase: "Each 4-bar phrase has a small crescendo-diminuendo arc."

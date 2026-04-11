@@ -26,6 +26,15 @@ wheels = [
 ]
 
 [[package]]
+name = "aiofiles"
+version = "24.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/0b/03/a88171e277e8caa88a4c77808c20ebb04ba74cc4681bf1e9416c862de237/aiofiles-24.1.0.tar.gz", hash = "sha256:22a075c9e5a3810f0c2e48f3008c94d68c65d763b9b03857924c99e57355166c", size = 30247, upload-time = "2024-06-24T11:02:03.584Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a5/45/30bb92d442636f570cb5651bc661f52b610e2eec3f891a5dc3a4c3667db0/aiofiles-24.1.0-py3-none-any.whl", hash = "sha256:b4ec55f4195e3eb5d7abd1bf7e061763e864dd4954231fb8539a0ef8bb8260e5", size = 15896, upload-time = "2024-06-24T11:02:01.529Z" },
+]
+
+[[package]]
 name = "aiohappyeyeballs"
 version = "2.6.1"
 source = { registry = "https://pypi.org/simple" }
@@ -499,9 +508,10 @@ wheels = [
 
 [[package]]
 name = "crewai"
-version = "1.12.2"
+version = "1.14.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
+    { name = "aiofiles" },
     { name = "aiosqlite" },
     { name = "appdirs" },
     { name = "chromadb" },
@@ -532,9 +542,9 @@ dependencies = [
     { name = "tomli-w" },
     { name = "uv" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/99/a0/a218f87cc2a1cf85f5906abba3f043fca9c1942c61b422dfa967c5708faa/crewai-1.12.2.tar.gz", hash = "sha256:7ca4a11499ca3c8ff5f9df138134ec90a9cdff66696e110fb80ab1b360e706be", size = 7721514, upload-time = "2026-03-26T06:55:26.291Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/3b/17/508e239669b1d5349eb816fdc06800d34f1d9c95b0f0c780da78d58db3a3/crewai-1.14.1.tar.gz", hash = "sha256:7e1a22b41f673a2f157e802a258e948d22eb8fc5a2411add81efa4c0b295a3a8", size = 7793182, upload-time = "2026-04-08T17:57:51.537Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/15/c7/f1e5c9fa25020a6a784ab37a445295cbeb6490df11e1c23377bb92bf4250/crewai-1.12.2-py3-none-any.whl", hash = "sha256:eb0d22c779b0fa50a67bba308e9c2b4e3c12192de7937d47931fa238f53e8134", size = 967458, upload-time = "2026-03-26T06:55:23.935Z" },
+    { url = "https://files.pythonhosted.org/packages/a2/3c/c6df7b10e877a42cf1ec43323fd26668d1fb97241bbb3be640f3c6d5b19f/crewai-1.14.1-py3-none-any.whl", hash = "sha256:e33b9bd57f45f6f3f9d15fd583a46bc9cd62afb5a8c3b63fa6dab9e6bd337937", size = 1044196, upload-time = "2026-04-08T17:57:49.373Z" },
 ]
 
 [package.optional-dependencies]
@@ -544,12 +554,11 @@ tools = [
 
 [[package]]
 name = "crewai-tools"
-version = "1.12.2"
+version = "1.14.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "beautifulsoup4" },
     { name = "crewai" },
-    { name = "docker" },
     { name = "pymupdf" },
     { name = "python-docx" },
     { name = "pytube" },
@@ -557,9 +566,9 @@ dependencies = [
     { name = "tiktoken" },
     { name = "youtube-transcript-api" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c7/92/195f7c0858c5c7f9fe685d4fb78e0b62b87a3db1b8b024d301ed5abb80a7/crewai_tools-1.12.2.tar.gz", hash = "sha256:da7b681eea02a5858c0f4536eb07582ed40af66c05ef5ff2be802e95bd9fcdf2", size = 866771, upload-time = "2026-03-26T06:55:31.845Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e1/65/3528c77f327b699e18ff90a0dddc5bb9bf6ab8f6392945fdcc5196f0c776/crewai_tools-1.14.1.tar.gz", hash = "sha256:2e24e062aa37acf93a7cdec6e514ecee08c7819a2f2f51c9ab85d172376fe691", size = 866279, upload-time = "2026-04-08T17:57:58.16Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d9/2e/c98a3dc60b352eb1e3330cc02ca37afc7df4a289bdf681a9321198b8d378/crewai_tools-1.12.2-py3-none-any.whl", hash = "sha256:1913d20d2e6a1c78bcd310c1c1d7a8502c61d82f716cd8bf49a0ce9ce2c35d7c", size = 781728, upload-time = "2026-03-26T06:55:29.983Z" },
+    { url = "https://files.pythonhosted.org/packages/48/a5/f517e288d91cd9ca61541d9873af113e9e6ce2a8727c26ce797c47778c62/crewai_tools-1.14.1-py3-none-any.whl", hash = "sha256:ad0c6c2145c9958afd7c70e6160911acc390c2256485549e29cdcf4d977854a2", size = 779912, upload-time = "2026-04-08T17:57:56.358Z" },
 ]
 
 [[package]]
@@ -768,20 +777,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/fc/f8/98eea607f65de6527f8a2e8885fc8015d3e6f5775df186e443e0964a11c3/distro-1.9.0.tar.gz", hash = "sha256:2fa77c6fd8940f116ee1d6b94a2f90b13b5ea8d019b98bc8bafdcabcdd9bdbed", size = 60722, upload-time = "2023-12-24T09:54:32.31Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/12/b3/231ffd4ab1fc9d679809f356cebee130ac7daa00d6d6f3206dd4fd137e9e/distro-1.9.0-py3-none-any.whl", hash = "sha256:7bffd925d65168f85027d8da9af6bddab658135b840670a223589bc0c8ef02b2", size = 20277, upload-time = "2023-12-24T09:54:30.421Z" },
-]
-
-[[package]]
-name = "docker"
-version = "7.1.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "pywin32", marker = "sys_platform == 'win32'" },
-    { name = "requests" },
-    { name = "urllib3" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/91/9b/4a2ea29aeba62471211598dac5d96825bb49348fa07e906ea930394a83ce/docker-7.1.0.tar.gz", hash = "sha256:ad8c70e6e3f8926cb8a92619b832b4ea5299e2831c14284663184e200546fa6c", size = 117834, upload-time = "2024-05-23T11:13:57.216Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/e3/26/57c6fb270950d476074c087527a558ccb6f4436657314bfb6cdf484114c4/docker-7.1.0-py3-none-any.whl", hash = "sha256:c96b93b7f0a746f9e77d325bcfb87422a3d8bd4f03136ae8a85b37f1898d5fc0", size = 147774, upload-time = "2024-05-23T11:13:55.01Z" },
 ]
 
 [[package]]
@@ -1483,7 +1478,7 @@ wheels = [
 
 [[package]]
 name = "lancedb"
-version = "0.30.1"
+version = "0.30.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "deprecation" },
@@ -1495,10 +1490,12 @@ dependencies = [
     { name = "tqdm" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0e/f7/2692ddedcf966497d1356ab673c50672fc6b3107bea73f57d196f8ad9fd8/lancedb-0.30.1-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:34cf0d49e755313867c04e0f3e7e4dde222e31110a60ca45ef0dc4c72d9a705d", size = 41960617, upload-time = "2026-03-20T00:51:31.703Z" },
-    { url = "https://files.pythonhosted.org/packages/73/35/c7d9b738338f41b7b0f92a45860426d4f2565d798721cb09d17c1f3beab9/lancedb-0.30.1-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:f21d794a506ff2bba77ba7eba12a476f518c62c78803af765ebd35b83f9097a3", size = 43862793, upload-time = "2026-03-20T00:59:00.22Z" },
-    { url = "https://files.pythonhosted.org/packages/fd/fc/5a4547a140b820d19e282005a4b1fea025ac39f3f284231e8e226cc90e48/lancedb-0.30.1-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:2eaebfa5add91c0185be4baa0c1a714877e203340a116102b12ad5e60bf36209", size = 43883183, upload-time = "2026-03-20T01:00:11.763Z" },
-    { url = "https://files.pythonhosted.org/packages/c4/f0/04895c6dc7b9fb797fb9243aa9e9aede54d1eef307bdf9562bbc0b4be5d7/lancedb-0.30.1-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:7beb23b096b7798f65aac6203deab0e4b4c9d541050f17bc38312e6cf143fafd", size = 46942257, upload-time = "2026-03-20T01:02:58.912Z" },
+    { url = "https://files.pythonhosted.org/packages/13/2f/1577778ad57dba0c55dc13d87230583e14541c82562483ecf8bb2f8e8a00/lancedb-0.30.0-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:be2a9a43a65c330ccfd08115afb26106cd8d16788522fe7693d3a1f4e01ad321", size = 41959907, upload-time = "2026-03-16T23:03:04.551Z" },
+    { url = "https://files.pythonhosted.org/packages/f1/ca/8c2a04ce499a2a97d1a0de2b7e84fa8166f988a9a495e1ada860110489c2/lancedb-0.30.0-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:be6a4ba2a1799a426cbf2ba5ea2559a7389a569e9a31f2409d531ceb59d42f35", size = 43873070, upload-time = "2026-03-16T23:11:01.352Z" },
+    { url = "https://files.pythonhosted.org/packages/16/68/e01bf7837454a5ce9e2f6773905e07b09a949bc88136c0773c8166ed7729/lancedb-0.30.0-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:0a967ec05f9930770aeb077bc5579769b1bedf559fcd03a592d9644084625918", size = 46891197, upload-time = "2026-03-16T23:14:39.18Z" },
+    { url = "https://files.pythonhosted.org/packages/43/d1/9085ad17abd98f3a180d7860df3190b2d76f99f533c76d7c7494cec4139d/lancedb-0.30.0-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:05c66f40f7d4f6f24208e786c40f84b87b1b8e55505305849dd3fed3b78431a3", size = 43877660, upload-time = "2026-03-16T23:11:00.837Z" },
+    { url = "https://files.pythonhosted.org/packages/ea/69/504ee25c57c3f23c80276b5b7b5e4c0f98a5197a7e9e51d3c50500d2b53a/lancedb-0.30.0-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:bdcd27d98554ed11b6f345b14d1307b0e2332d5654767e9ee2e23d9b2d6513d1", size = 46932144, upload-time = "2026-03-16T23:15:00.474Z" },
+    { url = "https://files.pythonhosted.org/packages/2c/85/d5550f22023e672af1945394f7a06a578fcab2980ecc6666acef3428a771/lancedb-0.30.0-cp39-abi3-win_amd64.whl", hash = "sha256:4751ff0446b90be4d4dccfe05f6c105f403a05f3b8531ab99eedc1c656aca950", size = 51121310, upload-time = "2026-03-16T23:43:23.89Z" },
 ]
 
 [[package]]
@@ -3517,7 +3514,7 @@ wheels = [
 
 [[package]]
 name = "researcher-agent"
-version = "0.5.0"
+version = "1.6.0"
 source = { virtual = "." }
 dependencies = [
     { name = "accelerate" },
@@ -3557,7 +3554,7 @@ requires-dist = [
     { name = "accelerate" },
     { name = "aiosqlite" },
     { name = "bcrypt" },
-    { name = "crewai", extras = ["tools"], specifier = ">=0.100.0" },
+    { name = "crewai", extras = ["tools"], specifier = ">=1.14.0" },
     { name = "ddgs" },
     { name = "diffusers" },
     { name = "edge-tts" },

@@ -14,6 +14,26 @@ function jsonAuthHeaders() {
     return { 'Content-Type': 'application/json', ...authHeaders() };
 }
 
+async function unloadModel() {
+    try {
+        const resp = await fetch('/model/unload', {
+            method: 'POST', headers: jsonAuthHeaders(),
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+            const msg = 'Model ' + data.model + ' unloaded from GPU';
+            if (typeof showToast === 'function') showToast(msg);
+            else if (typeof tutorShowToast === 'function') tutorShowToast(msg);
+            else if (typeof composerShowToast === 'function') composerShowToast(msg);
+            else alert(msg);
+        } else {
+            alert(data.detail || 'Failed to unload model');
+        }
+    } catch (e) {
+        alert('Failed to unload model: ' + e.message);
+    }
+}
+
 function setAuthState(token, user) {
     authToken = token;
     authUser = user;

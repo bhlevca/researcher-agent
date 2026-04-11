@@ -45,21 +45,30 @@
 - [ ] Add `ZIMAGE_HIRES` env var or API param to opt into large generation
 - [ ] Add tests for tile stitching and overlap blending
 
-## v1.6.0 — Music Composer
+## v1.6.0 — Music Composer (DONE)
 
-- [ ] Research music generation models:
-  - [ ] Meta MusicGen (text-to-music, MIT license, runs on GPU)
-  - [ ] Riffusion (Stable Diffusion fine-tuned on spectrograms)
-  - [ ] AudioCraft / MusicGen-Melody (melody-conditioned generation)
-- [ ] Implement music generation backend:
-  - [ ] Lazy-load model with same VRAM management pattern as ZImage
-  - [ ] Ollama unload/reload around inference
-  - [ ] Generate audio from text prompt
-  - [ ] Save as WAV/MP3, serve from `/static/generated/`
-- [ ] Add CrewAI tool: `GenerateMusic` (prompt → audio file)
-- [ ] Add audio player support in frontend
-- [ ] Add music generation tests
-- [ ] Score generation and compatibility with MuseScore that will allow also midi audio play
+- [x] Implement composer module (`src/researcher/composer/`):
+  - [x] `crew.py` — ComposerCrew orchestrator (compose, arrange, harmonize, analyze modes)
+  - [x] `models.py` — Pydantic request models for all composer operations
+  - [x] `storage.py` — SQLite persistence for composer sessions and saved compositions
+  - [x] `tools.py` — CrewAI tools: scale_reference, instrument_range, chord_progression_builder, musicxml_template
+  - [x] `config/agents.yaml` — Music composer agent with MusicXML reference and 13 mandatory rules
+  - [x] `config/tasks.yaml` — Tasks for compose_chat, compose_score, harmonize, analyze
+- [x] Implement MusicXML postprocessor (`musicxml_fix.py`):
+  - [x] Phase 1 — 16 regex pre-fixes (note-attribute stripping, garbage tag removal, truncation recovery, etc.)
+  - [x] Phase 2 — 8 ElementTree structural repairs (ensure children, deduplicate attributes, insert backups, reorder, etc.)
+  - [x] Handles qwen3.5:9b broken output patterns (attributes on `<note>`, repeated `<attributes>`, missing `<backup>`)
+- [x] Add API endpoints (`routes/composer.py`):
+  - [x] Session CRUD: GET/POST/PUT/DELETE `/composer/sessions`
+  - [x] SSE streaming: POST `/composer/chat`, `/composer/score`, `/composer/harmonize`, `/composer/analyze`
+  - [x] Composition storage: save, list, get, download MusicXML
+- [x] Register composer in `main.py` (lifespan, DB init, routes, `/composer` page)
+- [x] Implement frontend:
+  - [x] `composer.html` — Tab-based UI (Chat, Score, Harmonize, Analyze, Compositions)
+  - [x] `js/composer-chat.js`, `composer-score.js`, `composer-sessions.js`, `composer-state.js`
+  - [x] Copy/Save/CopyAll/SaveAll/Download buttons, reasoning collapsible
+- [x] Add MusicXML postprocessor tests (`tests/test_musicxml_fix.py`) — 21 tests, all passing
+- [x] Grand staff support for piano (treble+bass with `<staves>`, `<backup>`, `<staff>`, `<voice>`)
 
 
 ## v2.0.0 — Language Tutor Agent
@@ -96,3 +105,137 @@
 - [x] Add tutor Pydantic models (`tutor/models.py`)
 - [x] Register tutor in `main.py` (lifespan, routes)
 - [x] Add tutor tests (`tests/test_tutor.py`) — 24 tests, all passing
+
+## v2.1.0 — LLM Parameter Panels (DONE)
+
+- [x] Add configurable LLM params to TutorCrew and ComposerCrew (get/update methods)
+- [x] Add DB migration for `tutor_llm_params` and `composer_llm_params` columns
+- [x] Add backend routes: GET/POST/reset for `/tutor/llm-params` and `/composer/llm-params`
+- [x] Create reusable `page-settings.js` settings panel module
+- [x] Add settings panels to tutor.html and composer.html
+- [x] Model switch recreates ComposerCrew and TutorCrew with saved params
+
+## v2.2.0 — Competent Composer: Music Knowledge & Creativity
+
+### Phase 1 — Genre Knowledge Database
+- [ ] Build structured YAML knowledge files (`src/researcher/composer/knowledge/`):
+  - [ ] Per-genre composition templates (23 genres) with:
+    - [ ] Rhythmic patterns as beat grids (e.g. bossa: `bass [1, ., 2+, .] | comping [., 1+, 2, 2+]`)
+    - [ ] Typical melodic intervals and contour shapes per style
+    - [ ] Voicing templates (jazz: rootless/drop-2; classical: close/open position)
+    - [ ] Form templates (AABA, 12-bar, verse-chorus, binary, ternary, rondo)
+    - [ ] Harmonic rhythm rules (chords per bar, where changes accelerate)
+  - [ ] Universal counterpoint & voice leading rules:
+    - [ ] Interval consonance/dissonance tables
+    - [ ] Resolution rules (7ths down, leading tones up, tendency tones)
+    - [ ] Motion types with do/don't examples
+    - [ ] Cadence patterns with note-by-note examples
+  - [ ] Diatonic chord maps for ALL modes (dorian, phrygian, lydian, mixolydian, etc.)
+  - [ ] Extended chord voicings (9th, 11th, 13th, altered dominants)
+
+### Phase 2 — Motif-First Composition Workflow
+- [ ] Change agent instructions from "compose 16 bars" to structured workflow:
+  - [ ] Step 1: Create a 2-bar motif (melodic seed)
+  - [ ] Step 2: Develop motif using sequence, inversion, variation, fragmentation
+  - [ ] Step 3: Build phrase structure (antecedent/consequent, tension/release arc)
+  - [ ] Step 4: Add bass voice as independent counterpoint (not chord roots)
+- [ ] Inject bar-by-bar structural directives from form templates:
+  - [ ] e.g. "Bars 1-4: expose motif (ascending). Bars 5-8: answer (descending mirror).
+         Bar 8: half cadence. Bars 9-12: develop. Bars 13-16: climax + authentic cadence."
+
+### Phase 3 — Few-Shot Examples & Creativity Fuel
+- [ ] Add 2-4 bars of genre-authentic example measures in JSON format per style
+- [ ] Include motif development techniques as concrete note examples:
+  - [ ] Repetition, sequence (step up/down), inversion, retrograde
+  - [ ] Fragmentation, augmentation, diminution
+  - [ ] Call-and-response patterns
+- [ ] Inject curated examples into CompositionPrep output as "EXAMPLE" section
+
+### Phase 4 — Model Evaluation
+- [ ] Test gemma3:12b as composer (12B, 8.1GB, fits easily in 16GB VRAM)
+- [ ] Test mistral-small3.2:24b if gemma insufficient (24B, 15GB, tight fit)
+- [ ] A/B compare outputs: same prompt, different models, score musical quality
+- [ ] Document which model produces best composition results
+
+### Phase 5 — Advanced (Future)
+- [ ] Multi-pass composition (melody skeleton → rhythm fill → bass → dynamics)
+- [ ] Dynamics and articulation support in JSON schema + MusicXML builder
+- [ ] Modulation support (pivot chords, secondary dominants, key changes)
+- [ ] Orchestration rules (doubling, balance, register-specific colors)
+
+## v2.3.0 — Language Tutor Enhancements
+
+### Phase 1 — Spaced Repetition System (SRS)
+- [ ] Implement SM-2 algorithm in `tutor/storage.py`:
+  - [ ] Add `next_review`, `interval_days`, `ease_factor` columns to `vocabulary` table
+  - [ ] Schedule reviews based on mastery level and past performance
+  - [ ] Update intervals on correct/incorrect quiz answers
+- [ ] Add `/tutor/vocabulary/due` endpoint — returns words due for review
+- [ ] Add "Review Due (N)" button in Vocabulary tab that launches a focused quiz
+- [ ] Auto-schedule newly extracted vocabulary for first review (1 day)
+
+### Phase 2 — Semantic Answer Grading
+- [ ] Replace exact string match in quiz grading with LLM-based evaluation:
+  - [ ] Accept synonyms, alternate spellings, minor typos
+  - [ ] Partial credit scoring (0.0–1.0 instead of binary)
+  - [ ] Detailed feedback explaining why an answer is wrong
+- [ ] Update `quiz_results` schema to store float scores
+- [ ] Add grading prompt template to `tutor/config/tasks.yaml`
+
+### Phase 3 — Richer Quiz Types
+- [ ] Matching quiz: pair words with translations (drag-and-drop or numbered)
+- [ ] Sentence reordering: shuffle words, student reconstructs correct order
+- [ ] Listening comprehension: TTS plays phrase, student types what they heard
+- [ ] Cloze passages: fill gaps in a paragraph (context-dependent answers)
+- [ ] Update quiz UI to handle new question formats
+- [ ] Update quiz generation prompt to produce new formats
+
+### Phase 4 — Situational Dialogs
+- [ ] Add "situation" dialog generator:
+  - [ ] Pre-defined scenarios: restaurant, airport, hotel, doctor, shopping, directions
+  - [ ] Multi-turn roleplay with the tutor as conversation partner
+  - [ ] Inline corrections and vocabulary extraction during dialog
+- [ ] Optional scene illustration via Z-Image pipeline
+- [ ] Save dialog transcripts to lesson_plans table
+
+### Phase 5 — Lesson Export
+- [ ] Add `/tutor/lessons/{id}/export` endpoint:
+  - [ ] Markdown export (`.md`) — direct from stored content
+  - [ ] DOCX export via `python-docx` with proper formatting
+  - [ ] Include vocabulary tables and exercise sections
+- [ ] Add Download button (MD / DOCX) to Lessons tab
+
+### Phase 6 — Progress Visualization
+- [ ] Add Chart.js to tutor frontend:
+  - [ ] Vocabulary growth over time (words learned per week)
+  - [ ] Quiz score trends (line chart)
+  - [ ] Mastery distribution (pie/bar: how many words at each level 0-5)
+  - [ ] Weak areas identification (lowest-scoring topics)
+- [ ] Add `/tutor/stats/history` endpoint for time-series data
+- [ ] Integrate charts into Stats tab
+
+### Phase 7 — Structured Curriculum
+- [ ] Define topic sequences per CEFR level in YAML:
+  - [ ] A1: greetings → numbers → food → directions → time → weather
+  - [ ] A2: past tense → travel → shopping → health → hobbies
+  - [ ] B1: opinions → work → news → conditional → subjunctive
+  - [ ] B2+: idioms → formal writing → debate → literature
+- [ ] Add "Next Lesson" button that follows the curriculum path
+- [ ] Track completed topics per user per language
+- [ ] Show curriculum progress bar in Stats tab
+
+### Phase 8 — Pronunciation Scoring
+- [ ] Use Whisper transcription of student speech recordings
+- [ ] Compare transcription against expected text (word error rate / character accuracy)
+- [ ] Display per-word accuracy highlighting (correct/incorrect/missing)
+- [ ] Add pronunciation exercise mode: tutor speaks → student repeats → score
+
+## v3.0.0 — Music Tutor (Future)
+
+- [ ] Design music theory tutor agent:
+  - [ ] Teach scales, intervals, chords, progressions, form
+  - [ ] Interactive exercises: identify intervals, build chords, harmonize melodies
+  - [ ] Grade student answers with detailed explanations
+  - [ ] Progressive curriculum from beginner to advanced
+- [ ] Integrate with composer: tutor can generate example scores
+- [ ] Add ear training exercises with audio playback

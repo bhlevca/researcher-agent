@@ -174,6 +174,20 @@ async def migrate_sessions_table(db):
         await db.commit()
         logger.info("Migrated users table: added image_params column")
 
+    # Add tutor_llm_params column to users table (stores JSON)
+    if "tutor_llm_params" not in ucols:
+        await db.execute("ALTER TABLE users ADD COLUMN tutor_llm_params TEXT DEFAULT '' ")
+        await db.commit()
+        logger.info("Migrated users table: added tutor_llm_params column")
+
+    # Add composer_llm_params column to users table (stores JSON)
+    if "composer_llm_params" not in ucols:
+        await db.execute("ALTER TABLE users ADD COLUMN composer_llm_params TEXT DEFAULT '' ")
+        await db.commit()
+        logger.info("Migrated users table: added composer_llm_params column")
+
+
+
 
 # ---------------------------------------------------------------------------
 # Pydantic models

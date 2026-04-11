@@ -51,6 +51,26 @@ def register_model_routes(app):
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Cannot reach Ollama: {e}")
 
+    @app.post("/model/unload")
+    async def unload_model(request: Request):
+        """Unload the current model from GPU (free VRAM). Sends keep_alive=0 to Ollama."""
+        await get_current_user(request)
+        current = request.app.state.current_model or ""
+        model_name = current.replace("ollama/", "")
+        if not model_name:
+            raise HTTPException(status_code=400, detail="No model loaded")
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(
+                    f"{OLLAMA_BASE}/api/generate",
+                    json={"model": model_name, "keep_alive": 0, "prompt": ""},
+                )
+                resp.raise_for_status()
+            logger.info("Unloaded model %s from GPU", model_name)
+            return {"status": "unloaded", "model": model_name}
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Failed to unload model: {e}")
+
     @app.post("/model")
     async def switch_model(req: ModelRequest, request: Request):
         """Switch the active LLM model. Stores per-user preference."""
@@ -74,7 +94,30 @@ def register_model_routes(app):
             # Also switch the tutor crew model if present
             if hasattr(request.app.state, "tutor_crew"):
                 from researcher.tutor.crew import TutorCrew
-                request.app.state.tutor_crew = TutorCrew(model=new_model)
+                new_tutor = TutorCrew(model=new_model)
+                # Restore saved tutor params
+                cursor2 = await db.execute("SELECT tutor_llm_params FROM users WHERE id = ?", (user["id"],))
+                row2 = await cursor2.fetchone()
+                if row2 and row2[0]:
+                    try:
+                        new_tutor.update_llm_params(json.loads(row2[0]))
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                request.app.state.tutor_crew = new_tutor
+
+            # Also switch the composer crew model if present
+            if hasattr(request.app.state, "composer_crew"):
+                from researcher.composer.crew import ComposerCrew
+                new_composer = ComposerCrew(model=new_model)
+                # Restore saved composer params
+                cursor3 = await db.execute("SELECT composer_llm_params FROM users WHERE id = ?", (user["id"],))
+                row3 = await cursor3.fetchone()
+                if row3 and row3[0]:
+                    try:
+                        new_composer.update_llm_params(json.loads(row3[0]))
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                request.app.state.composer_crew = new_composer
 
             await db.execute(
                 "UPDATE users SET model = ? WHERE id = ?",
@@ -204,9 +247,115 @@ def register_model_routes(app):
         updated = update_image_params(dict(DEFAULT_IMAGE_PARAMS))
         db = request.app.state.db
         await db.execute(
-            "UPDATE users SET image_params = '' WHERE id = ?",
-            (user["id"],),
+            "UPDATE users SET image_params = ? WHERE id = ?",
+            (json.dumps(updated), user["id"]),
         )
         await db.commit()
         logger.info("Image params reset to defaults")
+        return {"params": updated}
+
+    # --- Tutor LLM parameters ---
+
+    @app.get("/tutor/llm-params")
+    async def get_tutor_llm_params(request: Request):
+        """Return current Tutor LLM parameters (loads from DB if available)."""
+        user = await get_current_user(request)
+        tutor_crew = request.app.state.tutor_crew
+        db = request.app.state.db
+        cursor = await db.execute("SELECT tutor_llm_params FROM users WHERE id = ?", (user["id"],))
+        row = await cursor.fetchone()
+        saved = row[0] if row and row[0] else None
+        if saved:
+            try:
+                tutor_crew.update_llm_params(json.loads(saved))
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return {"params": tutor_crew.get_llm_params()}
+
+    @app.post("/tutor/llm-params")
+    async def set_tutor_llm_params(request: Request):
+        """Update Tutor LLM parameters. Persists to DB."""
+        user = await get_current_user(request)
+        body = await request.json()
+        params = body.get("params", {})
+        if not isinstance(params, dict):
+            raise HTTPException(status_code=400, detail="params must be a dict")
+        tutor_crew = request.app.state.tutor_crew
+        updated = tutor_crew.update_llm_params(params)
+        db = request.app.state.db
+        await db.execute(
+            "UPDATE users SET tutor_llm_params = ? WHERE id = ?",
+            (json.dumps(updated), user["id"]),
+        )
+        await db.commit()
+        logger.info("Tutor LLM params updated and saved: %s", params)
+        return {"params": updated}
+
+    @app.post("/tutor/llm-params/reset")
+    async def reset_tutor_llm_params(request: Request):
+        """Reset Tutor LLM parameters to defaults."""
+        user = await get_current_user(request)
+        from researcher.tutor.crew import TutorCrew
+        tutor_crew = request.app.state.tutor_crew
+        updated = tutor_crew.update_llm_params(dict(TutorCrew.DEFAULT_LLM_PARAMS))
+        db = request.app.state.db
+        await db.execute(
+            "UPDATE users SET tutor_llm_params = '' WHERE id = ?",
+            (user["id"],),
+        )
+        await db.commit()
+        logger.info("Tutor LLM params reset to defaults")
+        return {"params": updated}
+
+    # --- Composer LLM parameters ---
+
+    @app.get("/composer/llm-params")
+    async def get_composer_llm_params(request: Request):
+        """Return current Composer LLM parameters (loads from DB if available)."""
+        user = await get_current_user(request)
+        composer_crew = request.app.state.composer_crew
+        db = request.app.state.db
+        cursor = await db.execute("SELECT composer_llm_params FROM users WHERE id = ?", (user["id"],))
+        row = await cursor.fetchone()
+        saved = row[0] if row and row[0] else None
+        if saved:
+            try:
+                composer_crew.update_llm_params(json.loads(saved))
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return {"params": composer_crew.get_llm_params()}
+
+    @app.post("/composer/llm-params")
+    async def set_composer_llm_params(request: Request):
+        """Update Composer LLM parameters. Persists to DB."""
+        user = await get_current_user(request)
+        body = await request.json()
+        params = body.get("params", {})
+        if not isinstance(params, dict):
+            raise HTTPException(status_code=400, detail="params must be a dict")
+        composer_crew = request.app.state.composer_crew
+        updated = composer_crew.update_llm_params(params)
+        db = request.app.state.db
+        await db.execute(
+            "UPDATE users SET composer_llm_params = ? WHERE id = ?",
+            (json.dumps(updated), user["id"]),
+        )
+        await db.commit()
+        logger.info("Composer LLM params updated and saved: %s", params)
+        return {"params": updated}
+
+    @app.post("/composer/llm-params/reset")
+    async def reset_composer_llm_params(request: Request):
+        """Reset Composer LLM parameters to defaults."""
+        user = await get_current_user(request)
+        from researcher.composer.crew import ComposerCrew
+        composer_crew = request.app.state.composer_crew
+        updated = composer_crew.update_llm_params(dict(ComposerCrew.DEFAULT_LLM_PARAMS))
+        db = request.app.state.db
+        await db.execute(
+            "UPDATE users SET composer_llm_params = '' WHERE id = ?",
+            (user["id"],),
+        )
+        await db.commit()
+        logger.info("Composer LLM params reset to defaults")
         return {"params": updated}

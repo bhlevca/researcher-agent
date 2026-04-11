@@ -1,8 +1,8 @@
 [project]
 name = "researcher-agent"
-version = "1.6.0"
+version = "2.0.0"
 dependencies = [
-    "crewai[tools]>=1.14.0",
+    "crewai[tools]>=1.14.1",
     "litellm",
     "ollama",
     "ddgs",
@@ -25,6 +25,8 @@ dependencies = [
     "pymupdf",
     "python-docx",
     "openpyxl",
+    "pytest", 
+    "pytest-asyncio",
 ]
 
 [project.optional-dependencies]

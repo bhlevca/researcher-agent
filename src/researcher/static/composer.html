@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Music Composer</title>
+    <link rel="stylesheet" href="/static/css/main.css">
+    <link rel="stylesheet" href="/static/css/composer.css?v=4">
+</head>
+<body>
+    <header>
+        <h1>🎼 Music Composer</h1>
+        <select id="composer-model-select" title="Switch model">
+            <option>loading models...</option>
+        </select>
+        <span class="model-info" id="composer-model-info"></span>
+        <div class="composer-config">
+            <label>Genre
+                <select id="composer-genre">
+                    <option value="classical" selected>Classical</option>
+                    <option value="jazz">Jazz</option>
+                    <option value="pop">Pop</option>
+                    <option value="rock">Rock</option>
+                    <option value="film">Film Score</option>
+                    <option value="folk">Folk</option>
+                    <option value="blues">Blues</option>
+                    <option value="latin">Latin</option>
+                    <option value="electronic">Electronic</option>
+                    <option value="baroque">Baroque</option>
+                    <option value="romantic">Romantic</option>
+                    <option value="impressionist">Impressionist</option>
+                    <option value="minimalist">Minimalist</option>
+                    <option value="ragtime">Ragtime</option>
+                    <option value="bossa_nova">Bossa Nova</option>
+                </select>
+            </label>
+            <label>Key
+                <select id="composer-key">
+                    <option value="C major" selected>C major</option>
+                    <option value="G major">G major</option>
+                    <option value="D major">D major</option>
+                    <option value="A major">A major</option>
+                    <option value="E major">E major</option>
+                    <option value="B major">B major</option>
+                    <option value="F major">F major</option>
+                    <option value="Bb major">B♭ major</option>
+                    <option value="Eb major">E♭ major</option>
+                    <option value="Ab major">A♭ major</option>
+                    <option value="A minor">A minor</option>
+                    <option value="E minor">E minor</option>
+                    <option value="B minor">B minor</option>
+                    <option value="D minor">D minor</option>
+                    <option value="G minor">G minor</option>
+                    <option value="C minor">C minor</option>
+                    <option value="F minor">F minor</option>
+                    <option value="F# minor">F♯ minor</option>
+                    <option value="C# minor">C♯ minor</option>
+                </select>
+            </label>
+            <label>Time
+                <select id="composer-time">
+                    <option value="4/4" selected>4/4</option>
+                    <option value="3/4">3/4</option>
+                    <option value="2/4">2/4</option>
+                    <option value="6/8">6/8</option>
+                    <option value="2/2">2/2</option>
+                    <option value="3/8">3/8</option>
+                    <option value="9/8">9/8</option>
+                    <option value="12/8">12/8</option>
+                    <option value="5/4">5/4</option>
+                    <option value="7/8">7/8</option>
+                </select>
+            </label>
+            <label>Tempo
+                <input type="number" id="composer-tempo" value="120" min="20" max="300" title="BPM">
+            </label>
+        </div>
+        <div class="header-spacer"></div>
+        <div class="session-controls">
+            <button onclick="unloadModel()" title="Unload model from GPU to free VRAM">⏏️ Unload</button>
+            <span id="composer-active-session" style="color:#60a5fa;font-size:0.78rem;display:none;"></span>
+            <button onclick="openPageSettings()" title="LLM parameters">⚙️ Params</button>
+            <button onclick="createComposerSession()" title="New composer session">🗒️ New</button>
+            <button onclick="saveComposerSession()" title="Save session">💾 Save</button>
+            <button onclick="openComposerSessionsPanel()" title="Saved composer sessions">📂 Sessions</button>
+            <a href="/" class="nav-link" title="Back to Research Agent">🔬 Research</a>
+            <a href="/tutor" class="nav-link" title="Language Tutor">📚 Tutor</a>
+        </div>
+        <div class="user-badge" id="user-badge" style="display:none;">
+            <span>👤</span><span class="username" id="user-badge-name"></span>
+            <button onclick="logout()" title="Log out">✕</button>
+        </div>
+        <button id="login-btn" onclick="openAuthModal('login')" style="background:#0f3460;color:#94a3b8;border:1px solid #1a3a6e;padding:0.35rem 0.65rem;border-radius:0.5rem;font-size:0.75rem;cursor:pointer;">🔑 Login</button>
+    </header>
+
+    <!-- Auth modal (shared) -->
+    <div class="auth-overlay" id="auth-overlay" onclick="if(event.target===this)closeAuthModal()">
+        <div class="auth-box">
+            <h2 id="auth-title">Login</h2>
+            <div class="auth-error" id="auth-error"></div>
+            <input type="text" id="auth-username" placeholder="Username" autocomplete="username">
+            <input type="password" id="auth-password" placeholder="Password" autocomplete="current-password">
+            <input type="text" id="auth-invite" placeholder="Invite code" style="display:none;">
+            <!-- Honeypot -->
+            <input type="text" id="auth-website" name="website" autocomplete="off" tabindex="-1" style="position:absolute;left:-9999px;opacity:0;height:0;width:0;">
+            <div class="auth-actions">
+                <button class="auth-btn-primary" id="auth-submit" onclick="submitAuth()">Login</button>
+                <button class="auth-btn-secondary" id="auth-toggle" onclick="switchAuthMode()">Need an account? Register</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sessions panel -->
+    <div class="composer-sessions-overlay" id="composer-sessions-overlay" onclick="closeComposerSessionsPanel()"></div>
+    <div class="composer-sessions-panel" id="composer-sessions-panel">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
+            <h3 style="margin:0;color:#e0e0e0;font-size:0.95rem;">Composer Sessions</h3>
+            <button onclick="closeComposerSessionsPanel()" style="background:none;border:none;color:#94a3b8;font-size:1rem;cursor:pointer;">✕</button>
+        </div>
+        <div id="composer-sessions-list"></div>
+    </div>
+
+    <!-- LLM Settings panel -->
+    <div class="llm-settings-overlay" id="pg-settings-overlay" onclick="closePageSettings()"></div>
+    <div class="llm-settings-panel" id="pg-settings-panel">
+        <div class="llm-settings-header">
+            <h3>⚙️ Composer LLM Parameters</h3>
+            <button onclick="closePageSettings()">✕</button>
+        </div>
+        <div class="llm-settings-body">
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Temperature</span><span class="llm-param-value" id="pg-val-temperature">0.7</span></div>
+                <div class="llm-param-hint">Controls randomness. 0 = deterministic, 1 = creative. Higher for more varied compositions.</div>
+                <input type="range" id="pg-param-temperature" min="0" max="2" step="0.05" value="0.7" oninput="_pgUpdateParamDisplay('temperature')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Top K</span><span class="llm-param-value" id="pg-val-top_k">40</span></div>
+                <div class="llm-param-hint">Limits token selection to K most likely tokens. Lower = more focused, higher = more diverse.</div>
+                <input type="range" id="pg-param-top_k" min="0" max="100" step="1" value="40" oninput="_pgUpdateParamDisplay('top_k')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Top P</span><span class="llm-param-value" id="pg-val-top_p">0.9</span></div>
+                <div class="llm-param-hint">Nucleus sampling — considers tokens whose cumulative probability reaches P.</div>
+                <input type="range" id="pg-param-top_p" min="0" max="1" step="0.05" value="0.9" oninput="_pgUpdateParamDisplay('top_p')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Min P</span><span class="llm-param-value" id="pg-val-min_p">0.0</span></div>
+                <div class="llm-param-hint">Minimum token probability threshold. Filters out unlikely tokens. 0 = disabled.</div>
+                <input type="range" id="pg-param-min_p" min="0" max="1" step="0.05" value="0" oninput="_pgUpdateParamDisplay('min_p')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Repeat Penalty</span><span class="llm-param-value" id="pg-val-repeat_penalty">1.0</span></div>
+                <div class="llm-param-hint">Penalizes token repetition. 1.0 = no penalty. Keep at 1.0 for Composer — JSON scores repeat "pitch", "duration" tokens naturally.</div>
+                <input type="range" id="pg-param-repeat_penalty" min="1" max="2" step="0.05" value="1.0" oninput="_pgUpdateParamDisplay('repeat_penalty')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Frequency Penalty</span><span class="llm-param-value" id="pg-val-frequency_penalty">0.0</span></div>
+                <div class="llm-param-hint">Reduces repeated tokens proportional to frequency. 0 = disabled.</div>
+                <input type="range" id="pg-param-frequency_penalty" min="0" max="2" step="0.05" value="0" oninput="_pgUpdateParamDisplay('frequency_penalty')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Presence Penalty</span><span class="llm-param-value" id="pg-val-presence_penalty">0.0</span></div>
+                <div class="llm-param-hint">Encourages new topics. Penalizes any token that appeared. 0 = disabled.</div>
+                <input type="range" id="pg-param-presence_penalty" min="0" max="2" step="0.05" value="0" oninput="_pgUpdateParamDisplay('presence_penalty')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Max Tokens (num_predict)</span><span class="llm-param-value" id="pg-val-num_predict">16384</span></div>
+                <div class="llm-param-hint">Maximum tokens per response. Composer needs 16384+ for thinking + JSON scores. Higher = longer scores but slower.</div>
+                <input type="range" id="pg-param-num_predict" min="256" max="32768" step="256" value="16384" oninput="_pgUpdateParamDisplay('num_predict')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Context Length (num_ctx)</span><span class="llm-param-value" id="pg-val-num_ctx">32768</span></div>
+                <div class="llm-param-hint">Context window size in tokens. Larger = more conversation memory but uses more VRAM.</div>
+                <input type="range" id="pg-param-num_ctx" min="2048" max="131072" step="2048" value="32768" oninput="_pgUpdateParamDisplay('num_ctx')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Seed</span><span class="llm-param-value" id="pg-val-seed">0</span></div>
+                <div class="llm-param-hint">Random seed for reproducibility. 0 = random each time.</div>
+                <input type="number" id="pg-param-seed" min="0" max="999999999" step="1" value="0" oninput="_pgUpdateParamDisplay('seed')">
+            </div>
+
+            <!-- Composer-specific agent parameters -->
+            <div class="llm-param-section-header" style="margin-top:1.2rem;padding-top:0.8rem;border-top:1px solid #1e3a5f;">
+                <span style="color:#38bdf8;font-weight:600;font-size:0.85rem;">🎼 Composer Agent</span>
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Max Iterations (max_iter)</span><span class="llm-param-value" id="pg-val-max_iter">12</span></div>
+                <div class="llm-param-hint">Maximum reasoning/tool-call iterations before the agent stops. Too low = "None or empty" errors. Too high = slow, may loop. 8–20 recommended.</div>
+                <input type="range" id="pg-param-max_iter" min="4" max="30" step="1" value="12" oninput="_pgUpdateParamDisplay('max_iter')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Planning Max Attempts</span><span class="llm-param-value" id="pg-val-planning_max_attempts">2</span></div>
+                <div class="llm-param-hint">Maximum planning attempts before proceeding. Higher = more retries if planning fails. 1–5 recommended.</div>
+                <input type="range" id="pg-param-planning_max_attempts" min="1" max="5" step="1" value="2" oninput="_pgUpdateParamDisplay('planning_max_attempts')">
+            </div>
+        </div>
+        <div class="llm-settings-actions">
+            <button class="llm-btn-reset" onclick="resetPageSettings()">↺ Reset Defaults</button>
+            <button class="llm-btn-apply" onclick="applyPageSettings()">Apply</button>
+        </div>
+    </div>
+
+    <!-- Tab navigation -->
+    <div class="composer-tabs">
+        <button class="composer-tab active" data-tab="chat" onclick="switchComposerTab('chat')">💬 Chat</button>
+        <button class="composer-tab" data-tab="score" onclick="switchComposerTab('score')">🎵 Score</button>
+        <button class="composer-tab" data-tab="harmonize" onclick="switchComposerTab('harmonize')">🎹 Harmonize</button>
+        <button class="composer-tab" data-tab="analyze" onclick="switchComposerTab('analyze')">🔍 Analyze</button>
+        <button class="composer-tab" data-tab="compositions" onclick="switchComposerTab('compositions')">📁 Compositions</button>
+    </div>
+
+    <!-- ═══════ CHAT panel ═══════ -->
+    <div class="composer-panel active" id="cpanel-chat">
+        <div id="composer-chat" class="chat-container"></div>
+        <div id="composer-input-area" class="composer-input-area">
+            <textarea id="composer-input" rows="2" placeholder="Describe what you'd like to compose, ask about music theory, or discuss arrangement ideas..."></textarea>
+            <button id="composer-send-btn" onclick="sendComposerMessage()">Send</button>
+        </div>
+    </div>
+
+    <!-- ═══════ SCORE panel ═══════ -->
+    <div class="composer-panel" id="cpanel-score">
+        <div class="score-form">
+            <input type="text" id="score-description" placeholder="Describe what to compose (e.g. 'A gentle waltz melody for piano with a melancholic feel')">
+            <label style="font-size:0.78rem;color:#94a3b8;display:flex;align-items:center;gap:0.3rem;">
+                Measures:
+                <input type="number" id="score-measures" value="16" min="4" max="128">
+            </label>
+            <label style="font-size:0.78rem;color:#94a3b8;display:flex;align-items:center;gap:0.3rem;">
+                Instruments:
+                <select id="score-instruments" multiple size="3" style="min-width:140px;">
+                    <option value="Piano" selected>Piano</option>
+                    <option value="Violin">Violin</option>
+                    <option value="Viola">Viola</option>
+                    <option value="Cello">Cello</option>
+                    <option value="Double Bass">Double Bass</option>
+                    <option value="Flute">Flute</option>
+                    <option value="Oboe">Oboe</option>
+                    <option value="Clarinet">Clarinet</option>
+                    <option value="Bassoon">Bassoon</option>
+                    <option value="French Horn">French Horn</option>
+                    <option value="Trumpet">Trumpet</option>
+                    <option value="Trombone">Trombone</option>
+                    <option value="Tuba">Tuba</option>
+                    <option value="Guitar">Guitar</option>
+                    <option value="Bass Guitar">Bass Guitar</option>
+                    <option value="Drum Set">Drum Set</option>
+                    <option value="Soprano Voice">Soprano Voice</option>
+                    <option value="Alto Voice">Alto Voice</option>
+                    <option value="Tenor Voice">Tenor Voice</option>
+                    <option value="Bass Voice">Bass Voice</option>
+                    <option value="Alto Saxophone">Alto Saxophone</option>
+                    <option value="Tenor Saxophone">Tenor Saxophone</option>
+                    <option value="Harp">Harp</option>
+                    <option value="Timpani">Timpani</option>
+                </select>
+            </label>
+            <button onclick="generateScore()">🎵 Generate Score</button>
+        </div>
+        <div class="score-content" id="score-content"></div>
+    </div>
+
+    <!-- ═══════ HARMONIZE panel ═══════ -->
+    <div class="composer-panel" id="cpanel-harmonize">
+        <div class="harmonize-form">
+            <textarea id="harmonize-melody" rows="5" placeholder="Describe or notate a melody to harmonize (e.g. 'C D E F G A B C in quarter notes' or 'The first 4 bars of Twinkle Twinkle Little Star')"></textarea>
+            <div class="form-row">
+                <label style="font-size:0.78rem;color:#94a3b8;display:flex;align-items:center;gap:0.3rem;">
+                    Style:
+                    <select id="harmonize-style">
+                        <option value="classical" selected>Classical</option>
+                        <option value="jazz">Jazz</option>
+                        <option value="pop">Pop</option>
+                        <option value="baroque">Baroque</option>
+                        <option value="romantic">Romantic</option>
+                        <option value="gospel">Gospel</option>
+                        <option value="bossa_nova">Bossa Nova</option>
+                    </select>
+                </label>
+                <button onclick="generateHarmonization()">🎹 Harmonize</button>
+            </div>
+        </div>
+        <div id="harmonize-content" class="score-content"></div>
+    </div>
+
+    <!-- ═══════ ANALYZE panel ═══════ -->
+    <div class="composer-panel" id="cpanel-analyze">
+        <div class="analyze-form">
+            <textarea id="analyze-input" rows="6" placeholder="Paste MusicXML, describe a chord progression, or provide musical content to analyze (e.g. 'Cm7 - F7 - Bbmaj7 - Ebmaj7 - Am7b5 - D7 - Gm7')"></textarea>
+            <button onclick="generateAnalysis()">🔍 Analyze</button>
+        </div>
+        <div id="analyze-content" class="score-content"></div>
+    </div>
+
+    <!-- ═══════ COMPOSITIONS panel ═══════ -->
+    <div class="composer-panel" id="cpanel-compositions">
+        <div style="padding:1rem 1.5rem;">
+            <h3 style="color:#e0e0e0;margin-bottom:0.75rem;">Saved Compositions</h3>
+            <div id="compositions-list"></div>
+            <div id="composition-detail" style="margin-top:1rem;"></div>
+        </div>
+    </div>
+
+    <!-- Toast -->
+    <div class="toast" id="toast"></div>
+
+    <!-- Shared JS (auth, utils) -->
+    <script src="/static/js/state.js"></script>
+    <script src="/static/js/utils.js"></script>
+    <script src="/static/js/auth.js"></script>
+    <script src="/static/js/page-settings.js?v=1"></script>
+
+    <!-- Composer JS -->
+    <script src="/static/js/composer-state.js?v=4"></script>
+    <script src="/static/js/composer-sessions.js?v=4"></script>
+    <script src="/static/js/composer-chat.js?v=4"></script>
+    <script src="/static/js/composer-score.js?v=4"></script>
+
+    <!-- Composer init -->
+    <script>
+    // ── Init settings panel ──
+    initPageSettings({
+        endpoint: '/composer/llm-params',
+        authHeaders: () => composerAuthHeaders(),
+        jsonAuthHeaders: () => composerJsonHeaders(),
+        showToast: composerShowToast,
+    });
+
+    // ── Composer model selector ──
+    const composerModelSelect = document.getElementById('composer-model-select');
+    const composerModelInfo = document.getElementById('composer-model-info');
+
+    async function loadComposerModels() {
+        try {
+            const resp = await fetch('/models', { headers: composerAuthHeaders() });
+            const data = await resp.json();
+            composerModelSelect.innerHTML = '';
+            data.models.forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m.name;
+                opt.textContent = m.name + ' (' + m.params + ', ' + m.size_gb + ' GB)';
+                const litellmName = 'ollama/' + m.name;
+                if (litellmName === data.current || m.name === data.current) {
+                    opt.selected = true;
+                    composerModelInfo.textContent = m.family;
+                }
+                composerModelSelect.appendChild(opt);
+            });
+        } catch (e) {
+            composerModelSelect.innerHTML = '<option>error loading models</option>';
+        }
+    }
+
+    composerModelSelect.addEventListener('change', async () => {
+        const chosen = composerModelSelect.value;
+        composerModelSelect.disabled = true;
+        composerModelInfo.textContent = 'switching...';
+        try {
+            const resp = await fetch('/model', {
+                method: 'POST',
+                headers: composerJsonHeaders(),
+                body: JSON.stringify({ model: chosen }),
+            });
+            if (resp.ok) {
+                const data = await resp.json();
+                composerModelInfo.textContent = 'active: ' + data.model;
+                composerShowToast('Model switched to ' + data.model);
+            } else {
+                const err = await resp.json();
+                composerModelInfo.textContent = 'switch failed';
+                composerShowToast('Switch failed: ' + (err.detail || 'unknown error'));
+            }
+        } catch (e) {
+            composerModelInfo.textContent = 'switch failed';
+            composerShowToast('Connection error');
+        } finally { composerModelSelect.disabled = false; }
+    });
+
+    (async function initComposer() {
+        // Check auth config
+        try {
+            const r = await fetch('/auth/config');
+            const cfg = await r.json();
+            inviteRequired = cfg.invite_required;
+        } catch (e) { /* proceed */ }
+
+        // Validate stored token
+        const token = localStorage.getItem('authToken');
+        if (token) {
+            try {
+                const r = await fetch('/auth/me', { headers: { Authorization: 'Bearer ' + token } });
+                if (!r.ok) {
+                    setAuthState(null, null);
+                }
+            } catch (e) {
+                setAuthState(null, null);
+            }
+        }
+        updateAuthUI();
+
+        if (!authUser) {
+            openAuthModal('login');
+        } else {
+            loadComposerModels();
+        }
+    })();
+
+    // Enter key sends message in chat
+    document.getElementById('composer-input').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendComposerMessage();
+        }
+    });
+
+    // Auto-resize textarea
+    document.getElementById('composer-input').addEventListener('input', function () {
+        this.style.height = 'auto';
+        this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+    });
+    </script>
+</body>
+</html>

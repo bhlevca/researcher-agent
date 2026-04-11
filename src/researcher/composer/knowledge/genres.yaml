@@ -1,0 +1,619 @@
+# ── Genre-Specific Composition Knowledge ─────────────────────────
+# Per-genre templates: form, rhythm patterns, voicings, motif style,
+# and 2-bar example measures in JSON format.
+#
+# Beat notation: "1" = beat 1, "2+" = and-of-2, "." = rest/silent
+# Duration values match JSON schema: whole, half, quarter, eighth, 16th
+
+classical:
+  form: "Binary (AB) or Ternary (ABA). 8-bar A section + 8-bar B section."
+  structure:
+    - "A section (bars 1-8): Expose theme in tonic, half cadence at bar 8."
+    - "B section (bars 9-16): Develop/contrast, authentic cadence at bar 16."
+  rhythm:
+    treble: "Mix of quarters and eighths. Occasional dotted quarter + eighth."
+    bass: "Alberti bass: broken chord pattern (root-5th-3rd-5th) in eighths, or block chords in half notes."
+  voicing: "Close position triads. Root position and first inversion. Bass in root position."
+  melody_style: "Graceful stepwise motion with occasional 3rd leaps. Ornamental turns at phrase ends."
+  example_bars:
+    - notes:
+        - {pitch: "E5", duration: "quarter", staff: 1}
+        - {pitch: "D5", duration: "quarter", staff: 1}
+        - {pitch: "C5", duration: "quarter", staff: 1}
+        - {pitch: "E5", duration: "quarter", staff: 1}
+        - {pitch: "C3", duration: "quarter", staff: 2}
+        - {pitch: "G3", duration: "quarter", staff: 2}
+        - {pitch: "E3", duration: "quarter", staff: 2}
+        - {pitch: "G3", duration: "quarter", staff: 2}
+    - notes:
+        - {pitch: "F5", duration: "quarter", staff: 1}
+        - {pitch: "E5", duration: "eighth", staff: 1}
+        - {pitch: "D5", duration: "eighth", staff: 1}
+        - {pitch: "C5", duration: "half", staff: 1}
+        - {pitch: "F3", duration: "quarter", staff: 2}
+        - {pitch: "C4", duration: "quarter", staff: 2}
+        - {pitch: "A3", duration: "quarter", staff: 2}
+        - {pitch: "C4", duration: "quarter", staff: 2}
+
+jazz:
+  form: "AABA (32-bar standard) or 12-bar blues. For 16 bars: AA' (8+8 with variation)."
+  structure:
+    - "A section (bars 1-8): ii-V-I progressions, swung eighths, melodic statement."
+    - "A' section (bars 9-16): Same melody varied, stronger cadence at end."
+  rhythm:
+    treble: "Swing eighths (long-short). Syncopated anticipations. Rests on beat 1 (pickup phrasing)."
+    bass: "Walking bass: steady quarter notes connecting chord roots by step or chromatic approach. Root on beat 1, approach target on beat 4."
+  voicing: "Rootless voicings (3-7-9-13 or 7-3-13-9). Drop-2 voicings. Avoid root+5th only."
+  melody_style: "Chromatic approach tones (half step below target note). Enclosures (above-below-target). Blues notes (b3, b5, b7 of key)."
+  example_bars:
+    - notes:
+        - {pitch: "rest", duration: "eighth", staff: 1}
+        - {pitch: "E5", duration: "eighth", staff: 1}
+        - {pitch: "F5", duration: "quarter", staff: 1}
+        - {pitch: "D5", duration: "quarter", staff: 1}
+        - {pitch: "C5", duration: "quarter", staff: 1}
+        - {pitch: "D3", duration: "quarter", staff: 2}
+        - {pitch: "E3", duration: "quarter", staff: 2}
+        - {pitch: "F3", duration: "quarter", staff: 2}
+        - {pitch: "F#3", duration: "quarter", staff: 2}
+    - notes:
+        - {pitch: "E5", duration: "quarter", staff: 1}
+        - {pitch: "rest", duration: "eighth", staff: 1}
+        - {pitch: "D5", duration: "eighth", staff: 1}
+        - {pitch: "Bb4", duration: "quarter", staff: 1}
+        - {pitch: "A4", duration: "quarter", staff: 1}
+        - {pitch: "G3", duration: "quarter", staff: 2}
+        - {pitch: "A3", duration: "quarter", staff: 2}
+        - {pitch: "B3", duration: "quarter", staff: 2}
+        - {pitch: "C4", duration: "quarter", staff: 2}
+
+pop:
+  form: "Verse-Chorus. For 16 bars: Verse (bars 1-8) + Chorus (bars 9-16)."
+  structure:
+    - "Verse (bars 1-8): Lower register, simpler rhythm, build momentum."
+    - "Chorus (bars 9-16): Higher register, catchier hook melody, fuller texture."
+  rhythm:
+    treble: "Quarter and eighth note hooks. Syncopation on 'and' of beat 2 or 4. Repetitive rhythmic motif."
+    bass: "Root on beat 1, octave on beat 3. Simple and supportive."
+  voicing: "Triads, occasional sus2/sus4 for color. Power chords (root+5th) in bass."
+  melody_style: "Hook-based: short memorable 2-3 note motif repeated. Pentatonic melody. Narrow range (6th-octave)."
+  example_bars:
+    - notes:
+        - {pitch: "G4", duration: "quarter", staff: 1}
+        - {pitch: "A4", duration: "quarter", staff: 1}
+        - {pitch: "C5", duration: "half", staff: 1}
+        - {pitch: "C3", duration: "half", staff: 2}
+        - {pitch: "G3", duration: "half", staff: 2}
+    - notes:
+        - {pitch: "D5", duration: "quarter", staff: 1}
+        - {pitch: "C5", duration: "quarter", staff: 1}
+        - {pitch: "A4", duration: "quarter", staff: 1}
+        - {pitch: "G4", duration: "quarter", staff: 1}
+        - {pitch: "G3", duration: "half", staff: 2}
+        - {pitch: "D3", duration: "half", staff: 2}
+
+rock:
+  form: "Verse-Chorus or Riff-based. For 16 bars: Intro/Riff (1-4) + Verse (5-12) + Chorus (13-16)."
+  structure:
+    - "Riff (bars 1-4): Strong rhythmic pattern, power chords."
+    - "Verse (bars 5-12): Melody over driving rhythm."
+    - "Chorus (bars 13-16): Highest energy, anthem-like melody."
+  rhythm:
+    treble: "Driving eighth notes. Pentatonic melody. Strong accents on beats 2 and 4 (backbeat)."
+    bass: "Root notes with octave jumps. Driving eighths matching guitar rhythm."
+  voicing: "Power chords (root+5th). Open voicings. Avoid delicate arpeggios."
+  melody_style: "Pentatonic with blue notes. Short punchy phrases. Call-and-response between vocal range and riff."
+  example_bars:
+    - notes:
+        - {pitch: "E4", duration: "eighth", staff: 1}
+        - {pitch: "G4", duration: "eighth", staff: 1}
+        - {pitch: "A4", duration: "eighth", staff: 1}
+        - {pitch: "G4", duration: "eighth", staff: 1}
+        - {pitch: "E4", duration: "quarter", staff: 1}
+        - {pitch: "D4", duration: "quarter", staff: 1}
+        - {pitch: "E2", duration: "quarter", staff: 2}
+        - {pitch: "E3", duration: "quarter", staff: 2}
+        - {pitch: "E2", duration: "quarter", staff: 2}
+        - {pitch: "E3", duration: "quarter", staff: 2}
+    - notes:
+        - {pitch: "G4", duration: "quarter", staff: 1}
+        - {pitch: "A4", duration: "quarter", staff: 1}
+        - {pitch: "B4", duration: "half", staff: 1}
+        - {pitch: "G2", duration: "quarter", staff: 2}
+        - {pitch: "G3", duration: "quarter", staff: 2}
+        - {pitch: "D3", duration: "quarter", staff: 2}
+        - {pitch: "G3", duration: "quarter", staff: 2}
+
+blues:
+  form: "12-bar blues (I-I-I-I / IV-IV-I-I / V-IV-I-V). For 16 bars: 12-bar + 4-bar turnaround."
+  structure:
+    - "Bars 1-4: Tonic statement, call phrase."
+    - "Bars 5-8: Subdominant response, tonic return."
+    - "Bars 9-12: Dominant tension, resolve to tonic."
+    - "Bars 13-16: Turnaround (I-IV-I-V7) back to top."
+  rhythm:
+    treble: "Shuffle feel (triplet-based swing). Bent notes (grace notes from b3 to 3). Call-and-response phrasing."
+    bass: "Boogie-woogie pattern: root-3rd-5th-6th ascending in steady quarters/eighths. Or simple root-5th shuffle."
+  voicing: "Dominant 7th chords everywhere. Blue notes (b3, b5, b7) mixed with diatonic."
+  melody_style: "Blues scale based. Start phrases on b3 or b7. Bend from b3 to 3 (grace note). End phrases on root or 5th."
+  example_bars:
+    - notes:
+        - {pitch: "Eb4", duration: "eighth", staff: 1}
+        - {pitch: "E4", duration: "eighth", staff: 1}
+        - {pitch: "G4", duration: "quarter", staff: 1}
+        - {pitch: "C5", duration: "quarter", staff: 1}
+        - {pitch: "Bb4", duration: "quarter", staff: 1}
+        - {pitch: "C3", duration: "quarter", staff: 2}
+        - {pitch: "E3", duration: "quarter", staff: 2}
+        - {pitch: "G3", duration: "quarter", staff: 2}
+        - {pitch: "A3", duration: "quarter", staff: 2}
+    - notes:
+        - {pitch: "G4", duration: "quarter", staff: 1}
+        - {pitch: "rest", duration: "quarter", staff: 1}
+        - {pitch: "Eb4", duration: "eighth", staff: 1}
+        - {pitch: "E4", duration: "eighth", staff: 1}
+        - {pitch: "G4", duration: "quarter", staff: 1}
+        - {pitch: "C3", duration: "quarter", staff: 2}
+        - {pitch: "G3", duration: "quarter", staff: 2}
+        - {pitch: "Bb3", duration: "quarter", staff: 2}
+        - {pitch: "G3", duration: "quarter", staff: 2}
+
+folk:
+  form: "Strophic (same music, different verses). For 16 bars: AA (8+8, same melody repeated)."
+  structure:
+    - "A section (bars 1-8): Simple singable melody, strong tonic grounding."
+    - "A repeat (bars 9-16): Same melody, slight variation at cadence."
+  rhythm:
+    treble: "Quarters and halves. Minimal syncopation. Natural speech rhythm."
+    bass: "Root-fifth alternation. Simple and steady."
+  voicing: "Root position triads. Open 5ths in bass. Diatonic only."
+  melody_style: "Stepwise within one octave. Arch contour (rise-peak-fall). Singable phrases ending on tonic or 5th."
+  example_bars:
+    - notes:
+        - {pitch: "C4", duration: "quarter", staff: 1}
+        - {pitch: "D4", duration: "quarter", staff: 1}
+        - {pitch: "E4", duration: "quarter", staff: 1}
+        - {pitch: "G4", duration: "quarter", staff: 1}
+        - {pitch: "C3", duration: "half", staff: 2}
+        - {pitch: "G3", duration: "half", staff: 2}
+    - notes:
+        - {pitch: "A4", duration: "quarter", staff: 1}
+        - {pitch: "G4", duration: "quarter", staff: 1}
+        - {pitch: "E4", duration: "half", staff: 1}
+        - {pitch: "F3", duration: "half", staff: 2}
+        - {pitch: "C3", duration: "half", staff: 2}
+
+latin:
+  form: "Montuno-based. For 16 bars: A (1-8 melodic) + B (9-16 montuno/solo section)."
+  structure:
+    - "A section (bars 1-8): Melodic theme, clave-aligned phrasing."
+    - "B section (bars 9-16): Montuno pattern, more rhythmic energy."
+  rhythm:
+    treble: "Syncopated. Anticipate beat 1 (play on 'and' of 4). Clave awareness: son clave 3-2 or 2-3."
+    bass: "Tumbao pattern: root on 'and' of 2, fifth on beat 4. Anticipated bass."
+  voicing: "Open voicings with 7ths. Stacked 4ths for modern Latin."
+  melody_style: "Bright upper register. Syncopated short phrases with rests. Pentatonic fragments."
+  example_bars:
+    - notes:
+        - {pitch: "rest", duration: "eighth", staff: 1}
+        - {pitch: "G5", duration: "eighth", staff: 1}
+        - {pitch: "A5", duration: "quarter", staff: 1}
+        - {pitch: "G5", duration: "eighth", staff: 1}
+        - {pitch: "F5", duration: "eighth", staff: 1}
+        - {pitch: "E5", duration: "quarter", staff: 1}
+        - {pitch: "rest", duration: "eighth", staff: 2}
+        - {pitch: "C3", duration: "eighth", staff: 2}
+        - {pitch: "rest", duration: "quarter", staff: 2}
+        - {pitch: "G3", duration: "quarter", staff: 2}
+        - {pitch: "rest", duration: "quarter", staff: 2}
+    - notes:
+        - {pitch: "D5", duration: "quarter", staff: 1}
+        - {pitch: "C5", duration: "eighth", staff: 1}
+        - {pitch: "A4", duration: "eighth", staff: 1}
+        - {pitch: "G4", duration: "half", staff: 1}
+        - {pitch: "rest", duration: "eighth", staff: 2}
+        - {pitch: "F3", duration: "eighth", staff: 2}
+        - {pitch: "rest", duration: "quarter", staff: 2}
+        - {pitch: "C4", duration: "quarter", staff: 2}
+        - {pitch: "rest", duration: "quarter", staff: 2}
+
+electronic:
+  form: "Build-Drop. For 16 bars: Build (1-8, adding layers) + Drop (9-16, full energy)."
+  structure:
+    - "Build (bars 1-8): Start sparse, add rhythmic layers, crescendo."
+    - "Drop (bars 9-16): Full pattern, driving rhythm, peak energy."
+  rhythm:
+    treble: "Arpeggiated sixteenth-note patterns. Repetitive ostinato. Filtered sweep effect via register."
+    bass: "Four-on-the-floor quarter notes (root) or pulsing eighths."
+  voicing: "Stacked 5ths and octaves. Minimal 3rds (ambiguous tonality). Sus2/sus4 chords."
+  melody_style: "Short 1-2 note motif repeated with filter/register changes. Minimal pitch variation. Rhythmic interest over melodic."
+  example_bars:
+    - notes:
+        - {pitch: "E4", duration: "eighth", staff: 1}
+        - {pitch: "B4", duration: "eighth", staff: 1}
+        - {pitch: "E5", duration: "eighth", staff: 1}
+        - {pitch: "B4", duration: "eighth", staff: 1}
+        - {pitch: "E4", duration: "eighth", staff: 1}
+        - {pitch: "B4", duration: "eighth", staff: 1}
+        - {pitch: "E5", duration: "eighth", staff: 1}
+        - {pitch: "B4", duration: "eighth", staff: 1}
+        - {pitch: "E2", duration: "quarter", staff: 2}
+        - {pitch: "E2", duration: "quarter", staff: 2}
+        - {pitch: "E2", duration: "quarter", staff: 2}
+        - {pitch: "E2", duration: "quarter", staff: 2}
+
+film:
+  form: "Through-composed or ABA. For 16 bars: A (1-6 theme) + B (7-12 development) + A' (13-16 resolution)."
+  structure:
+    - "Theme (bars 1-6): Lyrical melody, moderate dynamics."
+    - "Development (bars 7-12): Build intensity, wider intervals, richer harmony."
+    - "Resolution (bars 13-16): Return to theme, resolve grandly."
+  rhythm:
+    treble: "Long sustained notes (halves, dotted halves) with expressive shorter fills. Wide leaps for drama."
+    bass: "Sustained pedal tones. Octave tremolo for intensity. Slow arpeggios."
+  voicing: "Wide spacing (open voicings). Octave doubling for power. Modal interchange (borrow from parallel minor/major)."
+  melody_style: "Soaring legato lines. Large interval leaps (5ths, 6ths, octaves) for emotional impact. Build to one climax note."
+  example_bars:
+    - notes:
+        - {pitch: "C5", duration: "dotted half", staff: 1}
+        - {pitch: "E5", duration: "quarter", staff: 1}
+        - {pitch: "C3", duration: "whole", staff: 2}
+    - notes:
+        - {pitch: "G5", duration: "half", staff: 1}
+        - {pitch: "F5", duration: "quarter", staff: 1}
+        - {pitch: "E5", duration: "quarter", staff: 1}
+        - {pitch: "E3", duration: "half", staff: 2}
+        - {pitch: "G3", duration: "half", staff: 2}
+
+baroque:
+  form: "Binary (||:A:||:B:||). A modulates to dominant, B returns to tonic."
+  structure:
+    - "A section (bars 1-8): Theme in tonic, modulate to V by bar 8."
+    - "B section (bars 9-16): Begin in V or vi, sequence back to tonic."
+  rhythm:
+    treble: "Running sixteenth notes in sequences. Motor rhythm. Terraced dynamics (sudden p/f changes)."
+    bass: "Basso continuo: steady quarter or eighth note walking line. Independent counterpoint."
+  voicing: "Invertible counterpoint (voices can swap octaves). Clear two-voice texture."
+  melody_style: "Sequences (pattern repeated at different pitch, usually down by step). Ornaments: trills on cadence notes, mordents."
+  example_bars:
+    - notes:
+        - {pitch: "C5", duration: "eighth", staff: 1}
+        - {pitch: "D5", duration: "eighth", staff: 1}
+        - {pitch: "E5", duration: "eighth", staff: 1}
+        - {pitch: "F5", duration: "eighth", staff: 1}
+        - {pitch: "G5", duration: "eighth", staff: 1}
+        - {pitch: "F5", duration: "eighth", staff: 1}
+        - {pitch: "E5", duration: "eighth", staff: 1}
+        - {pitch: "D5", duration: "eighth", staff: 1}
+        - {pitch: "C3", duration: "quarter", staff: 2}
+        - {pitch: "E3", duration: "quarter", staff: 2}
+        - {pitch: "G3", duration: "quarter", staff: 2}
+        - {pitch: "C3", duration: "quarter", staff: 2}
+    - notes:
+        - {pitch: "E5", duration: "eighth", staff: 1}
+        - {pitch: "D5", duration: "eighth", staff: 1}
+        - {pitch: "C5", duration: "eighth", staff: 1}
+        - {pitch: "B4", duration: "eighth", staff: 1}
+        - {pitch: "A4", duration: "eighth", staff: 1}
+        - {pitch: "B4", duration: "eighth", staff: 1}
+        - {pitch: "C5", duration: "eighth", staff: 1}
+        - {pitch: "D5", duration: "eighth", staff: 1}
+        - {pitch: "A3", duration: "quarter", staff: 2}
+        - {pitch: "F3", duration: "quarter", staff: 2}
+        - {pitch: "G3", duration: "quarter", staff: 2}
+        - {pitch: "G2", duration: "quarter", staff: 2}
+
+romantic:
+  form: "Ternary (ABA') or through-composed. Big emotional arc."
+  structure:
+    - "A (bars 1-6): Lyrical theme, rubato phrasing."
+    - "B (bars 7-12): Contrasting key or mode, build intensity, chromaticism."
+    - "A' (bars 13-16): Return to theme with richer harmony, climactic resolution."
+  rhythm:
+    treble: "Expressive dotted rhythms. Rubato-style longer notes at phrase peaks. Wide dynamic range."
+    bass: "Arpeggiated chords (broken into flowing eighths). Rich pedal tones."
+  voicing: "Thick chords (4-5 notes). Chromaticism. Diminished 7ths for drama. Augmented 6th chords."
+  melody_style: "Wide leaps for passion (6ths, octaves). Chromatic passing tones. Soaring climax. Sighing appoggiaturas."
+  example_bars:
+    - notes:
+        - {pitch: "E5", duration: "dotted quarter", staff: 1}
+        - {pitch: "D5", duration: "eighth", staff: 1}
+        - {pitch: "C5", duration: "half", staff: 1}
+        - {pitch: "C3", duration: "eighth", staff: 2}
+        - {pitch: "G3", duration: "eighth", staff: 2}
+        - {pitch: "E4", duration: "eighth", staff: 2}
+        - {pitch: "G3", duration: "eighth", staff: 2}
+        - {pitch: "C3", duration: "eighth", staff: 2}
+        - {pitch: "G3", duration: "eighth", staff: 2}
+        - {pitch: "E4", duration: "eighth", staff: 2}
+        - {pitch: "G3", duration: "eighth", staff: 2}
+    - notes:
+        - {pitch: "A5", duration: "half", staff: 1}
+        - {pitch: "G#5", duration: "quarter", staff: 1}
+        - {pitch: "A5", duration: "quarter", staff: 1}
+        - {pitch: "F3", duration: "eighth", staff: 2}
+        - {pitch: "C4", duration: "eighth", staff: 2}
+        - {pitch: "A4", duration: "eighth", staff: 2}
+        - {pitch: "C4", duration: "eighth", staff: 2}
+        - {pitch: "F3", duration: "eighth", staff: 2}
+        - {pitch: "C4", duration: "eighth", staff: 2}
+        - {pitch: "A4", duration: "eighth", staff: 2}
+        - {pitch: "C4", duration: "eighth", staff: 2}
+
+impressionist:
+  form: "Free or ABA'. Sections blur without strong cadences."
+  structure:
+    - "Section A (bars 1-6): Floating theme over pedal tone."
+    - "Section B (bars 7-12): Shift color (mode, register), parallel chords."
+    - "Return (bars 13-16): Echo of A with altered harmony."
+  rhythm:
+    treble: "Flowing triplets and quintuplets. Harp-like arpeggios. Avoid strong downbeat emphasis."
+    bass: "Sustained pedal tones (hold one note for 2-4 bars). Gentle bass motion in whole notes."
+  voicing: "Parallel chords (same voicing moved in parallel). Whole-tone clusters. Added-note chords (add9, add6). Quartal voicings."
+  melody_style: "Pentatonic and whole-tone fragments. Avoid leading tone resolution. Float above harmony. Coloristic register shifts."
+  example_bars:
+    - notes:
+        - {pitch: "D5", duration: "quarter", staff: 1}
+        - {pitch: "E5", duration: "quarter", staff: 1}
+        - {pitch: "G5", duration: "quarter", staff: 1}
+        - {pitch: "A5", duration: "quarter", staff: 1}
+        - {pitch: "C3", duration: "whole", staff: 2}
+    - notes:
+        - {pitch: "B5", duration: "half", staff: 1}
+        - {pitch: "A5", duration: "quarter", staff: 1}
+        - {pitch: "G5", duration: "quarter", staff: 1}
+        - {pitch: "C3", duration: "whole", staff: 2}
+
+minimalist:
+  form: "Additive/phase. Gradual accumulation. No traditional sections."
+  structure:
+    - "Bars 1-4: Establish pattern (1-2 note ostinato)."
+    - "Bars 5-8: Add one note to pattern."
+    - "Bars 9-12: Shift phase or add rhythmic displacement."
+    - "Bars 13-16: Full pattern with all accumulated elements."
+  rhythm:
+    treble: "Steady eighth or sixteenth note pulse. Additive rhythm (add one beat per repetition). Phase shifting."
+    bass: "Pedal tone or slow-moving fundamentals (one note per 2-4 bars)."
+  voicing: "Open 5ths and octaves. Triads in first inversion. Limited pitch set (3-5 notes total)."
+  melody_style: "Repetitive motif with micro-variations. Gradually expand range. Hypnotic, meditative quality."
+  example_bars:
+    - notes:
+        - {pitch: "E4", duration: "eighth", staff: 1}
+        - {pitch: "F#4", duration: "eighth", staff: 1}
+        - {pitch: "B4", duration: "eighth", staff: 1}
+        - {pitch: "F#4", duration: "eighth", staff: 1}
+        - {pitch: "E4", duration: "eighth", staff: 1}
+        - {pitch: "F#4", duration: "eighth", staff: 1}
+        - {pitch: "B4", duration: "eighth", staff: 1}
+        - {pitch: "F#4", duration: "eighth", staff: 1}
+        - {pitch: "E3", duration: "whole", staff: 2}
+
+ragtime:
+  form: "Multi-strain: AA BB A CC. For 16 bars: A (1-8) + B (9-16), each with repeat feel."
+  structure:
+    - "A strain (bars 1-8): Syncopated melody over march bass."
+    - "B strain (bars 9-16): Contrasting theme, possibly in IV key area."
+  rhythm:
+    treble: "Syncopated: dotted eighth + sixteenth, or eighth-quarter-eighth (tied anticipation). Jaunty feel."
+    bass: "Oom-pah: root on beats 1 & 3, chord (3rd+5th) on beats 2 & 4. Steady, march-like."
+  voicing: "Octave bass notes on 1 & 3. Chords in mid-range on 2 & 4. Stride piano style."
+  melody_style: "Syncopated, bouncy. Chromatic passing tones. Pickup notes into downbeats. Lively character."
+  example_bars:
+    - notes:
+        - {pitch: "rest", duration: "eighth", staff: 1}
+        - {pitch: "C5", duration: "eighth", staff: 1}
+        - {pitch: "E5", duration: "quarter", staff: 1}
+        - {pitch: "D5", duration: "eighth", staff: 1}
+        - {pitch: "C5", duration: "eighth", staff: 1}
+        - {pitch: "A4", duration: "quarter", staff: 1}
+        - {pitch: "C3", duration: "quarter", staff: 2}
+        - {pitch: "G3", duration: "quarter", staff: 2}
+        - {pitch: "E3", duration: "quarter", staff: 2}
+        - {pitch: "G3", duration: "quarter", staff: 2}
+
+bossa_nova:
+  form: "AABA or verse-based. For 16 bars: A (1-8) + A' (9-16)."
+  structure:
+    - "A (bars 1-8): Smooth melody, gentle syncopation, ii-V-I harmony."
+    - "A' (bars 9-16): Same melody with harmonic variation, resolve warmly."
+  rhythm:
+    treble: "Gentle syncopation: anticipate beat 3. Legato phrasing. Mix quarters and dotted quarters."
+    bass: "Root-fifth-octave pattern. Anticipated bass (play on 'and' of 2). Two-feel (half notes with syncopation)."
+  voicing: "Close-voiced maj7 and m7 chords. Smooth 7th chord voice leading. Add 9ths for color."
+  melody_style: "Chord-tone melody (mostly 3rds and 7ths of each chord). Smooth, speech-like rhythm. Narrow range (6th). Understated."
+  example_bars:
+    - notes:
+        - {pitch: "E5", duration: "dotted quarter", staff: 1}
+        - {pitch: "D5", duration: "eighth", staff: 1}
+        - {pitch: "C5", duration: "dotted quarter", staff: 1}
+        - {pitch: "B4", duration: "eighth", staff: 1}
+        - {pitch: "C3", duration: "quarter", staff: 2}
+        - {pitch: "rest", duration: "eighth", staff: 2}
+        - {pitch: "G3", duration: "eighth", staff: 2}
+        - {pitch: "rest", duration: "quarter", staff: 2}
+        - {pitch: "C4", duration: "quarter", staff: 2}
+
+lullaby:
+  form: "Strophic or simple ABA. For 16 bars: A (1-8) + A' (9-16)."
+  structure:
+    - "A (bars 1-8): Gentle rocking melody, simple harmony, p dynamic."
+    - "A' (bars 9-16): Same melody slightly varied, resolve to peaceful tonic."
+  rhythm:
+    treble: "Quarters and halves. Gentle 6/8 or 3/4 rocking feel. No syncopation."
+    bass: "Rocking bass: root-fifth-root pattern. Steady, cradle-like motion."
+  voicing: "Simple triads. Root position. Warm mid-range. Avoid dissonance."
+  melody_style: "Stepwise within one octave. Descending phrases (settling, calming). Simple, memorable. Pianissimo feel."
+  example_bars:
+    - notes:
+        - {pitch: "E5", duration: "quarter", staff: 1}
+        - {pitch: "D5", duration: "quarter", staff: 1}
+        - {pitch: "C5", duration: "half", staff: 1}
+        - {pitch: "C3", duration: "half", staff: 2}
+        - {pitch: "G3", duration: "half", staff: 2}
+    - notes:
+        - {pitch: "D5", duration: "quarter", staff: 1}
+        - {pitch: "C5", duration: "quarter", staff: 1}
+        - {pitch: "A4", duration: "quarter", staff: 1}
+        - {pitch: "G4", duration: "quarter", staff: 1}
+        - {pitch: "F3", duration: "half", staff: 2}
+        - {pitch: "C3", duration: "half", staff: 2}
+
+waltz:
+  form: "Binary or Ternary. A (1-8) + B (9-16)."
+  structure:
+    - "A (bars 1-8): Graceful melody in 3/4, waltz bass pattern."
+    - "B (bars 9-16): Contrasting theme or development, elegant closure."
+  rhythm:
+    treble: "Dotted half notes on phrase starts. Quarter note melody on beats 1-2, rest on 3 for lift."
+    bass: "Oom-pah-pah: bass note on beat 1, chord on beats 2 and 3. Always in 3/4."
+  voicing: "Root position on beat 1. Chord 3rd+5th on beats 2-3. Wide bass leap to chord."
+  melody_style: "Graceful turns and neighbor notes. Moderate leaps (3rds-5ths). Dance-like elegance."
+  example_bars:
+    - notes:
+        - {pitch: "E5", duration: "dotted half", staff: 1}
+        - {pitch: "C3", duration: "quarter", staff: 2}
+        - {pitch: "E4", duration: "quarter", staff: 2}
+        - {pitch: "G4", duration: "quarter", staff: 2}
+    - notes:
+        - {pitch: "D5", duration: "quarter", staff: 1}
+        - {pitch: "C5", duration: "quarter", staff: 1}
+        - {pitch: "B4", duration: "quarter", staff: 1}
+        - {pitch: "G2", duration: "quarter", staff: 2}
+        - {pitch: "D4", duration: "quarter", staff: 2}
+        - {pitch: "B3", duration: "quarter", staff: 2}
+
+ballad:
+  form: "Verse-Chorus or through-composed. Build to emotional peak."
+  structure:
+    - "Intro/Verse (bars 1-8): Soft, sparse, intimate melody."
+    - "Chorus/Climax (bars 9-14): Build dynamics and register."
+    - "Resolution (bars 15-16): Gentle resolution, return to soft."
+  rhythm:
+    treble: "Slow, expressive. Dotted quarter + eighth for yearning feel. Long notes at phrase ends."
+    bass: "Arpeggiated chords in eighths. Gentle rolling accompaniment."
+  voicing: "Spread voicings. Add 9ths for warmth. Sus4 resolving to major for bittersweet color."
+  melody_style: "Expressive leaps (4ths, 6ths) at emotional moments. Otherwise stepwise. Build to ONE high note, then descend."
+  example_bars:
+    - notes:
+        - {pitch: "G4", duration: "dotted quarter", staff: 1}
+        - {pitch: "A4", duration: "eighth", staff: 1}
+        - {pitch: "C5", duration: "half", staff: 1}
+        - {pitch: "C3", duration: "eighth", staff: 2}
+        - {pitch: "G3", duration: "eighth", staff: 2}
+        - {pitch: "E4", duration: "eighth", staff: 2}
+        - {pitch: "G3", duration: "eighth", staff: 2}
+        - {pitch: "C3", duration: "eighth", staff: 2}
+        - {pitch: "G3", duration: "eighth", staff: 2}
+        - {pitch: "E4", duration: "eighth", staff: 2}
+        - {pitch: "G3", duration: "eighth", staff: 2}
+
+melancholic:
+  form: "ABA' or through-composed. Descending emotional arc."
+  structure:
+    - "A (bars 1-6): Minor key theme, descending lines."
+    - "B (bars 7-12): Brief major key glimmer or harmonic shift, then return to minor."
+    - "A' (bars 13-16): Final descending phrase, fade to soft resolution."
+  rhythm:
+    treble: "Sustained notes (halves, dotted halves). Sighing motifs: falling 2nds (E-D, D-C). Sparse."
+    bass: "Slow pedal tones. Occasional descending chromatic bass line."
+  voicing: "Minor triads and 7ths. Suspended chords resolving late. Diminished passing chords."
+  melody_style: "Descending contour. Falling 2nds (sigh figure). Minor 6th leaps for anguish. Resolve phrases on 5th (not tonic) for openness."
+  example_bars:
+    - notes:
+        - {pitch: "E5", duration: "half", staff: 1}
+        - {pitch: "D5", duration: "half", staff: 1}
+        - {pitch: "A3", duration: "whole", staff: 2}
+    - notes:
+        - {pitch: "C5", duration: "dotted half", staff: 1}
+        - {pitch: "B4", duration: "quarter", staff: 1}
+        - {pitch: "F3", duration: "half", staff: 2}
+        - {pitch: "E3", duration: "half", staff: 2}
+
+uplifting:
+  form: "Build to climax. Verse-Chorus energy arc."
+  structure:
+    - "Build (bars 1-8): Start in mid-range, simple pattern, build energy."
+    - "Climax (bars 9-14): Highest register, fullest texture."
+    - "Resolution (bars 15-16): Triumphant cadence."
+  rhythm:
+    treble: "Start sparse (quarters), build to driving eighths. Syncopation for energy."
+    bass: "Steady pulse. Root-5th-octave ascending pattern."
+  voicing: "Major triads. Add octave doublings at climax. Open 5ths for power."
+  melody_style: "Rising contour throughout. Step up each phrase. Peak at bar 13-14, resolve on high tonic."
+  example_bars:
+    - notes:
+        - {pitch: "C4", duration: "quarter", staff: 1}
+        - {pitch: "E4", duration: "quarter", staff: 1}
+        - {pitch: "G4", duration: "quarter", staff: 1}
+        - {pitch: "C5", duration: "quarter", staff: 1}
+        - {pitch: "C3", duration: "half", staff: 2}
+        - {pitch: "G3", duration: "half", staff: 2}
+
+hymn:
+  form: "Chorale. 4 phrases of 4 bars each. ABAB or ABAC."
+  structure:
+    - "Phrase 1 (bars 1-4): Statement in tonic."
+    - "Phrase 2 (bars 5-8): Move to V or vi, half cadence."
+    - "Phrase 3 (bars 9-12): Similar to phrase 1 or contrasting."
+    - "Phrase 4 (bars 13-16): Final authentic cadence, Amen."
+  rhythm:
+    treble: "Homophonic: all voices move together. One chord per beat. Quarters and halves."
+    bass: "One note per beat matching the chord. Root position mostly. Occasional first inversion."
+  voicing: "Four-part chorale (SATB compressed to two staves). Close spacing in upper voices."
+  melody_style: "Stepwise, dignified. Narrow range (octave). Strong downbeats. Long note at phrase end (fermata feel)."
+  example_bars:
+    - notes:
+        - {pitch: "C5", duration: "quarter", staff: 1}
+        - {pitch: "D5", duration: "quarter", staff: 1}
+        - {pitch: "E5", duration: "quarter", staff: 1}
+        - {pitch: "C5", duration: "quarter", staff: 1}
+        - {pitch: "C3", duration: "quarter", staff: 2}
+        - {pitch: "B2", duration: "quarter", staff: 2}
+        - {pitch: "C3", duration: "quarter", staff: 2}
+        - {pitch: "E3", duration: "quarter", staff: 2}
+
+march:
+  form: "Trio form: March (A) + Trio (B). For 16 bars: A (1-8) + B (9-16)."
+  structure:
+    - "March (bars 1-8): Strong duple, crisp rhythms, bold melody."
+    - "Trio (bars 9-16): Contrasting softer theme, often in IV key area."
+  rhythm:
+    treble: "Dotted eighth + sixteenth (military snap). Quarter notes on strong beats. Fanfare-like."
+    bass: "Root on beats 1 and 3. Strong and steady. Bass drum effect."
+  voicing: "Open voicings. Octaves in bass for power. Brass-band style: melody + afterbeat chords."
+  melody_style: "Bold, martial. Bugle-like intervals (4ths, 5ths). Crisp dotted rhythms. Middle register."
+  example_bars:
+    - notes:
+        - {pitch: "C5", duration: "dotted quarter", staff: 1}
+        - {pitch: "C5", duration: "eighth", staff: 1}
+        - {pitch: "E5", duration: "quarter", staff: 1}
+        - {pitch: "G5", duration: "quarter", staff: 1}
+        - {pitch: "C3", duration: "quarter", staff: 2}
+        - {pitch: "G3", duration: "quarter", staff: 2}
+        - {pitch: "C3", duration: "quarter", staff: 2}
+        - {pitch: "G3", duration: "quarter", staff: 2}
+
+minuet:
+  form: "Binary (||:A:||:B:||). A in tonic, B returns to tonic."
+  structure:
+    - "A (bars 1-8): Elegant theme in 3/4, moderate tempo."
+    - "B (bars 9-16): Contrasting or developing, return to tonic."
+  rhythm:
+    treble: "Graceful 3/4. Quarter-quarter-quarter or dotted half. Light ornaments (turns). Elegant."
+    bass: "Bass note on beat 1, lighter chord touches on 2-3. Or simple half + quarter."
+  voicing: "Simple triads. First inversion for smooth bass line. Light texture."
+  melody_style: "Courtly, graceful. Small intervals (2nds, 3rds). Occasional ornamental turn. Moderate range."
+  example_bars:
+    - notes:
+        - {pitch: "E5", duration: "quarter", staff: 1}
+        - {pitch: "F#5", duration: "quarter", staff: 1}
+        - {pitch: "G5", duration: "quarter", staff: 1}
+        - {pitch: "G3", duration: "quarter", staff: 2}
+        - {pitch: "B3", duration: "quarter", staff: 2}
+        - {pitch: "D4", duration: "quarter", staff: 2}
+    - notes:
+        - {pitch: "A5", duration: "half", staff: 1}
+        - {pitch: "G5", duration: "quarter", staff: 1}
+        - {pitch: "D3", duration: "quarter", staff: 2}
+        - {pitch: "F#3", duration: "quarter", staff: 2}
+        - {pitch: "A3", duration: "quarter", staff: 2}

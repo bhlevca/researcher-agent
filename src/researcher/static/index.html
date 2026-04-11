@@ -33,13 +33,15 @@
         </div>
         <div class="header-spacer"></div>
         <div class="session-controls">
+            <button onclick="unloadModel()" title="Unload model from GPU to free VRAM">⏏️ Unload</button>
             <button id="llm-settings-btn" onclick="openLlmSettings()" title="LLM generation parameters">⚙️ Params</button>
             <button onclick="newSession()" title="New session">🗒️ New</button>
             <button onclick="saveSession()" title="Save session">💾 Save</button>
             <button onclick="openSessionsPanel()" title="Saved sessions">📂 Sessions</button>
             <button onclick="openFilesPanel()" title="Uploaded files">📁 Files</button>
-            <a href="/tutor" class="nav-link" title="Language Tutor">📚 Tutor</a>
         </div>
+        <a href="/tutor" class="nav-link" title="Language Tutor">📚 Tutor</a>
+        <a href="/composer" class="nav-link" title="Music Composer">🎼 Composer</a>
         <div class="user-badge" id="user-badge" style="display:none;">
             <span>👤</span><span class="username" id="user-badge-name"></span>
             <button onclick="logout()" title="Log out">✕</button>
@@ -175,14 +177,14 @@
                 <input type="range" id="param-img-hires_height" min="512" max="4096" step="128" value="2048" oninput="updateImgParamDisplay('hires_height')">
             </div>
             <div class="llm-param-group">
-                <div class="llm-param-label"><span>Tile Overlap</span><span class="llm-param-value" id="val-img-tile_overlap">128</span></div>
-                <div class="llm-param-hint">Overlap between tiles in pixels. Higher = smoother blending but more tiles needed. 64–192 recommended.</div>
-                <input type="range" id="param-img-tile_overlap" min="0" max="256" step="16" value="128" oninput="updateImgParamDisplay('tile_overlap')">
+                <div class="llm-param-label"><span>Tile Overlap</span><span class="llm-param-value" id="val-img-tile_overlap">192</span></div>
+                <div class="llm-param-hint">Overlap between tiles in pixels. Higher = smoother blending but more tiles needed. 128–224 recommended.</div>
+                <input type="range" id="param-img-tile_overlap" min="0" max="256" step="16" value="192" oninput="updateImgParamDisplay('tile_overlap')">
             </div>
             <div class="llm-param-group">
-                <div class="llm-param-label"><span>Refinement Strength</span><span class="llm-param-value" id="val-img-hires_strength">0.45</span></div>
-                <div class="llm-param-hint">img2img denoising strength for tile refinement. Lower = more faithful to base image, higher = more detail/creativity. 0.2–0.5 recommended.</div>
-                <input type="range" id="param-img-hires_strength" min="0.05" max="1.0" step="0.05" value="0.45" oninput="updateImgParamDisplay('hires_strength')">
+                <div class="llm-param-label"><span>Refinement Strength</span><span class="llm-param-value" id="val-img-hires_strength">0.35</span></div>
+                <div class="llm-param-hint">img2img denoising strength for tile refinement. Lower = more faithful to base image, higher = more detail/creativity. 0.2–0.45 recommended.</div>
+                <input type="range" id="param-img-hires_strength" min="0.05" max="1.0" step="0.05" value="0.35" oninput="updateImgParamDisplay('hires_strength')">
             </div>
             <div class="llm-param-group" style="opacity:0.6;">
                 <div class="llm-param-label"><span>Tile Width</span><span class="llm-param-value" id="val-img-tile_width">512</span></div>

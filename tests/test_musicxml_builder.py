@@ -596,6 +596,48 @@ def test_crew_repair_truncated_json():
     assert len(score["parts"][0]["measures"]) >= 1
 
 
+def test_crew_repair_intraline_junk():
+    """_repair_json should strip junk words spliced after { on the same line."""
+    from researcher.composer.crew import ComposerCrew
+
+    bad_json = '''{
+  "title": "T",
+  "composer": "C",
+  "parts": [
+    {
+      "name": "Piano",
+      "measures": [
+        {
+          "notes": [
+            {"pitch": "C4", "duration": "whole", "staff": 1}
+          ]
+        },
+        {
+          "notes": [
+            {"pitch": "D4", "duration": "quarter", "staff": 1}
+          ]
+        },
+        {
+          "notes": [
+            {"pitch": "E4", "duration": "quarter", "staff": 1}
+          ]
+        },
+        { piek
+          "notes": [
+            {"pitch": "F4", "duration": "quarter", "staff": 1}
+          ]
+        }
+      ]
+    }
+  ]
+}'''
+    repaired = ComposerCrew._repair_json(bad_json)
+    import json
+    score = json.loads(repaired)
+    assert score["title"] == "T"
+    assert len(score["parts"][0]["measures"]) == 4
+
+
 def test_crew_extract_bare_json():
     """_extract_json_score should handle bare (unfenced) JSON output."""
     from researcher.composer.crew import ComposerCrew

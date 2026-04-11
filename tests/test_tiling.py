@@ -248,8 +248,8 @@ class TestImageParams:
         assert params["hires_enabled"] is False
         assert params["hires_width"] == 2048
         assert params["hires_height"] == 2048
-        assert params["tile_overlap"] == 128
-        assert params["hires_strength"] == 0.45
+        assert params["tile_overlap"] == 192
+        assert params["hires_strength"] == 0.35
 
     def test_update_hires_enabled(self):
         result = update_image_params({"hires_enabled": True})

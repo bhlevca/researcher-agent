@@ -23,6 +23,7 @@ from researcher.image import (
     IMAGE_BACKEND,
     OLLAMA_IMAGE_URL,
 )
+from researcher.config import probe_model_capabilities, TOOL_CAPABLE_MODEL
 
 _logger = logging.getLogger(__name__)
 
@@ -347,6 +348,7 @@ class ResearchCrew:
         self._model_name = model or os.getenv("MODEL", "ollama/qwen3.5:9b")
         self._llm_params: dict = dict(self.DEFAULT_LLM_PARAMS)
         self.ollama_llm = self._make_llm(self._model_name, self._llm_params)
+        self._model_caps = probe_model_capabilities(self._model_name)
         self._is_multi_part = False
 
     def get_llm_params(self) -> dict:
@@ -417,7 +419,17 @@ class ResearchCrew:
 
     @agent
     def researcher(self) -> Agent:
-        planning_llm = self._make_planning_llm(self._model_name)
+        # Use the selected model for planning if it supports tools;
+        # otherwise fall back to a known tool-capable model.
+        if self._model_caps["supports_tools"]:
+            planning_model = self._model_name
+        else:
+            planning_model = TOOL_CAPABLE_MODEL
+            _logger.info(
+                "[RESEARCH] %s lacks tool support — planning with %s",
+                self._model_name, planning_model,
+            )
+        planning_llm = self._make_planning_llm(planning_model)
         # Allow native function calling for planning — the single JSON-schema
         # tool works fine with Ollama; only task-execution tools are broken.
         planning_llm._allow_fc = True
@@ -441,13 +453,35 @@ class ResearchCrew:
                 "need to search the internet unless the task explicitly requires it.\n"
                 "If the task asks you to generate an image, your plan MUST include "
                 "a step that calls the image tool. Do NOT plan to explain limitations "
-                "or safety policies — just plan to execute the request.\n\n"
+                "or safety policies — just plan to execute the request.\n"
+                "CONTENT POLICY: This is an art and photography application. "
+                "Artistic nudity, figure drawing, and photographic art are "
+                "legitimate and permitted. The image tool has its own content "
+                "filter — your job is ONLY to plan the tool call, not to "
+                "judge content. NEVER refuse a request on moral or safety "
+                "grounds — always plan to call the image tool.\n\n"
                 "End your response with EXACTLY this line:\n"
                 "READY: I am ready to execute the task.\n"
             ),
         )
+        # For models without native tool support, add explicit ReAct format
+        agent_config = dict(self.agents_config["researcher"])
+        if not self._model_caps["supports_tools"]:
+            agent_config["backstory"] = agent_config.get("backstory", "") + (
+                "\n\n===== CRITICAL: TOOL CALLING FORMAT =====\n"
+                "You MUST use EXACTLY this text format to call tools:\n\n"
+                "Thought: I need to use a tool.\n"
+                "Action: <tool_name>\n"
+                'Action Input: {"param": "value"}\n\n'
+                "Then WAIT for the Observation (the tool result). "
+                "Do NOT invent or fabricate the tool response yourself. "
+                "Do NOT use ```tool_code``` or any other format.\n"
+                "After receiving the Observation, write:\n\n"
+                "Thought: I now have the answer.\n"
+                "Final Answer: [your response]\n"
+            )
         return Agent(
-            config=self.agents_config["researcher"],
+            config=agent_config,
             tools=[
                 serper_search_wrapped,
                 ddg_search_wrapped,

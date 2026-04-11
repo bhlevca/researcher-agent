@@ -14,6 +14,7 @@ from pathlib import Path
 from crewai import Agent, Crew, Process, Task, LLM
 from crewai.agent.planning_config import PlanningConfig
 
+from researcher.config import probe_model_capabilities, TOOL_CAPABLE_MODEL
 from researcher.tutor.tools import TUTOR_TOOLS
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,7 @@ class TutorCrew:
         self._model_name = model or os.getenv("MODEL", "ollama/qwen3.5:9b")
         self._llm_params: dict = dict(self.DEFAULT_LLM_PARAMS)
         self._llm = self._make_llm(self._model_name, self._llm_params)
+        self._model_caps = probe_model_capabilities(self._model_name)
         self._agents_config = _load_yaml("agents.yaml")
         self._tasks_config = _load_yaml("tasks.yaml")
 
@@ -138,7 +140,17 @@ class TutorCrew:
                 text = text.replace(k, v)
             return text
 
-        planning_llm = self._make_planning_llm(self._model_name)
+        # Use the selected model for planning if it supports tools;
+        # otherwise fall back to a known tool-capable model.
+        if self._model_caps["supports_tools"]:
+            planning_model = self._model_name
+        else:
+            planning_model = TOOL_CAPABLE_MODEL
+            logger.info(
+                "[TUTOR] %s lacks tool support — planning with %s",
+                self._model_name, planning_model,
+            )
+        planning_llm = self._make_planning_llm(planning_model)
         planning_llm._allow_fc = True  # allow function calling for planning
 
         planning = PlanningConfig(
@@ -159,10 +171,28 @@ class TutorCrew:
             ),
         )
 
+        backstory = _sub(agent_cfg["backstory"])
+
+        # For models without native tool support, add explicit ReAct format
+        if not self._model_caps["supports_tools"]:
+            backstory += (
+                "\n\n===== CRITICAL: TOOL CALLING FORMAT =====\n"
+                "You MUST use EXACTLY this text format to call tools:\n\n"
+                "Thought: I need to use a tool.\n"
+                "Action: <tool_name>\n"
+                'Action Input: {"param": "value"}\n\n'
+                "Then WAIT for the Observation (the tool result). "
+                "Do NOT invent or fabricate the tool response yourself. "
+                "Do NOT use ```tool_code``` or any other format.\n"
+                "After receiving the Observation, write:\n\n"
+                "Thought: I now have the answer.\n"
+                "Final Answer: [your response]\n"
+            )
+
         return Agent(
             role=_sub(agent_cfg["role"]),
             goal=_sub(agent_cfg["goal"]),
-            backstory=_sub(agent_cfg["backstory"]),
+            backstory=backstory,
             tools=TUTOR_TOOLS,
             llm=self._llm,
             verbose=True,

@@ -56,4 +56,9 @@ document.addEventListener('click', () => {
     // Load settings & voices
     loadMemoryDepth();
     loadVoices();
+    // Sync image param sliders with server defaults
+    fetch('/image-params', { headers: authHeaders() })
+        .then(r => r.ok ? r.json() : null)
+        .then(data => { if (data && data.params) setImgParamUI(data.params); })
+        .catch(() => {});
 })();

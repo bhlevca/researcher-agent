@@ -20,6 +20,10 @@ compose_chat_task:
     Step 2: STOP calling tools. Write "Final Answer:" with the complete JSON score.
     Do NOT call any tool more than once.
     Compose 16 measures unless the user specifies otherwise.
+
+    COMPOSITION APPROACH: Follow the BAR-BY-BAR ROADMAP from the tool output.
+    Create a MOTIF in bars 1-2, then develop it using the techniques provided.
+    Imitate the EXAMPLE BARS for genre-authentic rhythm and voicing.
   expected_output: >
     A helpful response about music composition. If notation was requested,
     include a JSON score object. NEVER output XML.
@@ -46,6 +50,9 @@ compose_score_task:
     Do NOT call any tool more than once.
 
     Output the JSON score. Write ALL {measures} measures.
+    Follow the BAR-BY-BAR ROADMAP from the tool output.
+    Create a MOTIF in bars 1-2, then develop it using the techniques provided.
+    Imitate the EXAMPLE BARS for genre-authentic rhythm and voicing.
     Before the JSON, briefly describe the composition's form and harmonic approach.
   expected_output: >
     A brief compositional description in markdown followed by a complete

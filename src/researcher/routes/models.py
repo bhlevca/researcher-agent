@@ -247,8 +247,8 @@ def register_model_routes(app):
         updated = update_image_params(dict(DEFAULT_IMAGE_PARAMS))
         db = request.app.state.db
         await db.execute(
-            "UPDATE users SET image_params = '' WHERE id = ?",
-            (user["id"],),
+            "UPDATE users SET image_params = ? WHERE id = ?",
+            (json.dumps(updated), user["id"]),
         )
         await db.commit()
         logger.info("Image params reset to defaults")

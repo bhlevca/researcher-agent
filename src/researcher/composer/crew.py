@@ -13,6 +13,7 @@ from pathlib import Path
 from crewai import Agent, Crew, Process, Task, LLM
 from crewai.agent.planning_config import PlanningConfig
 
+from researcher.config import probe_model_capabilities, TOOL_CAPABLE_MODEL
 from researcher.composer.tools import COMPOSER_TOOLS
 from researcher.composer.musicxml_fix import fix_musicxml
 from researcher.composer.musicxml_builder import build_musicxml
@@ -55,6 +56,7 @@ class ComposerCrew:
         self._model_name = model or os.getenv("MODEL", "ollama/qwen3.5:9b")
         self._llm_params: dict = dict(self.DEFAULT_LLM_PARAMS)
         self._llm = self._make_llm(self._model_name, self._llm_params)
+        self._model_caps = probe_model_capabilities(self._model_name)
         self._agents_config = _load_yaml("agents.yaml")
         self._tasks_config = _load_yaml("tasks.yaml")
 
@@ -139,7 +141,17 @@ class ComposerCrew:
                 text = text.replace(k, v)
             return text
 
-        planning_llm = self._make_planning_llm(self._model_name)
+        # Use the selected model for planning if it supports tools;
+        # otherwise fall back to a known tool-capable model.
+        if self._model_caps["supports_tools"]:
+            planning_model = self._model_name
+        else:
+            planning_model = TOOL_CAPABLE_MODEL
+            logger.info(
+                "[COMPOSER] %s lacks tool support — planning with %s",
+                self._model_name, planning_model,
+            )
+        planning_llm = self._make_planning_llm(planning_model)
         planning_llm._allow_fc = True
         planning = PlanningConfig(
             llm=planning_llm,
@@ -158,10 +170,30 @@ class ComposerCrew:
             ),
         )
 
+        backstory = _sub(agent_cfg["backstory"])
+
+        # For models without native tool support, add explicit ReAct format
+        # instructions — they tend to fabricate tool calls in their own format.
+        if not self._model_caps["supports_tools"]:
+            backstory += (
+                "\n\n===== CRITICAL: TOOL CALLING FORMAT =====\n"
+                "You MUST use EXACTLY this text format to call tools:\n\n"
+                "Thought: I need to call CompositionPrep to get the composition data.\n"
+                "Action: CompositionPrep\n"
+                'Action Input: {"key": "C major", "style": "jazz"}\n\n'
+                "Then WAIT for the Observation (the tool result). "
+                "Do NOT invent or fabricate the tool response yourself. "
+                "Do NOT use ```tool_code``` or any other format. "
+                "The system will execute the tool and provide the Observation.\n"
+                "After receiving the Observation, write:\n\n"
+                "Thought: I now have the composition data. I will compose the score.\n"
+                "Final Answer: [your complete JSON score]\n"
+            )
+
         return Agent(
             role=_sub(agent_cfg["role"]),
             goal=_sub(agent_cfg["goal"]),
-            backstory=_sub(agent_cfg["backstory"]),
+            backstory=backstory,
             tools=COMPOSER_TOOLS,
             llm=self._llm,
             verbose=True,
@@ -333,9 +365,15 @@ class ComposerCrew:
             repaired = ComposerCrew._repair_json(raw)
             try:
                 score = json.loads(repaired)
-            except json.JSONDecodeError as e:
-                logger.warning("[Composer] Failed to parse JSON score after repair: %s", e)
-                return None
+            except json.JSONDecodeError:
+                # Last resort: use json_repair library
+                try:
+                    from json_repair import repair_json
+                    repaired2 = repair_json(repaired, return_objects=False)
+                    score = json.loads(repaired2)
+                except Exception as e:
+                    logger.warning("[Composer] Failed to parse JSON score after all repairs: %s", e)
+                    return None
 
         if not isinstance(score, dict) or 'parts' not in score:
             logger.warning("[Composer] JSON score missing 'parts' key")
@@ -376,6 +414,16 @@ class ComposerCrew:
             # Skip everything else (hallucinated text, stray quotes, etc.)
             logger.debug("[Composer] Stripping hallucinated JSON line: %r", s)
         result = '\n'.join(cleaned)
+
+        # ── 1b. Remove intra-line junk spliced into structural chars ──
+        # e.g. "{ piek" → "{", "} blah" → "}"
+        # Only on lines that are purely structural (open/close brace/bracket
+        # optionally followed by comma) with junk words after or before.
+        result = re.sub(
+            r'\{\s*[a-zA-Z_][a-zA-Z0-9_]*(?:\s+[a-zA-Z_][a-zA-Z0-9_]*)*\s*\n',
+            '{\n',
+            result,
+        )
 
         # ── 2. Remove trailing commas before } or ] ──
         result = re.sub(r',\s*([}\]])', r'\1', result)

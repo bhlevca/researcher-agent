@@ -9,6 +9,8 @@ import logging
 
 from crewai.tools import tool
 
+from researcher.composer.knowledge.loader import get_genre_block, get_theory_block
+
 logger = logging.getLogger(__name__)
 
 # ── Static data ──────────────────────────────────────────────────────
@@ -273,7 +275,15 @@ def _resolve_chord(roman_str: str, scale_notes: list[str], root: str) -> str:
 
 def _build_progression(key_str: str, style: str, bars: int, feel: str) -> list[str]:
     """Build chord progression lines for given key/style/bars."""
-    prog = _PROGRESSIONS.get(style) or _PROGRESSIONS.get(feel) or _PROGRESSIONS['classical']
+    prog = _PROGRESSIONS.get(style)
+    if not prog:
+        # Fuzzy match: "jazzy" → "jazz", "bluesy" → "blues", etc.
+        for key in _PROGRESSIONS:
+            if key in style or style in key:
+                prog = _PROGRESSIONS[key]
+                break
+    if not prog:
+        prog = _PROGRESSIONS.get(feel) or _PROGRESSIONS['classical']
     full = []
     while len(full) < bars:
         full.extend(prog)
@@ -371,17 +381,18 @@ def composition_prep(key: str = "C major", style: str = "classical",
     sections.extend(_build_progression(key_str, style, num_bars, feel))
     sections.append("")
 
-    # 4. Music theory composition guidelines
-    sections.append("=== COMPOSITION GUIDELINES ===")
-    guide = _STYLE_GUIDELINES.get(style) or _STYLE_GUIDELINES.get(feel) or _STYLE_GUIDELINES['classical']
-    sections.append(f"Style ({style}): {guide}")
-    sections.append("Melody: stepwise motion (2nds/3rds) mostly, leaps (4ths+) for emphasis.")
-    sections.append("Phrases: 4-bar phrases. Antecedent (bars 1-4) + consequent (bars 5-8).")
-    sections.append("Voice leading: move each voice to nearest chord tone. Avoid parallel 5ths/octaves.")
-    sections.append("Cadences: half cadence (->V) at phrase midpoint, authentic (V->I) at phrase end.")
+    # 4. Genre-specific knowledge (form, rhythm, voicing, examples)
+    genre_key = style if style else feel if feel else 'classical'
+    sections.append("=== GENRE KNOWLEDGE ===")
+    sections.append(get_genre_block(genre_key))
     sections.append("")
 
-    # 5. JSON skeleton
+    # 5. Music theory (voice leading, cadences, motif development, bass rules)
+    sections.append("=== COMPOSITION THEORY ===")
+    sections.append(get_theory_block())
+    sections.append("")
+
+    # 6. JSON skeleton
     sections.append("=== JSON SKELETON ===")
     skeleton = _build_skeleton(title, inst_list, key_str, time_signature, tempo)
     sections.append(skeleton)
@@ -389,6 +400,8 @@ def composition_prep(key: str = "C major", style: str = "classical",
     sections.append("=== YOUR NEXT STEP ===")
     sections.append("DO NOT call any tool. Write 'Final Answer:' followed by the complete JSON score.")
     sections.append("Replace the example measure with ALL your composed measures.")
+    sections.append("Follow the BAR-BY-BAR COMPOSITION ROADMAP above: expose motif, sequence, vary, cadence, contrast, develop, recapitulate, climax.")
+    sections.append("Imitate the EXAMPLE BARS rhythm and voicing style.")
     sections.append("Piano/Harp: staff 1 (treble) + staff 2 (bass) notes in SAME measure.")
     sections.append("Durations: whole, half, dotted half, quarter, dotted quarter, eighth, 16th.")
     sections.append('Pitch: "C4", "F#5", "Bb3", "rest". Fill every measure to match the time signature.')

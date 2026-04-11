@@ -175,8 +175,8 @@ _ZIMAGE_MAX_SEQ = int(os.getenv("ZIMAGE_MAX_SEQ", "512"))
 ZIMAGE_HIRES = os.getenv("ZIMAGE_HIRES", "0") == "1"
 _ZIMAGE_HIRES_WIDTH = int(os.getenv("ZIMAGE_HIRES_WIDTH", "2048"))
 _ZIMAGE_HIRES_HEIGHT = int(os.getenv("ZIMAGE_HIRES_HEIGHT", "2048"))
-_ZIMAGE_TILE_OVERLAP = int(os.getenv("ZIMAGE_TILE_OVERLAP", "128"))
-_ZIMAGE_HIRES_STRENGTH = float(os.getenv("ZIMAGE_HIRES_STRENGTH", "0.45"))
+_ZIMAGE_TILE_OVERLAP = int(os.getenv("ZIMAGE_TILE_OVERLAP", "192"))
+_ZIMAGE_HIRES_STRENGTH = float(os.getenv("ZIMAGE_HIRES_STRENGTH", "0.35"))
 
 # Default image params dict — mirrors the module vars above.
 # Keys here are what the API / UI use; values are the mutable module state.
@@ -184,8 +184,8 @@ DEFAULT_IMAGE_PARAMS: dict = {
     "hires_enabled": False,
     "hires_width": 2048,
     "hires_height": 2048,
-    "tile_overlap": 128,
-    "hires_strength": 0.45,
+    "tile_overlap": 192,
+    "hires_strength": 0.35,
     "tile_width": int(os.getenv("ZIMAGE_WIDTH", "512")),
     "tile_height": int(os.getenv("ZIMAGE_HEIGHT", "512")),
 }
@@ -601,16 +601,31 @@ def generate_ai_image(prompt: str) -> str:
                         math.ceil(_min_effective / _ZIMAGE_HIRES_STRENGTH),
                     )
 
-                    # Use a quality-only prompt for tile refinement.
-                    # The original prompt (e.g. "a dog on a meadow") causes
-                    # the model to hallucinate the subject in EVERY tile.
-                    # A texture/quality prompt enhances what's already there.
-                    _refine_prompt = (
+                    # Split refinement prompts by tile content.
+                    # Foreground tiles (high variance) get anatomy-aware
+                    # prompt for sharp skin/muscle/joint detail.
+                    # Background tiles (low variance) get a neutral
+                    # texture-only prompt so the model doesn't
+                    # hallucinate body parts in empty dark areas.
+                    _fg_refine_prompt = (
                         "high quality, sharp details, fine textures, "
-                        "photorealistic, 8K resolution"
+                        "photorealistic, 8K resolution, "
+                        "anatomically correct, natural proportions"
+                    )
+                    _bg_refine_prompt = (
+                        "high quality, sharp details, fine textures, "
+                        "photorealistic, 8K resolution, "
+                        "clean smooth background"
+                    )
+                    _negative_prompt = (
+                        "deformed, bad anatomy, mechanical joints, "
+                        "extra limbs, fused fingers, mutated hands, "
+                        "disconnected limbs, disfigured, poorly drawn face, "
+                        "long neck, blurry, lowres, watermark"
                     )
                     _sys.stderr.write(
-                        f"[ZIMG] Refinement prompt: {_refine_prompt}\n"
+                        f"[ZIMG] FG prompt: {_fg_refine_prompt}\n"
+                        f"[ZIMG] BG prompt: {_bg_refine_prompt}\n"
                     )
 
                     for pass_idx, (step_w, step_h) in enumerate(scale_steps):
@@ -648,23 +663,56 @@ def generate_ai_image(prompt: str) -> str:
                             tile_crop = upscaled.crop(
                                 (tx, ty, tx + tile_w, ty + tile_h)
                             )
+
+                            # Variance gate: low-detail tiles (dark
+                            # backgrounds) get much lower strength to
+                            # prevent the model from hallucinating
+                            # subjects in empty areas.
+                            _tile_arr = np.array(tile_crop)
+                            _tile_var = float(_tile_arr.var())
+                            # Threshold: typical dark studio BG has
+                            # variance < 200; detailed areas > 1000.
+                            _BG_VAR_THRESHOLD = 300.0
+                            _BG_STRENGTH_MULT = 0.3
+                            if _tile_var < _BG_VAR_THRESHOLD:
+                                _tile_strength = min(
+                                    _ZIMAGE_HIRES_STRENGTH * _BG_STRENGTH_MULT,
+                                    0.12,
+                                )
+                                _tile_label = "bg"
+                                _tile_prompt = _bg_refine_prompt
+                            else:
+                                _tile_strength = _ZIMAGE_HIRES_STRENGTH
+                                _tile_label = "fg"
+                                _tile_prompt = _fg_refine_prompt
+
                             _sys.stderr.write(
                                 f"[ZIMG]     tile {i+1}/"
-                                f"{len(positions)} ({tx},{ty})...\n"
+                                f"{len(positions)} ({tx},{ty})"
+                                f" var={_tile_var:.0f}"
+                                f" [{_tile_label}]"
+                                f" str={_tile_strength:.3f}...\n"
                             )
                             _sys.stderr.flush()
                             try:
                                 with torch.inference_mode():
-                                    ref_result = i2i_pipe(
-                                        prompt=_refine_prompt,
+                                    _i2i_kwargs = dict(
+                                        prompt=_tile_prompt,
                                         image=tile_crop,
-                                        strength=_ZIMAGE_HIRES_STRENGTH,
+                                        strength=_tile_strength,
                                         width=tile_w,
                                         height=tile_h,
                                         num_inference_steps=_i2i_steps,
                                         guidance_scale=_ZIMAGE_GUIDANCE,
                                         max_sequence_length=_ZIMAGE_MAX_SEQ,
                                     )
+                                    # Add negative prompt if the pipeline
+                                    # supports it (FLUX pipelines may not).
+                                    if _ZIMAGE_GUIDANCE > 0:
+                                        _i2i_kwargs["negative_prompt"] = (
+                                            _negative_prompt
+                                        )
+                                    ref_result = i2i_pipe(**_i2i_kwargs)
                                 refined_tiles.append(ref_result.images[0])
                                 torch.cuda.empty_cache()
                             except RuntimeError as oom_exc:

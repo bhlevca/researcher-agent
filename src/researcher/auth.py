@@ -187,6 +187,8 @@ async def migrate_sessions_table(db):
         logger.info("Migrated users table: added composer_llm_params column")
 
 
+
+
 # ---------------------------------------------------------------------------
 # Pydantic models
 # ---------------------------------------------------------------------------

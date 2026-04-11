@@ -22,6 +22,66 @@ GENERATED_DIR = STATIC_DIR / "generated"
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 GENERATED_DIR.mkdir(parents=True, exist_ok=True)
 
+# ---------------------------------------------------------------------------
+# Model capability probing — cached per model name
+# ---------------------------------------------------------------------------
+_model_caps_cache: dict[str, dict] = {}
+
+# Known fallback model that supports tool calling
+TOOL_CAPABLE_MODEL = os.getenv("PLANNING_MODEL", "ollama/qwen3.5:9b")
+
+
+def probe_model_capabilities(model: str) -> dict:
+    """Query Ollama /api/show to detect model capabilities.
+
+    Returns a dict with:
+        supports_tools: bool — template contains {{.Tools}} or similar
+        is_thinking:    bool — model family supports thinking (qwen3, deepseek-r1)
+        family:         str  — model family from Ollama metadata
+
+    Results are cached per model name for the lifetime of the process.
+    """
+    if model in _model_caps_cache:
+        return _model_caps_cache[model]
+
+    bare_name = model.replace("ollama/", "")
+    caps = {
+        "supports_tools": False,
+        "is_thinking": any(k in model.lower() for k in ("qwen3", "deepseek-r1")),
+        "family": "",
+    }
+
+    try:
+        import requests as _req
+        resp = _req.post(
+            f"{OLLAMA_BASE}/api/show",
+            json={"name": bare_name},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        info = resp.json()
+        template = info.get("template", "")
+        caps["supports_tools"] = (
+            ".Tools" in template
+            or "{{- if .Tools }}" in template
+            or "<tools>" in template.lower()
+        )
+        caps["family"] = info.get("details", {}).get("family", "")
+        logger.info(
+            "[PROBE] %s: tools=%s, thinking=%s, family=%s",
+            bare_name, caps["supports_tools"], caps["is_thinking"], caps["family"],
+        )
+    except Exception as e:
+        logger.warning("[PROBE] Failed to probe %s: %s — assuming no tools", bare_name, e)
+
+    _model_caps_cache[model] = caps
+    return caps
+
+
+def clear_model_caps_cache():
+    """Clear the capability cache (e.g. after pulling a new model)."""
+    _model_caps_cache.clear()
+
 # Strip ANSI escape codes and box-drawing decorations from captured output
 _ansi_re = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07")
 _box_re = re.compile(r"[╭╮╰╯│─┌┐└┘├┤┬┴┼]+")

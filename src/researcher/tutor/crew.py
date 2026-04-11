@@ -49,6 +49,8 @@ class TutorCrew:
         "repeat_penalty": 1.1,
         "frequency_penalty": 0.0,
         "presence_penalty": 0.0,
+        "max_iter": 15,
+        "planning_max_attempts": 3,
     }
 
     def __init__(self, model: str | None = None):
@@ -57,6 +59,18 @@ class TutorCrew:
         self._llm = self._make_llm(self._model_name, self._llm_params)
         self._agents_config = _load_yaml("agents.yaml")
         self._tasks_config = _load_yaml("tasks.yaml")
+
+    def get_llm_params(self) -> dict:
+        """Return current LLM parameters."""
+        return dict(self._llm_params)
+
+    def update_llm_params(self, params: dict) -> dict:
+        """Update LLM parameters and rebuild the LLM instance."""
+        for k, v in params.items():
+            if k in self.DEFAULT_LLM_PARAMS:
+                self._llm_params[k] = v
+        self._llm = self._make_llm(self._model_name, self._llm_params)
+        return dict(self._llm_params)
 
     @staticmethod
     def _make_llm(model: str, params: dict) -> LLM:
@@ -129,7 +143,7 @@ class TutorCrew:
 
         planning = PlanningConfig(
             llm=planning_llm,
-            max_attempts=3,
+            max_attempts=int(self._llm_params.get("planning_max_attempts", 3)),
             max_steps=4,
             reasoning_effort="medium",
             plan_prompt=(
@@ -152,7 +166,7 @@ class TutorCrew:
             tools=TUTOR_TOOLS,
             llm=self._llm,
             verbose=True,
-            max_iter=15,
+            max_iter=int(self._llm_params.get("max_iter", 15)),
             max_retry_limit=2,
             respect_context_window=True,
             planning_config=planning,

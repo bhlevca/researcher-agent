@@ -1,0 +1,192 @@
+/* ── Music Composer — additional styles ── */
+
+/* ── Tab navigation ── */
+.composer-tabs {
+    display: flex; gap: 0; background: #16213e;
+    border-bottom: 1px solid #0f3460; padding: 0 1rem;
+}
+.composer-tab {
+    background: none; border: none; border-bottom: 2px solid transparent;
+    color: #64748b; padding: 0.6rem 1rem; font-size: 0.82rem;
+    cursor: pointer; transition: all 0.15s; font-family: inherit;
+}
+.composer-tab:hover { color: #e0e0e0; }
+.composer-tab.active { color: #e94560; border-bottom-color: #e94560; }
+
+/* ── Tab panels ── */
+.composer-panel { display: none; flex: 1; overflow: hidden; flex-direction: column; }
+.composer-panel.active { display: flex; }
+
+/* ── Chat panel ── */
+#composer-chat {
+    flex: 1; overflow-y: auto; padding: 1rem 1.5rem;
+    display: flex; flex-direction: column; gap: 0.75rem;
+}
+
+#composer-input-area {
+    padding: 0.75rem 1.5rem; background: #16213e;
+    border-top: 1px solid #0f3460; display: flex; gap: 0.75rem;
+}
+#composer-input-area textarea {
+    flex: 1; background: #1a1a2e; border: 1px solid #0f3460; color: #e0e0e0;
+    padding: 0.6rem 0.85rem; border-radius: 0.6rem; font-family: inherit;
+    font-size: 0.9rem; resize: none; outline: none;
+    min-height: 2.5rem; max-height: 8rem;
+}
+#composer-input-area textarea:focus { border-color: #e94560; }
+#composer-input-area button {
+    background: #e94560; color: white; border: none; padding: 0 1rem;
+    border-radius: 0.6rem; font-size: 0.9rem; cursor: pointer;
+}
+#composer-input-area button:hover { background: #c73652; }
+#composer-input-area button:disabled { background: #4a4a5a; cursor: not-allowed; }
+
+/* ── Composer config bar ── */
+.composer-config {
+    display: flex; gap: 0.5rem; padding: 0.5rem 1rem;
+    background: #0d1b2e; align-items: center; flex-wrap: wrap;
+}
+.composer-config select, .composer-config input {
+    background: #1a1a2e; border: 1px solid #0f3460; color: #e0e0e0;
+    padding: 0.3rem 0.5rem; border-radius: 0.4rem; font-size: 0.78rem;
+    font-family: inherit; outline: none;
+}
+.composer-config label {
+    display: flex; align-items: center; gap: 0.3rem;
+    font-size: 0.78rem; color: #94a3b8;
+}
+.composer-config input[type="number"] {
+    width: 4rem; text-align: center;
+}
+
+/* ── Score generation form ── */
+.score-form {
+    display: flex; gap: 0.5rem; padding: 0.75rem 1rem;
+    background: #0d1b2e; border-bottom: 1px solid #0f3460;
+    align-items: center; flex-wrap: wrap;
+}
+.score-form input[type="text"] {
+    flex: 1; background: #1a1a2e; border: 1px solid #0f3460; color: #e0e0e0;
+    padding: 0.5rem 0.75rem; border-radius: 0.5rem; font-family: inherit;
+    font-size: 0.85rem; outline: none; min-width: 200px;
+}
+.score-form input[type="text"]:focus { border-color: #e94560; }
+.score-form select, .score-form input[type="number"] {
+    background: #1a1a2e; border: 1px solid #0f3460; color: #e0e0e0;
+    padding: 0.4rem 0.5rem; border-radius: 0.4rem; font-size: 0.8rem;
+    font-family: inherit; outline: none;
+}
+.score-form input[type="number"] { width: 4rem; text-align: center; }
+.score-form button {
+    background: #e94560; color: white; border: none;
+    padding: 0.5rem 1rem; border-radius: 0.5rem; font-size: 0.82rem;
+    cursor: pointer; white-space: nowrap;
+}
+.score-form button:hover { background: #c73652; }
+
+/* ── Score display area ── */
+.score-content {
+    flex: 1; overflow-y: auto; padding: 1rem 1.5rem;
+}
+.score-content .musicxml-block {
+    background: #0d1b2e; border: 1px solid #1a3a6e; border-radius: 0.5rem;
+    padding: 1rem; margin: 0.75rem 0; font-family: monospace;
+    font-size: 0.8rem; color: #94a3b8; overflow-x: auto;
+    white-space: pre-wrap; word-wrap: break-word;
+    max-height: 400px; overflow-y: auto;
+}
+.score-actions {
+    display: flex; gap: 0.5rem; margin-top: 0.5rem;
+}
+.score-actions button {
+    background: #0f3460; color: #e0e0e0; border: 1px solid #1a3a6e;
+    padding: 0.4rem 0.8rem; border-radius: 0.4rem; font-size: 0.78rem;
+    cursor: pointer;
+}
+.score-actions button:hover { background: #1a3a6e; }
+
+/* ── Compositions list ── */
+.composition-item {
+    padding: 0.6rem 0.8rem; margin: 0.3rem 0;
+    background: #16213e; border: 1px solid #0f3460; border-radius: 0.4rem;
+    cursor: pointer; transition: border-color 0.15s;
+}
+.composition-item:hover { border-color: #e94560; }
+.composition-item .comp-title { color: #e0e0e0; font-size: 0.85rem; }
+.composition-item .comp-meta { color: #64748b; font-size: 0.72rem; margin-top: 0.2rem; }
+
+/* ── Harmonize form ── */
+.harmonize-form {
+    padding: 1rem 1.5rem;
+}
+.harmonize-form textarea {
+    width: 100%; background: #1a1a2e; border: 1px solid #0f3460; color: #e0e0e0;
+    padding: 0.6rem 0.85rem; border-radius: 0.6rem; font-family: inherit;
+    font-size: 0.9rem; resize: vertical; outline: none; min-height: 6rem;
+}
+.harmonize-form textarea:focus { border-color: #e94560; }
+.harmonize-form .form-row {
+    display: flex; gap: 0.5rem; margin-top: 0.5rem; align-items: center;
+}
+.harmonize-form button {
+    background: #e94560; color: white; border: none;
+    padding: 0.5rem 1rem; border-radius: 0.5rem; font-size: 0.85rem; cursor: pointer;
+}
+.harmonize-form button:hover { background: #c73652; }
+
+/* ── Analyze form ── */
+.analyze-form {
+    padding: 1rem 1.5rem;
+}
+.analyze-form textarea {
+    width: 100%; background: #1a1a2e; border: 1px solid #0f3460; color: #e0e0e0;
+    padding: 0.6rem 0.85rem; border-radius: 0.6rem; font-family: inherit;
+    font-size: 0.9rem; resize: vertical; outline: none; min-height: 6rem;
+}
+.analyze-form textarea:focus { border-color: #e94560; }
+.analyze-form button {
+    background: #e94560; color: white; border: none;
+    padding: 0.5rem 1rem; border-radius: 0.5rem; font-size: 0.85rem;
+    cursor: pointer; margin-top: 0.5rem;
+}
+.analyze-form button:hover { background: #c73652; }
+
+/* ── Streaming indicator ── */
+.composer-streaming-label {
+    display: flex; align-items: center; gap: 0.4rem;
+    font-size: 0.78rem; color: #64748b; margin-bottom: 0.3rem;
+}
+.composer-streaming {
+    background: #0d1b2e; border: 1px solid #1a2a4e; border-radius: 0.5rem;
+    padding: 0.65rem 0.85rem; font-size: 0.8rem; line-height: 1.5;
+    color: #94a3b8; max-height: 60vh; overflow-y: auto;
+    white-space: pre-wrap; word-wrap: break-word;
+}
+
+/* ── Sessions panel (reuse tutor pattern) ── */
+.composer-sessions-overlay {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.5); z-index: 100;
+    display: none;
+}
+.composer-sessions-overlay.open { display: block; }
+.composer-sessions-panel {
+    position: fixed; top: 0; right: -400px; bottom: 0; width: 350px;
+    background: #1a1a2e; border-left: 1px solid #0f3460;
+    padding: 1rem; z-index: 101; overflow-y: auto;
+    transition: right 0.25s ease;
+}
+.composer-sessions-panel.open { right: 0; }
+
+/* ── Instruments tag input ── */
+.instruments-tags {
+    display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center;
+}
+.instrument-tag {
+    background: #0f3460; color: #e0e0e0; padding: 0.2rem 0.5rem;
+    border-radius: 0.3rem; font-size: 0.75rem; display: flex;
+    align-items: center; gap: 0.3rem;
+}
+.instrument-tag .remove-tag {
+    cursor: pointer; color: #e94560; font-weight: bold;
+}

@@ -45,21 +45,30 @@
 - [ ] Add `ZIMAGE_HIRES` env var or API param to opt into large generation
 - [ ] Add tests for tile stitching and overlap blending
 
-## v1.6.0 — Music Composer
+## v1.6.0 — Music Composer (DONE)
 
-- [ ] Research music generation models:
-  - [ ] Meta MusicGen (text-to-music, MIT license, runs on GPU)
-  - [ ] Riffusion (Stable Diffusion fine-tuned on spectrograms)
-  - [ ] AudioCraft / MusicGen-Melody (melody-conditioned generation)
-- [ ] Implement music generation backend:
-  - [ ] Lazy-load model with same VRAM management pattern as ZImage
-  - [ ] Ollama unload/reload around inference
-  - [ ] Generate audio from text prompt
-  - [ ] Save as WAV/MP3, serve from `/static/generated/`
-- [ ] Add CrewAI tool: `GenerateMusic` (prompt → audio file)
-- [ ] Add audio player support in frontend
-- [ ] Add music generation tests
-- [ ] Score generation and compatibility with MuseScore that will allow also midi audio play
+- [x] Implement composer module (`src/researcher/composer/`):
+  - [x] `crew.py` — ComposerCrew orchestrator (compose, arrange, harmonize, analyze modes)
+  - [x] `models.py` — Pydantic request models for all composer operations
+  - [x] `storage.py` — SQLite persistence for composer sessions and saved compositions
+  - [x] `tools.py` — CrewAI tools: scale_reference, instrument_range, chord_progression_builder, musicxml_template
+  - [x] `config/agents.yaml` — Music composer agent with MusicXML reference and 13 mandatory rules
+  - [x] `config/tasks.yaml` — Tasks for compose_chat, compose_score, harmonize, analyze
+- [x] Implement MusicXML postprocessor (`musicxml_fix.py`):
+  - [x] Phase 1 — 16 regex pre-fixes (note-attribute stripping, garbage tag removal, truncation recovery, etc.)
+  - [x] Phase 2 — 8 ElementTree structural repairs (ensure children, deduplicate attributes, insert backups, reorder, etc.)
+  - [x] Handles qwen3.5:9b broken output patterns (attributes on `<note>`, repeated `<attributes>`, missing `<backup>`)
+- [x] Add API endpoints (`routes/composer.py`):
+  - [x] Session CRUD: GET/POST/PUT/DELETE `/composer/sessions`
+  - [x] SSE streaming: POST `/composer/chat`, `/composer/score`, `/composer/harmonize`, `/composer/analyze`
+  - [x] Composition storage: save, list, get, download MusicXML
+- [x] Register composer in `main.py` (lifespan, DB init, routes, `/composer` page)
+- [x] Implement frontend:
+  - [x] `composer.html` — Tab-based UI (Chat, Score, Harmonize, Analyze, Compositions)
+  - [x] `js/composer-chat.js`, `composer-score.js`, `composer-sessions.js`, `composer-state.js`
+  - [x] Copy/Save/CopyAll/SaveAll/Download buttons, reasoning collapsible
+- [x] Add MusicXML postprocessor tests (`tests/test_musicxml_fix.py`) — 21 tests, all passing
+- [x] Grand staff support for piano (treble+bass with `<staves>`, `<backup>`, `<staff>`, `<voice>`)
 
 
 ## v2.0.0 — Language Tutor Agent

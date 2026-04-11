@@ -82,10 +82,12 @@
         <div class="header-spacer"></div>
         <div class="session-controls">
             <span id="tutor-active-session" style="color:#60a5fa;font-size:0.78rem;display:none;"></span>
+            <button onclick="openPageSettings()" title="LLM parameters">⚙️ Params</button>
             <button onclick="createTutorSession()" title="New tutor session">🗒️ New</button>
             <button onclick="saveTutorSession()" title="Save session">💾 Save</button>
             <button onclick="openTutorSessionsPanel()" title="Saved tutor sessions">📂 Sessions</button>
             <a href="/" class="nav-link" title="Back to Research Agent">🔬 Research</a>
+            <a href="/composer" class="nav-link" title="Music Composer">🎼 Composer</a>
         </div>
         <div class="user-badge" id="user-badge" style="display:none;">
             <span>👤</span><span class="username" id="user-badge-name"></span>
@@ -119,6 +121,86 @@
             <button onclick="closeTutorSessionsPanel()" style="background:none;border:none;color:#94a3b8;font-size:1rem;cursor:pointer;">✕</button>
         </div>
         <div id="tutor-sessions-list"></div>
+    </div>
+
+    <!-- LLM Settings panel -->
+    <div class="llm-settings-overlay" id="pg-settings-overlay" onclick="closePageSettings()"></div>
+    <div class="llm-settings-panel" id="pg-settings-panel">
+        <div class="llm-settings-header">
+            <h3>⚙️ Tutor LLM Parameters</h3>
+            <button onclick="closePageSettings()">✕</button>
+        </div>
+        <div class="llm-settings-body">
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Temperature</span><span class="llm-param-value" id="pg-val-temperature">0.6</span></div>
+                <div class="llm-param-hint">Controls randomness. 0 = deterministic, 1 = creative. 0.6 is good for natural conversation.</div>
+                <input type="range" id="pg-param-temperature" min="0" max="2" step="0.05" value="0.6" oninput="_pgUpdateParamDisplay('temperature')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Top K</span><span class="llm-param-value" id="pg-val-top_k">40</span></div>
+                <div class="llm-param-hint">Limits token selection to K most likely tokens. Lower = more focused, higher = more diverse.</div>
+                <input type="range" id="pg-param-top_k" min="0" max="100" step="1" value="40" oninput="_pgUpdateParamDisplay('top_k')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Top P</span><span class="llm-param-value" id="pg-val-top_p">0.9</span></div>
+                <div class="llm-param-hint">Nucleus sampling — considers tokens whose cumulative probability reaches P.</div>
+                <input type="range" id="pg-param-top_p" min="0" max="1" step="0.05" value="0.9" oninput="_pgUpdateParamDisplay('top_p')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Min P</span><span class="llm-param-value" id="pg-val-min_p">0.0</span></div>
+                <div class="llm-param-hint">Minimum token probability threshold. Filters out unlikely tokens. 0 = disabled.</div>
+                <input type="range" id="pg-param-min_p" min="0" max="1" step="0.05" value="0" oninput="_pgUpdateParamDisplay('min_p')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Repeat Penalty</span><span class="llm-param-value" id="pg-val-repeat_penalty">1.1</span></div>
+                <div class="llm-param-hint">Penalizes token repetition. 1.0 = no penalty, higher = less repetition. 1.1 is a good default for text.</div>
+                <input type="range" id="pg-param-repeat_penalty" min="1" max="2" step="0.05" value="1.1" oninput="_pgUpdateParamDisplay('repeat_penalty')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Frequency Penalty</span><span class="llm-param-value" id="pg-val-frequency_penalty">0.0</span></div>
+                <div class="llm-param-hint">Reduces repeated tokens proportional to frequency. 0 = disabled.</div>
+                <input type="range" id="pg-param-frequency_penalty" min="0" max="2" step="0.05" value="0" oninput="_pgUpdateParamDisplay('frequency_penalty')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Presence Penalty</span><span class="llm-param-value" id="pg-val-presence_penalty">0.0</span></div>
+                <div class="llm-param-hint">Encourages new topics. Penalizes any token that appeared. 0 = disabled.</div>
+                <input type="range" id="pg-param-presence_penalty" min="0" max="2" step="0.05" value="0" oninput="_pgUpdateParamDisplay('presence_penalty')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Max Tokens (num_predict)</span><span class="llm-param-value" id="pg-val-num_predict">4096</span></div>
+                <div class="llm-param-hint">Maximum tokens per response. 4096 is sufficient for tutor conversations. Increase for longer lessons.</div>
+                <input type="range" id="pg-param-num_predict" min="256" max="32768" step="256" value="4096" oninput="_pgUpdateParamDisplay('num_predict')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Context Length (num_ctx)</span><span class="llm-param-value" id="pg-val-num_ctx">32768</span></div>
+                <div class="llm-param-hint">Context window size in tokens. Larger = more conversation memory but uses more VRAM.</div>
+                <input type="range" id="pg-param-num_ctx" min="2048" max="131072" step="2048" value="32768" oninput="_pgUpdateParamDisplay('num_ctx')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Seed</span><span class="llm-param-value" id="pg-val-seed">0</span></div>
+                <div class="llm-param-hint">Random seed for reproducibility. 0 = random each time.</div>
+                <input type="number" id="pg-param-seed" min="0" max="999999999" step="1" value="0" oninput="_pgUpdateParamDisplay('seed')">
+            </div>
+
+            <!-- Tutor-specific agent parameters -->
+            <div class="llm-param-section-header" style="margin-top:1.2rem;padding-top:0.8rem;border-top:1px solid #1e3a5f;">
+                <span style="color:#38bdf8;font-weight:600;font-size:0.85rem;">📚 Tutor Agent</span>
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Max Iterations (max_iter)</span><span class="llm-param-value" id="pg-val-max_iter">15</span></div>
+                <div class="llm-param-hint">Maximum reasoning/tool-call iterations per task. Too low = incomplete answers. 10–20 recommended for tutor.</div>
+                <input type="range" id="pg-param-max_iter" min="4" max="30" step="1" value="15" oninput="_pgUpdateParamDisplay('max_iter')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Planning Max Attempts</span><span class="llm-param-value" id="pg-val-planning_max_attempts">3</span></div>
+                <div class="llm-param-hint">Maximum planning attempts before proceeding. Higher = more retries if planning fails. 1–5 recommended.</div>
+                <input type="range" id="pg-param-planning_max_attempts" min="1" max="5" step="1" value="3" oninput="_pgUpdateParamDisplay('planning_max_attempts')">
+            </div>
+        </div>
+        <div class="llm-settings-actions">
+            <button class="llm-btn-reset" onclick="resetPageSettings()">↺ Reset Defaults</button>
+            <button class="llm-btn-apply" onclick="applyPageSettings()">Apply</button>
+        </div>
     </div>
 
     <!-- Tab navigation -->
@@ -250,6 +332,7 @@
     <script src="/static/js/auth.js"></script>
     <script src="/static/js/tts.js"></script>
     <script src="/static/js/audio.js"></script>
+    <script src="/static/js/page-settings.js?v=1"></script>
 
     <!-- Tutor JS -->
     <script src="/static/js/tutor-state.js"></script>
@@ -263,6 +346,14 @@
 
     <!-- Tutor init -->
     <script>
+    // ── Init settings panel ──
+    initPageSettings({
+        endpoint: '/tutor/llm-params',
+        authHeaders: () => tutorAuthHeaders(),
+        jsonAuthHeaders: () => tutorJsonHeaders(),
+        showToast: tutorShowToast,
+    });
+
     // ── Tutor model selector ──
     const tutorModelSelect = document.getElementById('tutor-model-select');
     const tutorModelInfo = document.getElementById('tutor-model-info');

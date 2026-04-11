@@ -17,6 +17,7 @@ header {
     display: flex;
     align-items: center;
     gap: 0.75rem;
+    flex-wrap: wrap;
 }
 header h1 { font-size: 1.2rem; font-weight: 600; color: #e94560; }
 
@@ -255,7 +256,7 @@ header h1 { font-size: 1.2rem; font-weight: 600; color: #e94560; }
 
 /* ── Session controls ── */
 .header-spacer { flex: 1; }
-.session-controls { display: flex; gap: 0.4rem; align-items: center; }
+.session-controls { display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; }
 .session-controls button {
     background: #0f3460; color: #94a3b8; border: 1px solid #1a3a6e;
     padding: 0.35rem 0.65rem; border-radius: 0.5rem; font-size: 0.75rem;
@@ -263,12 +264,12 @@ header h1 { font-size: 1.2rem; font-weight: 600; color: #e94560; }
 }
 .session-controls button:hover { background: #1a3a6e; color: #e0e0e0; }
 .nav-link {
-    background: #0f3460; color: #60a5fa; border: 1px solid #1a3a6e;
-    padding: 0.35rem 0.65rem; border-radius: 0.5rem; font-size: 0.75rem;
-    cursor: pointer; transition: all 0.15s; white-space: nowrap;
-    text-decoration: none; display: inline-block;
+    background: #1a3a6e; color: #60a5fa; border: 1px solid #3b82f6;
+    padding: 0.35rem 0.75rem; border-radius: 0.5rem; font-size: 0.8rem;
+    font-weight: 600; cursor: pointer; transition: all 0.15s; white-space: nowrap;
+    text-decoration: none; display: inline-flex; align-items: center;
 }
-.nav-link:hover { background: #1a3a6e; color: #e0e0e0; }
+.nav-link:hover { background: #3b82f6; color: #fff; }
 
 /* ── Sessions panel ── */
 .sessions-overlay {

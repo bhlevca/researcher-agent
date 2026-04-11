@@ -25,6 +25,8 @@ from researcher.image import preload_sd
 from researcher.config import STATIC_DIR, DB_PATH
 from researcher.tutor.crew import TutorCrew
 from researcher.tutor.storage import init_tutor_tables
+from researcher.composer.crew import ComposerCrew
+from researcher.composer.storage import init_composer_tables
 
 from researcher.auth import (
     register_auth_routes,
@@ -41,6 +43,7 @@ from researcher.routes.sessions import register_session_routes
 from researcher.routes.models import register_model_routes
 from researcher.routes.speech import register_speech_routes
 from researcher.routes.tutor import register_tutor_routes
+from researcher.routes.composer import register_composer_routes
 from researcher.tts import register_tts_routes
 
 load_dotenv()
@@ -57,6 +60,7 @@ async def lifespan(app: FastAPI):
     app.state.current_model = model
     app.state.research_crew = ResearchCrew(model=model)
     app.state.tutor_crew = TutorCrew(model=model)
+    app.state.composer_crew = ComposerCrew(model=model)
     app.state.crew_semaphore = asyncio.Semaphore(1)  # serialise crew runs
     app.state.cancel_event = threading.Event()  # crew cancellation flag
 
@@ -126,6 +130,9 @@ async def lifespan(app: FastAPI):
     # Tutor tables
     await init_tutor_tables(db)
 
+    # Composer tables
+    await init_composer_tables(db)
+
     # Warm up Stable Diffusion in background
     preload_sd()
 
@@ -146,6 +153,7 @@ register_session_routes(app)
 register_model_routes(app)
 register_speech_routes(app)
 register_tutor_routes(app)
+register_composer_routes(app)
 register_tts_routes(app)
 
 
@@ -160,6 +168,11 @@ async def index():
 @app.get("/tutor")
 async def tutor_page():
     return FileResponse(STATIC_DIR / "tutor.html")
+
+
+@app.get("/composer")
+async def composer_page():
+    return FileResponse(STATIC_DIR / "composer.html")
 
 
 # --- Static files & server entry point ---

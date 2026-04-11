@@ -117,6 +117,11 @@
 
 ## v2.2.0 — Composer Quality Improvements
 
+- [ ] Infuse musical creativity and domain knowledge:
+  - [ ] Research music composition libraries (e.g. music21, mingus, abjad) for structured theory data
+  - [ ] Extract chord voicings, idiomatic patterns, and style templates from library examples
+  - [ ] Feed curated music theory snippets into CompositionPrep output (voice leading rules, rhythmic patterns per genre)
+  - [ ] Add genre-specific melodic/rhythmic motif banks the LLM can reference
 - [ ] Longer scores: increase minimum measure count, encourage 16-32 measure compositions
 - [ ] Better musical variety: richer chord progressions (beyond I-IV-V-I), more progression styles
 - [ ] Bass staff reliability: ensure two-voice (treble+bass) output consistently

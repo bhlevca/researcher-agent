@@ -100,6 +100,10 @@ class ComposerCrew:
 
     @staticmethod
     def _make_planning_llm(model: str) -> LLM:
+        """Lightweight LLM for the planning phase.
+
+        Thinking disabled, small context — planning completes fast.
+        """
         return LLM(
             model=model,
             base_url="http://localhost:11434",
@@ -108,7 +112,7 @@ class ComposerCrew:
                 "options": {
                     "num_ctx": 8192,
                     "num_gpu": 99,
-                    "num_predict": 2048,
+                    "num_predict": 1024,
                 },
                 "chat_template_kwargs": {"enable_thinking": False},
             },
@@ -137,22 +141,20 @@ class ComposerCrew:
 
         planning_llm = self._make_planning_llm(self._model_name)
         planning_llm._allow_fc = True
-
         planning = PlanningConfig(
             llm=planning_llm,
             max_attempts=int(self._llm_params.get("planning_max_attempts", 2)),
             max_steps=3,
-            reasoning_effort="medium",
+            reasoning_effort="low",
             plan_prompt=(
-                "You are {role}.\n\n"
-                "Task: {description}\n\n"
-                "Expected output: {expected_output}\n\n"
-                "Available tools: {tools}\n\n"
-                "Create a CONCISE plan with 1-{max_steps} steps. "
-                "For each step write ONE line: the action.\n"
-                "Most composition tasks can be completed from your own knowledge "
-                "— no internet search needed.\n"
-                "End with: READY: I am ready to execute the task.\n"
+                "You are {role}.\\n\\n"
+                "Task: {description}\\n\\n"
+                "Available tools: {tools}\\n\\n"
+                "Create a plan with EXACTLY 2 steps:\\n"
+                "1. Call CompositionPrep tool to get chords, guidelines, and JSON skeleton.\\n"
+                "2. Fill the skeleton with composed notes and output as Final Answer (no tool needed).\\n\\n"
+                "End your response with EXACTLY this line:\n"
+                "READY: I am ready to execute the task.\n"
             ),
         )
 
@@ -305,21 +307,34 @@ class ComposerCrew:
     def _extract_json_score(response: str, key: str = "C major",
                             time_signature: str = "4/4",
                             tempo: int = 120) -> str | None:
-        """Extract JSON score from ```json fences and build MusicXML."""
+        """Extract JSON score from response — tries fenced JSON, then bare JSON.
+
+        Handles common LLM issues: hallucinated text spliced into JSON,
+        truncated output (unclosed braces/brackets), trailing commas.
+        """
+        raw = None
+        # Try ```json ... ``` fences first
         m = re.search(r"```json\s*(.*?)```", response, re.DOTALL)
-        if not m:
+        if m:
+            raw = m.group(1).strip()
+        if raw is None:
+            # Try bare JSON: find opening { before "parts" key, take to end
+            m = re.search(r'\{[^{}]*"parts"\s*:', response)
+            if m:
+                raw = response[m.start():]
+        if not raw:
             return None
-        raw = m.group(1).strip()
+
+        # First attempt: parse as-is
         try:
             score = json.loads(raw)
         except json.JSONDecodeError:
-            # Try to salvage: fix common JSON issues
-            # Remove trailing commas before } or ]
-            fixed = re.sub(r',\s*([}\]])', r'\1', raw)
+            # Apply repairs and retry
+            repaired = ComposerCrew._repair_json(raw)
             try:
-                score = json.loads(fixed)
+                score = json.loads(repaired)
             except json.JSONDecodeError as e:
-                logger.warning("[Composer] Failed to parse JSON score: %s", e)
+                logger.warning("[Composer] Failed to parse JSON score after repair: %s", e)
                 return None
 
         if not isinstance(score, dict) or 'parts' not in score:
@@ -333,3 +348,67 @@ class ComposerCrew:
         except Exception as e:
             logger.warning("[Composer] Failed to build MusicXML from JSON: %s", e)
             return None
+
+    @staticmethod
+    def _repair_json(raw: str) -> str:
+        """Repair common LLM JSON corruption.
+
+        1. Remove hallucinated text lines (no colon, no structural chars).
+        2. Remove trailing commas before } or ].
+        3. Trim to last completed closing delimiter.
+        4. Close any remaining unclosed braces/brackets.
+        """
+        # ── 1. Strip hallucinated text lines ──
+        lines = raw.split('\n')
+        cleaned: list[str] = []
+        for line in lines:
+            s = line.strip()
+            if not s:
+                continue
+            # Keep lines starting with structural JSON chars
+            if s[0] in '{}[]':
+                cleaned.append(line)
+                continue
+            # Keep lines containing key:value pairs (colon present)
+            if ':' in s:
+                cleaned.append(line)
+                continue
+            # Skip everything else (hallucinated text, stray quotes, etc.)
+            logger.debug("[Composer] Stripping hallucinated JSON line: %r", s)
+        result = '\n'.join(cleaned)
+
+        # ── 2. Remove trailing commas before } or ] ──
+        result = re.sub(r',\s*([}\]])', r'\1', result)
+
+        # ── 3. Trim back to last completed closing delimiter ──
+        last_close = max(result.rfind('}'), result.rfind(']'))
+        if last_close >= 0:
+            result = result[:last_close + 1]
+
+        # ── 4. Close truncated JSON via delimiter stack ──
+        stack: list[str] = []
+        in_string = False
+        escape = False
+        for ch in result:
+            if escape:
+                escape = False
+                continue
+            if ch == '\\' and in_string:
+                escape = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == '{':
+                stack.append('}')
+            elif ch == '[':
+                stack.append(']')
+            elif ch in '}]' and stack and stack[-1] == ch:
+                stack.pop()
+        if stack:
+            result = result.rstrip().rstrip(',')
+            result += ''.join(stack[::-1])
+
+        return result

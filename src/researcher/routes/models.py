@@ -51,6 +51,26 @@ def register_model_routes(app):
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Cannot reach Ollama: {e}")
 
+    @app.post("/model/unload")
+    async def unload_model(request: Request):
+        """Unload the current model from GPU (free VRAM). Sends keep_alive=0 to Ollama."""
+        await get_current_user(request)
+        current = request.app.state.current_model or ""
+        model_name = current.replace("ollama/", "")
+        if not model_name:
+            raise HTTPException(status_code=400, detail="No model loaded")
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(
+                    f"{OLLAMA_BASE}/api/generate",
+                    json={"model": model_name, "keep_alive": 0, "prompt": ""},
+                )
+                resp.raise_for_status()
+            logger.info("Unloaded model %s from GPU", model_name)
+            return {"status": "unloaded", "model": model_name}
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Failed to unload model: {e}")
+
     @app.post("/model")
     async def switch_model(req: ModelRequest, request: Request):
         """Switch the active LLM model. Stores per-user preference."""

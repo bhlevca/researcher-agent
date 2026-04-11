@@ -528,6 +528,101 @@ def test_crew_extract_musicxml_prefers_json():
     assert step.text == 'A'
 
 
+def test_crew_repair_hallucinated_text():
+    """_repair_json should strip hallucinated text lines and still parse."""
+    from researcher.composer.crew import ComposerCrew
+
+    # Simulates LLM inserting stray `" feel,` and a lone `"` in JSON
+    bad_json = '''{
+  "title": "Test",
+  "composer": "AI",
+  "parts": [
+    {
+      "name": "Piano",
+      "measures": [
+        {
+          "notes": [
+            {"pitch": "C5", "duration": "quarter", "staff": 1},
+            {"pitch": "G5", "duration": "quarter",
+" feel,
+"staff": 1},
+            {"pitch": "C3", "duration": "quarter", "staff": 2}
+          ]
+        },
+        {
+          "notes": [
+            {"pitch": "D5",
+"
+"duration": "quarter", "staff": 1}
+          ]
+        }
+      ]
+    }
+  ]
+}'''
+    repaired = ComposerCrew._repair_json(bad_json)
+    import json
+    score = json.loads(repaired)
+    assert score["title"] == "Test"
+    assert len(score["parts"][0]["measures"]) == 2
+
+
+def test_crew_repair_truncated_json():
+    """_repair_json should close truncated JSON with missing brackets."""
+    from researcher.composer.crew import ComposerCrew
+
+    # JSON truncated mid-measure (missing closing brackets)
+    truncated = '''{
+  "title": "Truncated",
+  "composer": "AI",
+  "parts": [
+    {
+      "name": "Piano",
+      "measures": [
+        {
+          "notes": [
+            {"pitch": "C4", "duration": "whole", "staff": 1}
+          ]
+        },
+        {
+          "notes": [
+            {"pitch": "D4", "duration": "quarter", "staff": 1},
+            {"pitch": "E4", "duration": "quarter",'''
+    repaired = ComposerCrew._repair_json(truncated)
+    import json
+    score = json.loads(repaired)
+    assert score["title"] == "Truncated"
+    # First complete measure should be intact
+    assert len(score["parts"][0]["measures"]) >= 1
+
+
+def test_crew_extract_bare_json():
+    """_extract_json_score should handle bare (unfenced) JSON output."""
+    from researcher.composer.crew import ComposerCrew
+
+    response = '''Final Answer:
+{
+  "title": "Bare",
+  "composer": "AI",
+  "parts": [
+    {
+      "name": "Piano",
+      "measures": [
+        {
+          "notes": [
+            {"pitch": "A4", "duration": "whole", "staff": 1},
+            {"pitch": "A3", "duration": "whole", "staff": 2}
+          ]
+        }
+      ]
+    }
+  ]
+}'''
+    xml = ComposerCrew._extract_json_score(response)
+    assert xml is not None
+    assert '<score-partwise' in xml
+
+
 # ── Split-part merging ───────────────────────────────────────────────
 
 SPLIT_PIANO_SCORE = {

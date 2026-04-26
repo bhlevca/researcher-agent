@@ -64,8 +64,12 @@ lesson_task:
 
 quiz_task:
   description: >
-    Generate a {quiz_type} quiz for a {level}-level student of {target_lang}
+    Generate a quiz for a {level}-level student of {target_lang}
     (native language: {native_lang}).
+
+    ════ STRICT REQUIREMENT — READ FIRST ════
+    {quiz_type_instruction}
+    ═════════════════════════════════════════
 
     Number of questions: {num_questions}
 
@@ -73,26 +77,61 @@ quiz_task:
 
     {lesson_context}
 
-    Generate the quiz as a JSON array wrapped in ```json fences.
-    Each question object MUST have:
-    - "id": sequential integer starting from 0
-    - "type": one of "vocabulary", "grammar", "translation"
-    - "question": the question text
-    - "options": array of 4 choices (for vocabulary/grammar) or null (for translation)
-    - "correct_answer": the correct answer string
-
-    For vocabulary questions: give a word in {target_lang}, ask for
-    the {native_lang} translation (or vice versa).
-
-    For grammar questions: provide a sentence with a blank and 4 options.
-
-    For translation questions: provide a sentence in one language and ask
-    the student to translate it to the other.
+    Output the quiz as a JSON array wrapped in ```json fences.
+    Every question object MUST have these fields:
+      "id" (integer, 0-based), "type" (string), "question" (string),
+      "options" (array or null), "correct_answer" (string).
+    Plus type-specific extra fields:
+      matching  → "pairs": [{"left": word, "right": translation}, ...]
+      reorder   → "words": [shuffled word list]
+      listening → "audio_text": phrase the student will hear
 
     Mix difficulty within the {level} CEFR band.
   expected_output: >
     A valid JSON array of {num_questions} question objects inside ```json fences.
-    Each object has id, type, question, options (array or null), and correct_answer.
+    Every question uses only the type(s) stated in the STRICT REQUIREMENT above.
+    The JSON must be parseable by json.loads().
+  agent: language_tutor
+
+grade_task:
+  description: >
+    You are grading quiz answers for a {level}-level student learning {target_lang}
+    (native language: {native_lang}).
+
+    Evaluate each student answer against the correct answer with linguistic awareness:
+    - Accept synonyms, paraphrases, and semantically equivalent answers.
+    - Accept minor typos and alternate transliterations.
+    - Ignore trailing punctuation differences (e.g. "apple." vs "apple" are equal).
+    - Ignore leading/trailing whitespace and capitalisation differences.
+    - Award partial credit (0.5) for partially correct answers
+      (e.g. correct word, wrong gender/tense/accent).
+    - Score 0.0 for answers that are clearly wrong or blank.
+    - For "matching" type: the answer format is "word1=trans1; word2=trans2; ...".
+      Award proportional partial credit: (correct pairs) / (total pairs) as the score.
+    - For "cloze" type: the correct_answer contains ONLY the missing word, not
+      the full sentence. The question field may contain a hint in parentheses —
+      ignore the hint when comparing. Award 1.0 if the student's word is the
+      correct word OR any other word that is grammatically valid AND semantically
+      appropriate in the blank (e.g. if both "avons" and "achetons" can correctly
+      complete "Nous ___ du pain", accept both). Only mark wrong (0.0) if the
+      answer changes the meaning, is the wrong word class, or is grammatically
+      incorrect for the blank position.
+    - For "reorder" type: award 1.0 for the correct sentence, 0.5 if the words are
+      mostly correct but in a slightly wrong order, 0.0 if completely wrong.
+
+    Questions and student answers (JSON):
+    {qa_json}
+
+    Return ONLY a valid JSON array wrapped in ```json fences. No other text.
+    Each element must have exactly these fields:
+    - "question_id": integer (same as in the input)
+    - "score": float between 0.0 and 1.0
+    - "is_correct": boolean (true if score >= 0.5)
+    - "feedback": one short sentence in {native_lang} explaining the result
+  expected_output: >
+    A JSON array wrapped in ```json fences. Each element has question_id (int),
+    score (float 0.0–1.0), is_correct (bool), and feedback (string in {native_lang}).
+    The array length must equal the number of input questions.
     The JSON must be parseable by json.loads().
   agent: language_tutor
 

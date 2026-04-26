@@ -89,6 +89,7 @@
             <button onclick="openTutorSessionsPanel()" title="Saved tutor sessions">📂 Sessions</button>
             <a href="/" class="nav-link" title="Back to Research Agent">🔬 Research</a>
             <a href="/composer" class="nav-link" title="Music Composer">🎼 Composer</a>
+            <a href="/chat-direct" class="nav-link" title="Direct Chat">🤖 Direct</a>
         </div>
         <div class="user-badge" id="user-badge" style="display:none;">
             <span>👤</span><span class="username" id="user-badge-name"></span>
@@ -252,6 +253,7 @@
         <div class="vocab-toolbar">
             <input type="text" id="vocab-search" placeholder="Search vocabulary..." oninput="filterVocabulary()">
             <span id="vocab-count" style="color:#64748b;font-size:0.78rem;">0 words</span>
+            <button id="review-due-btn" onclick="startDueReview()" title="Quiz yourself on words due for spaced-repetition review" style="display:none;background:#0f3460;border:1px solid #38bdf8;color:#38bdf8;">🔁 Review Due (<span id="review-due-count">0</span>)</button>
             <button onclick="addVocabManual()">+ Add Word</button>
         </div>
         <div id="vocab-list"></div>
@@ -262,8 +264,11 @@
         <div class="quiz-form">
             <select id="quiz-type">
                 <option value="multiple_choice">Multiple Choice</option>
-                <option value="fill_blank">Fill in the Blank</option>
                 <option value="translation">Translation</option>
+                <option value="cloze">Fill in the Blank (Cloze)</option>
+                <option value="matching">Matching</option>
+                <option value="reorder">Reorder Words</option>
+                <option value="listening">Listening</option>
                 <option value="mixed">Mixed</option>
             </select>
             <label style="display:flex;align-items:center;gap:0.3rem;font-size:0.78rem;color:#94a3b8;">

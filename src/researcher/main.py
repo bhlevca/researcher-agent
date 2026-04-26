@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 import aiosqlite
 
 from researcher.crew import ResearchCrew
-from researcher.image import preload_sd
+from researcher.image import generate_ai_image
 from researcher.config import STATIC_DIR, DB_PATH
 from researcher.tutor.crew import TutorCrew
 from researcher.tutor.storage import init_tutor_tables
@@ -44,6 +44,7 @@ from researcher.routes.models import register_model_routes
 from researcher.routes.speech import register_speech_routes
 from researcher.routes.tutor import register_tutor_routes
 from researcher.routes.composer import register_composer_routes
+from researcher.routes.proxy import register_proxy_routes
 from researcher.tts import register_tts_routes
 
 load_dotenv()
@@ -133,9 +134,6 @@ async def lifespan(app: FastAPI):
     # Composer tables
     await init_composer_tables(db)
 
-    # Warm up Stable Diffusion in background
-    preload_sd()
-
     yield
 
     # -- Shutdown --
@@ -154,6 +152,7 @@ register_model_routes(app)
 register_speech_routes(app)
 register_tutor_routes(app)
 register_composer_routes(app)
+register_proxy_routes(app)
 register_tts_routes(app)
 
 
@@ -173,6 +172,11 @@ async def tutor_page():
 @app.get("/composer")
 async def composer_page():
     return FileResponse(STATIC_DIR / "composer.html")
+
+
+@app.get("/chat-direct")
+async def chat_direct_page():
+    return FileResponse(STATIC_DIR / "chat-direct.html")
 
 
 # --- Static files & server entry point ---

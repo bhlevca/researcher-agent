@@ -33,8 +33,6 @@ def _patch_external_services(tmp_path, monkeypatch):
     monkeypatch.setattr("researcher.main.DB_PATH", test_db)
     test_db.parent.mkdir(parents=True, exist_ok=True)
 
-    monkeypatch.setattr("researcher.main.preload_sd", lambda: None)
-
     # Mock ResearchCrew
     mock_rc = MagicMock()
     monkeypatch.setattr("researcher.main.ResearchCrew", mock_rc)

@@ -7,7 +7,7 @@ vocabulary entries, lesson plans, and quiz results in SQLite.
 import json
 import uuid
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import aiosqlite
 
@@ -72,6 +72,29 @@ async def init_tutor_tables(db: aiosqlite.Connection):
     except Exception:
         pass  # column already exists
 
+    # Migration: add SM-2 SRS columns if missing
+    for col_sql in (
+        "ALTER TABLE vocabulary ADD COLUMN next_review  TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE vocabulary ADD COLUMN interval_days INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE vocabulary ADD COLUMN ease_factor   REAL    NOT NULL DEFAULT 2.5",
+    ):
+        try:
+            await db.execute(col_sql)
+            await db.commit()
+        except Exception:
+            pass  # column already exists
+
+    # Backfill next_review for existing rows that have no value
+    try:
+        tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).date().isoformat()
+        await db.execute(
+            "UPDATE vocabulary SET next_review = ? WHERE next_review = ''",
+            (tomorrow,),
+        )
+        await db.commit()
+    except Exception:
+        pass
+
     await db.execute(
         """
         CREATE TABLE IF NOT EXISTS lesson_plans (
@@ -101,6 +124,7 @@ async def init_tutor_tables(db: aiosqlite.Connection):
             questions     TEXT NOT NULL DEFAULT '[]',
             answers       TEXT NOT NULL DEFAULT '[]',
             score         INTEGER NOT NULL DEFAULT 0,
+            score_float   REAL    NOT NULL DEFAULT 0.0,
             total         INTEGER NOT NULL DEFAULT 0,
             feedback      TEXT NOT NULL DEFAULT '',
             created_at    TEXT NOT NULL,
@@ -108,6 +132,15 @@ async def init_tutor_tables(db: aiosqlite.Connection):
         )
         """
     )
+
+    # Migration: add score_float column if missing (existing databases)
+    try:
+        await db.execute(
+            "ALTER TABLE quiz_results ADD COLUMN score_float REAL NOT NULL DEFAULT 0.0"
+        )
+        await db.commit()
+    except Exception:
+        pass  # column already exists
 
     await db.commit()
     logger.info("Tutor tables initialised")
@@ -253,12 +286,15 @@ async def add_vocabulary(
 ) -> dict:
     vid = uuid.uuid4().hex[:12]
     now = datetime.now(timezone.utc).isoformat()
+    tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).date().isoformat()
     await db.execute(
         "INSERT INTO vocabulary "
         "(id, user_id, session_id, target_lang, word, translation, context, phonetic, "
-        "part_of_speech, mastery_level, times_reviewed, times_correct, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?)",
-        (vid, user_id, session_id, target_lang, word, translation, context, phonetic, part_of_speech, now),
+        "part_of_speech, mastery_level, times_reviewed, times_correct, "
+        "next_review, interval_days, ease_factor, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, 1, 2.5, ?)",
+        (vid, user_id, session_id, target_lang, word, translation, context, phonetic,
+         part_of_speech, tomorrow, now),
     )
     await db.commit()
     return {
@@ -269,6 +305,9 @@ async def add_vocabulary(
         "phonetic": phonetic,
         "part_of_speech": part_of_speech,
         "mastery_level": 0,
+        "next_review": tomorrow,
+        "interval_days": 1,
+        "ease_factor": 2.5,
         "created_at": now,
     }
 
@@ -283,13 +322,15 @@ async def add_vocabulary_batch(
     """Add multiple vocabulary entries at once (e.g. from a lesson)."""
     results = []
     now = datetime.now(timezone.utc).isoformat()
+    tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).date().isoformat()
     for e in entries:
         vid = uuid.uuid4().hex[:12]
         await db.execute(
             "INSERT INTO vocabulary "
             "(id, user_id, session_id, target_lang, word, translation, context, phonetic, "
-            "part_of_speech, mastery_level, times_reviewed, times_correct, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?)",
+            "part_of_speech, mastery_level, times_reviewed, times_correct, "
+            "next_review, interval_days, ease_factor, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, 1, 2.5, ?)",
             (
                 vid,
                 user_id,
@@ -300,6 +341,7 @@ async def add_vocabulary_batch(
                 e.get("context", ""),
                 e.get("phonetic", ""),
                 e.get("part_of_speech", ""),
+                tomorrow,
                 now,
             ),
         )
@@ -313,7 +355,8 @@ async def list_vocabulary(
 ) -> list[dict]:
     cursor = await db.execute(
         "SELECT id, word, translation, context, phonetic, part_of_speech, "
-        "mastery_level, times_reviewed, times_correct, created_at "
+        "mastery_level, times_reviewed, times_correct, "
+        "next_review, interval_days, ease_factor, created_at "
         "FROM vocabulary WHERE user_id = ? AND session_id = ? ORDER BY created_at DESC",
         (user_id, session_id),
     )
@@ -329,7 +372,10 @@ async def list_vocabulary(
             "mastery_level": r[6],
             "times_reviewed": r[7],
             "times_correct": r[8],
-            "created_at": r[9],
+            "next_review": r[9] or "",
+            "interval_days": r[10] or 1,
+            "ease_factor": r[11] or 2.5,
+            "created_at": r[12],
         }
         for r in rows
     ]
@@ -341,7 +387,8 @@ async def list_vocabulary_by_lang(
     """List all vocabulary for a user in a given target language (cross-session)."""
     cursor = await db.execute(
         "SELECT id, word, translation, context, phonetic, part_of_speech, "
-        "mastery_level, times_reviewed, times_correct, created_at "
+        "mastery_level, times_reviewed, times_correct, "
+        "next_review, interval_days, ease_factor, created_at "
         "FROM vocabulary WHERE user_id = ? AND target_lang = ? ORDER BY created_at DESC",
         (user_id, target_lang),
     )
@@ -357,7 +404,10 @@ async def list_vocabulary_by_lang(
             "mastery_level": r[6],
             "times_reviewed": r[7],
             "times_correct": r[8],
-            "created_at": r[9],
+            "next_review": r[9] or "",
+            "interval_days": r[10] or 1,
+            "ease_factor": r[11] or 2.5,
+            "created_at": r[12],
         }
         for r in rows
     ]
@@ -366,7 +416,7 @@ async def list_vocabulary_by_lang(
 async def update_vocabulary_mastery(
     db: aiosqlite.Connection, vocab_id: str, correct: bool
 ):
-    """Update mastery after a quiz answer."""
+    """Update mastery and SM-2 schedule after a quiz answer."""
     await db.execute(
         "UPDATE vocabulary SET times_reviewed = times_reviewed + 1"
         + (", times_correct = times_correct + 1" if correct else "")
@@ -377,6 +427,108 @@ async def update_vocabulary_mastery(
         (correct, vocab_id),
     )
     await db.commit()
+    # Apply SM-2 scheduling
+    grade = 5 if correct else 1
+    await sm2_review(db, vocab_id, grade)
+
+
+def _sm2_compute(interval_days: int, ease_factor: float, times_correct: int, grade: int):
+    """Compute next SM-2 interval and ease_factor.
+
+    grade: 0-5  (0=total blackout, 2=incorrect but recalled, 3=correct with difficulty,
+                 5=perfect recall)
+    Returns (new_interval_days, new_ease_factor).
+    """
+    if grade < 3:
+        # Failed: start over but don't reset ease_factor much
+        new_interval = 1
+    else:
+        if times_correct == 0:
+            new_interval = 1
+        elif times_correct == 1:
+            new_interval = 6
+        else:
+            new_interval = max(1, round(interval_days * ease_factor))
+
+    new_ef = ease_factor + 0.1 - (5 - grade) * (0.08 + (5 - grade) * 0.02)
+    new_ef = max(1.3, round(new_ef, 3))
+    return new_interval, new_ef
+
+
+async def sm2_review(db: aiosqlite.Connection, vocab_id: str, grade: int):
+    """Apply the SM-2 algorithm to schedule the next review for a vocabulary item.
+
+    grade: 0=blackout, 1-2=fail, 3=pass with effort, 4=correct, 5=perfect.
+    Updates next_review, interval_days, ease_factor in the vocabulary row.
+    """
+    cursor = await db.execute(
+        "SELECT interval_days, ease_factor, times_correct FROM vocabulary WHERE id = ?",
+        (vocab_id,),
+    )
+    row = await cursor.fetchone()
+    if not row:
+        return
+    interval_days = row[0] or 1
+    ease_factor = row[1] or 2.5
+    times_correct = row[2] or 0
+
+    new_interval, new_ef = _sm2_compute(interval_days, ease_factor, times_correct, grade)
+    next_review = (datetime.now(timezone.utc) + timedelta(days=new_interval)).date().isoformat()
+
+    await db.execute(
+        "UPDATE vocabulary SET next_review = ?, interval_days = ?, ease_factor = ? WHERE id = ?",
+        (next_review, new_interval, new_ef, vocab_id),
+    )
+    await db.commit()
+
+
+async def list_vocabulary_due(
+    db: aiosqlite.Connection, user_id: str, target_lang: str = ""
+) -> list[dict]:
+    """Return vocabulary items due for review today or past-due.
+
+    If target_lang is given, filter to that language; otherwise return all languages.
+    """
+    today = datetime.now(timezone.utc).date().isoformat()
+    if target_lang:
+        cursor = await db.execute(
+            "SELECT id, word, translation, context, phonetic, part_of_speech, "
+            "mastery_level, times_reviewed, times_correct, "
+            "next_review, interval_days, ease_factor, created_at "
+            "FROM vocabulary "
+            "WHERE user_id = ? AND target_lang = ? AND next_review != '' AND next_review <= ? "
+            "ORDER BY next_review ASC",
+            (user_id, target_lang, today),
+        )
+    else:
+        cursor = await db.execute(
+            "SELECT id, word, translation, context, phonetic, part_of_speech, "
+            "mastery_level, times_reviewed, times_correct, "
+            "next_review, interval_days, ease_factor, created_at "
+            "FROM vocabulary "
+            "WHERE user_id = ? AND next_review != '' AND next_review <= ? "
+            "ORDER BY next_review ASC",
+            (user_id, today),
+        )
+    rows = await cursor.fetchall()
+    return [
+        {
+            "id": r[0],
+            "word": r[1],
+            "translation": r[2],
+            "context": r[3],
+            "phonetic": r[4],
+            "part_of_speech": r[5],
+            "mastery_level": r[6],
+            "times_reviewed": r[7],
+            "times_correct": r[8],
+            "next_review": r[9] or "",
+            "interval_days": r[10] or 1,
+            "ease_factor": r[11] or 2.5,
+            "created_at": r[12],
+        }
+        for r in rows
+    ]
 
 
 async def delete_vocabulary(db: aiosqlite.Connection, vocab_id: str, user_id: str) -> bool:
@@ -501,7 +653,7 @@ async def get_quiz(
 ) -> dict | None:
     cursor = await db.execute(
         "SELECT id, session_id, lesson_id, quiz_type, questions, answers, "
-        "score, total, feedback, created_at "
+        "score, score_float, total, feedback, created_at "
         "FROM quiz_results WHERE id = ? AND user_id = ?",
         (quiz_id, user_id),
     )
@@ -524,9 +676,10 @@ async def get_quiz(
         "questions": questions,
         "answers": answers,
         "score": row[6],
-        "total": row[7],
-        "feedback": row[8],
-        "created_at": row[9],
+        "score_float": row[7],
+        "total": row[8],
+        "feedback": row[9],
+        "created_at": row[10],
     }
 
 
@@ -537,12 +690,19 @@ async def save_quiz_results(
     answers: list[dict],
     score: int,
     feedback: str,
+    score_float: float | None = None,
 ):
-    """Save graded quiz answers."""
+    """Save graded quiz answers.
+
+    ``score_float`` is the sum of per-question float scores (0.0–1.0 each).
+    If omitted, it defaults to ``score`` (integer, backward-compatible).
+    """
+    if score_float is None:
+        score_float = float(score)
     await db.execute(
-        "UPDATE quiz_results SET answers = ?, score = ?, feedback = ? "
+        "UPDATE quiz_results SET answers = ?, score = ?, score_float = ?, feedback = ? "
         "WHERE id = ? AND user_id = ?",
-        (json.dumps(answers), score, feedback, quiz_id, user_id),
+        (json.dumps(answers), score, score_float, feedback, quiz_id, user_id),
     )
     await db.commit()
 

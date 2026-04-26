@@ -39,6 +39,7 @@ from researcher.tutor.storage import (
     add_vocabulary_batch,
     list_vocabulary,
     list_vocabulary_by_lang,
+    list_vocabulary_due,
     delete_vocabulary,
     save_lesson_plan,
     list_lesson_plans,
@@ -360,6 +361,14 @@ def register_tutor_routes(app):
         vocab = await list_vocabulary_by_lang(db, user["id"], lang)
         return {"vocabulary": vocab}
 
+    @app.get("/tutor/vocabulary/due")
+    async def tutor_vocabulary_due(request: Request, lang: str = ""):
+        """Return vocabulary items due for SRS review today (SM-2 schedule)."""
+        user = await get_current_user(request)
+        db = request.app.state.db
+        due = await list_vocabulary_due(db, user["id"], target_lang=lang)
+        return {"due": due, "count": len(due)}
+
     @app.post("/tutor/vocabulary")
     async def tutor_add_vocabulary(req: VocabularyAddRequest, request: Request):
         _validate_sid(req.session_id)
@@ -449,11 +458,14 @@ def register_tutor_routes(app):
         if not questions:
             raise HTTPException(status_code=400, detail="Could not parse quiz JSON from response")
 
+        quiz_type = body.get("quiz_type", "mixed")
+        questions = tutor_crew.filter_quiz_questions(questions, quiz_type)
+
         quiz = await save_quiz(
             db,
             user_id=user["id"],
             session_id=session_id,
-            quiz_type=body.get("quiz_type", "mixed"),
+            quiz_type=quiz_type,
             questions=questions,
             lesson_id=body.get("lesson_id"),
         )
@@ -472,30 +484,33 @@ def register_tutor_routes(app):
             raise HTTPException(status_code=404, detail="Quiz not found")
 
         questions = quiz["questions"]
-        score = 0
-        graded = []
-
-        for ans in req.answers:
-            qid = ans.get("question_id", -1)
-            student_answer = ans.get("answer", "").strip()
-            if 0 <= qid < len(questions):
-                q = questions[qid]
-                correct = q.get("correct_answer", "").strip()
-                is_correct = student_answer.lower() == correct.lower()
-                if is_correct:
-                    score += 1
-                graded.append({
-                    "question_id": qid,
-                    "student_answer": student_answer,
-                    "correct_answer": correct,
-                    "is_correct": is_correct,
-                })
-
         total = len(questions)
-        pct = round(score / total * 100, 1) if total > 0 else 0
-        feedback = f"Score: {score}/{total} ({pct}%)"
 
-        await save_quiz_results(db, req.quiz_id, user["id"], graded, score, feedback)
+        # Fetch session language info for semantic grading
+        session = await get_tutor_session(db, req.session_id, user["id"])
+        target_lang = session["target_lang"] if session else "English"
+        native_lang = session["native_lang"] if session else "English"
+        level = session["level"] if session else "A1"
+
+        tutor_crew = request.app.state.tutor_crew
+        graded = await tutor_crew.grade_answers(
+            questions=questions,
+            student_answers=req.answers,
+            target_lang=target_lang,
+            native_lang=native_lang,
+            level=level,
+        )
+
+        # Compute integer score (questions with score >= 0.5) and float sum
+        score = sum(1 for g in graded if g.get("is_correct"))
+        score_float = sum(g.get("score", 0.0) for g in graded)
+
+        pct = round(score_float / total * 100, 1) if total > 0 else 0
+        feedback = f"Score: {score_float:.1f}/{total} ({pct}%)"
+
+        await save_quiz_results(
+            db, req.quiz_id, user["id"], graded, score, feedback, score_float=score_float
+        )
 
         # Update vocabulary mastery based on quiz answers
         vocab = await list_vocabulary(db, user["id"], req.session_id)
@@ -513,7 +528,7 @@ def register_tutor_routes(app):
 
         return {
             "quiz_id": req.quiz_id,
-            "score": score,
+            "score": score_float,
             "total": total,
             "percentage": pct,
             "feedback": feedback,

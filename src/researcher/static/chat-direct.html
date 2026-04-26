@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Direct Chat</title>
+    <link rel="stylesheet" href="/static/css/main.css">
+    <style>
+        #dc-model-select, #dc-persona-quick, #dc-launch-model, #dc-launch-persona {
+            background:#0f3460; color:#e0e0e0; border:1px solid #1a3a6e;
+            padding:0.35rem 0.6rem; border-radius:0.5rem; font-size:0.8rem;
+            font-family:inherit; outline:none; cursor:pointer;
+        }
+        #dc-model-select:focus, #dc-persona-quick:focus, #dc-launch-model:focus, #dc-launch-persona:focus { border-color:#e94560; }
+        #dc-model-select { max-width:240px; }
+
+        /* Launch panel */
+        #dc-launch-panel {
+            display:none; background:#0d1b2e; border-bottom:2px solid #0f3460;
+            padding:1rem 1.4rem; gap:1rem; flex-wrap:wrap; align-items:flex-start;
+        }
+        #dc-launch-panel.open { display:flex; }
+        .launch-field { display:flex; flex-direction:column; gap:0.3rem; }
+        .launch-field label { font-size:0.72rem; color:#64748b; }
+        #dc-do-launch-btn {
+            background:#e94560; color:#fff; border:none; padding:0.55rem 1.2rem;
+            border-radius:0.5rem; font-size:0.85rem; cursor:pointer; align-self:flex-end;
+            white-space:nowrap;
+        }
+        #dc-do-launch-btn:disabled { background:#4a4a5a; cursor:not-allowed; }
+        #dc-do-launch-btn:hover:not(:disabled) { background:#c73652; }
+
+        /* Env-var result box */
+        #dc-launch-result {
+            display:none; flex:0 0 100%; background:#0a1525;
+            border:1px solid #1a4a8e; border-radius:0.5rem; padding:0.8rem 1rem;
+            font-size:0.8rem;
+        }
+        #dc-launch-result h4 { color:#38bdf8; margin:0 0 0.5rem; font-size:0.85rem; }
+        #dc-envvar-block {
+            background:#050d1a; border-radius:0.4rem; padding:0.6rem 0.8rem;
+            font-family:monospace; font-size:0.78rem; color:#86efac;
+            white-space:pre; overflow-x:auto; cursor:pointer;
+        }
+        #dc-envvar-block:hover { background:#071525; }
+        .launch-hint { font-size:0.68rem; color:#475569; margin-top:0.35rem; }
+
+        /* System prompt row */
+        #dc-sys-row {
+            background:#16213e; border-bottom:1px solid #0f3460;
+            padding:0.5rem 1.2rem; display:flex; align-items:center; gap:0.6rem;
+        }
+        #dc-system-prompt {
+            flex:1; background:#1a1a2e; border:1px solid #0f3460; color:#c0cce0;
+            padding:0.5rem 0.8rem; border-radius:0.5rem; font-size:0.82rem;
+            font-family:inherit; resize:vertical; outline:none;
+            min-height:4.5rem; max-height:20rem;
+        }
+        #dc-system-prompt:focus { border-color:#e94560; }
+        #dc-sys-toggle {
+            background:none; border:none; color:#64748b; font-size:0.75rem;
+            cursor:pointer; padding:0.2rem 0.4rem; white-space:nowrap;
+        }
+        #dc-sys-toggle:hover { color:#e0e0e0; }
+
+        /* Chat */
+        #dc-chat {
+            flex:1; overflow-y:auto; padding:1.25rem 1.5rem;
+            display:flex; flex-direction:column; gap:0.9rem;
+        }
+
+        /* Input area */
+        #dc-input-area {
+            padding:0.85rem 1.2rem; background:#16213e;
+            border-top:1px solid #0f3460; display:flex; gap:0.6rem; align-items:flex-end;
+        }
+        #dc-input {
+            flex:1; background:#1a1a2e; border:1px solid #0f3460; color:#e0e0e0;
+            padding:0.7rem 1rem; border-radius:0.75rem; font-family:inherit;
+            font-size:0.95rem; resize:none; outline:none;
+            min-height:2.6rem; max-height:10rem;
+        }
+        #dc-input:focus { border-color:#e94560; }
+        #dc-send-btn {
+            background:#e94560; color:#fff; border:none; padding:0.6rem 1.2rem;
+            border-radius:0.75rem; font-size:1rem; cursor:pointer; align-self:flex-end;
+            white-space:nowrap; transition:background 0.15s;
+        }
+        #dc-send-btn:hover { background:#c73652; }
+        #dc-send-btn:disabled { background:#4a4a5a; cursor:not-allowed; }
+        #dc-clear-btn {
+            background:#0f3460; color:#94a3b8; border:1px solid #1a3a6e;
+            padding:0.6rem 0.8rem; border-radius:0.75rem; font-size:0.85rem;
+            cursor:pointer; align-self:flex-end; transition:all 0.15s;
+        }
+        #dc-clear-btn:hover { background:#1a3a6e; color:#e0e0e0; }
+
+        /* Status bar */
+        #dc-status {
+            font-size:0.7rem; color:#475569; padding:0.2rem 1.2rem;
+            background:#16213e; border-top:1px solid #0f3460;
+            display:flex; gap:1rem; align-items:center;
+        }
+        #dc-status .dot { width:6px; height:6px; border-radius:50%; background:#22c55e; display:inline-block; }
+        #dc-status .dot.busy { background:#f59e0b; animation:pulse 1s infinite; }
+        #dc-status .dot.err  { background:#ef4444; }
+
+        /* Think blocks */
+        details.think-toggle summary {
+            cursor:pointer; font-size:0.75rem; color:#64748b;
+            list-style:none; user-select:none; padding:0.2rem 0;
+        }
+        details.think-toggle summary::before { content:'\25b6  '; font-size:0.65rem; }
+        details.think-toggle[open] summary::before { content:'\25bc  '; }
+        .think-block {
+            background:#0d1b2e; border:1px solid #1a2a4e; border-radius:0.5rem;
+            padding:0.5rem 0.8rem; margin:0.4rem 0; font-size:0.78rem;
+            line-height:1.5; color:#64748b; white-space:pre-wrap; word-wrap:break-word;
+        }
+
+        /* Temp slider */
+        #dc-temp-slider { width:80px; accent-color:#e94560; }
+    </style>
+</head>
+<body>
+<header>
+    <h1 style="color:#38bdf8;">🤖 Direct Chat</h1>
+
+    <select id="dc-model-select" title="Active model (local Ollama)" onchange="dcOnModelChange()">
+        <option>loading…</option>
+    </select>
+    <select id="dc-persona-quick" onchange="dcPersonaQuickChange()" title="Sets system prompt for this chat session — no model creation needed">
+        <option value="">— persona —</option>
+        <option value="claude">Claude</option>
+        <option value="gpt4">GPT-4</option>
+        <option value="gemini">Gemini</option>
+        <option value="coder">Coder</option>
+    </select>
+    <span class="model-info" id="dc-model-info"></span>
+
+    <button id="dc-launch-btn" onclick="dcToggleLaunchPanel()"
+        style="background:#0f3460;color:#38bdf8;border:1px solid #1a4a8e;
+               padding:0.3rem 0.75rem;border-radius:0.5rem;font-size:0.8rem;cursor:pointer;"
+        title="Launch persona on a local model — like: ollama launch claude --model llama3">
+        🚀 Launch persona
+    </button>
+
+    <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.75rem;color:#94a3b8;" title="Temperature">
+        🌡 <input type="range" id="dc-temp-slider" min="0" max="2" step="0.05" value="0.7" oninput="dcTempDisplay()">
+        <span id="dc-temp-val" style="color:#38bdf8;font-size:0.72rem;min-width:1.8rem;">0.7</span>
+    </label>
+
+    <label style="display:flex;align-items:center;gap:0.3rem;font-size:0.75rem;color:#94a3b8;" title="Stream tokens">
+        <input type="checkbox" id="dc-stream-toggle" checked style="accent-color:#e94560;">Stream
+    </label>
+
+    <div class="header-spacer"></div>
+
+    <div class="session-controls">
+        <button onclick="unloadModelDC()" title="Unload model from GPU">⏏️ Unload</button>
+        <a href="/" class="nav-link">🔬 Research</a>
+        <a href="/tutor" class="nav-link">📚 Tutor</a>
+        <a href="/composer" class="nav-link">🎼 Composer</a>
+    </div>
+    <div class="user-badge" id="user-badge" style="display:none;">
+        <span>👤</span><span class="username" id="user-badge-name"></span>
+        <button onclick="logout()" title="Log out">✕</button>
+    </div>
+    <button id="login-btn" onclick="openAuthModal('login')"
+        style="background:#0f3460;color:#94a3b8;border:1px solid #1a3a6e;padding:0.35rem 0.65rem;border-radius:0.5rem;font-size:0.75rem;cursor:pointer;">🔑 Login</button>
+</header>
+
+<!-- ══════════════════════════════════════════════════════════════════════
+     Launch panel  —  equivalent to:  ollama launch claude --model llama3
+     Creates a named Ollama model with the persona baked into the Modelfile
+     SYSTEM block, then shows the env vars to point Claude Code here.
+     ══════════════════════════════════════════════════════════════════════ -->
+<div id="dc-launch-panel">
+
+    <div class="launch-field" style="flex:0 0 auto;">
+        <label>Base model (local Ollama)</label>
+        <select id="dc-launch-model" style="min-width:200px;"></select>
+    </div>
+
+    <div class="launch-field" style="flex:0 0 auto;">
+        <label>Persona</label>
+        <select id="dc-launch-persona" style="min-width:140px;">
+            <option value="claude">Claude</option>
+            <option value="gpt4">GPT-4</option>
+            <option value="gemini">Gemini</option>
+            <option value="coder">Coder</option>
+        </select>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:0.4rem;align-self:flex-end;">
+        <button id="dc-do-launch-btn" onclick="dcDoLaunch()">🚀 Launch</button>
+        <div class="launch-hint" style="text-align:center;">Creates <code style="color:#38bdf8;">persona-model</code> in Ollama<br>System prompt is <strong>baked in</strong> — leave chat system prompt empty</div>
+    </div>
+
+    <!-- Result: env vars to paste into terminal -->
+    <div id="dc-launch-result">
+        <h4>✅ Launched — connect Claude Code to this server:</h4>
+        <pre id="dc-envvar-block" onclick="dcCopyEnvVars()" title="Click to copy"></pre>
+        <div class="launch-hint">Click to copy · These env vars make Claude Code use your local model via this server's Anthropic-compatible proxy (<code>/anthropic/v1/messages</code>)</div>
+    </div>
+</div>
+
+<!-- System prompt bar for the active chat session -->
+<div id="dc-sys-row">
+    <button id="dc-sys-toggle" onclick="dcToggleSys()" title="Show/hide system prompt">⚙ System prompt</button>
+    <textarea id="dc-system-prompt" rows="3"
+        placeholder="Optional — type a system prompt for this conversation (or use Launch to bake one into a model)…"></textarea>
+</div>
+
+<!-- Auth modal -->
+<div class="auth-overlay" id="auth-overlay" onclick="if(event.target===this)closeAuthModal()">
+    <div class="auth-box">
+        <h2 id="auth-title">Login</h2>
+        <div class="auth-error" id="auth-error"></div>
+        <input type="text" id="auth-username" placeholder="Username" autocomplete="username">
+        <input type="password" id="auth-password" placeholder="Password" autocomplete="current-password">
+        <input type="text" id="auth-invite" placeholder="Invite code" style="display:none;">
+        <input type="text" id="auth-website" name="website" autocomplete="off" tabindex="-1"
+            style="position:absolute;left:-9999px;opacity:0;height:0;width:0;">
+        <div class="auth-actions">
+            <button class="auth-btn-primary" id="auth-submit" onclick="submitAuth()">Login</button>
+            <button class="auth-btn-secondary" id="auth-cancel-btn" onclick="closeAuthModal()">Cancel</button>
+        </div>
+        <div class="auth-toggle" id="auth-toggle">No account? <a onclick="switchAuthMode()">Register</a></div>
+    </div>
+</div>
+
+<div id="dc-chat"></div>
+
+<div id="dc-status">
+    <span class="dot" id="dc-dot"></span>
+    <span id="dc-status-text">Ready</span>
+    <span id="dc-token-count" style="margin-left:auto;"></span>
+</div>
+
+<div id="dc-input-area">
+    <textarea id="dc-input" rows="2"
+        placeholder="Type a message… (Enter to send, Shift+Enter for newline)"></textarea>
+    <button id="dc-clear-btn" onclick="dcClearHistory()" title="Clear chat">🗑️</button>
+    <button id="dc-send-btn" onclick="dcSend()">Send ↵</button>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script src="/static/js/utils.js"></script>
+<script src="/static/js/auth.js"></script>
+<script>
+// ══════════════════════════════════════════════════════════════════════════
+//  Direct Chat — local Ollama via /v1/chat/completions
+//  Launch — bakes persona into Ollama Modelfile via POST /v1/launch
+//  Anthropic proxy — /anthropic/v1/messages  (for Claude Code)
+// ══════════════════════════════════════════════════════════════════════════
+
+// ── State ────────────────────────────────────────────────────────────────
+let dcMessages  = [];
+let dcAbort     = null;
+let dcBusy      = false;
+let dcTotalToks = 0;
+
+// Persona system prompts — these get baked into the Ollama Modelfile SYSTEM
+// block when you click Launch, exactly like `ollama launch claude --model X`.
+const DC_PERSONA_PROMPTS = {
+    claude: [
+        "You are Claude, an AI assistant made by Anthropic.",
+        "Core traits: intellectually curious, warm but never sycophantic,",
+        "direct and confident while genuinely open to other views.",
+        "Think carefully before answering. Acknowledge uncertainty honestly",
+        "('I think', 'I'm not certain', 'you may want to verify this').",
+        "Structure long answers with markdown headers or bullets.",
+        "Never open with flattery or fillers like 'Great question!'.",
+        "When reasoning through hard problems, think step-by-step inside",
+        "<think>…</think> tags before writing your final answer.",
+    ].join(" "),
+    gpt4: [
+        "You are GPT-4, a large language model trained by OpenAI.",
+        "Always be thorough, structured, and precise.",
+        "Use numbered steps for procedures and bullet points for lists.",
+        "Bold key terms. Show reasoning step-by-step when solving problems.",
+        "Be concise in casual exchanges but comprehensive when depth is needed.",
+        "Cite caveats and limitations where relevant.",
+    ].join(" "),
+    gemini: [
+        "You are Gemini, an AI assistant made by Google DeepMind.",
+        "Prioritise factual accuracy; explicitly flag anything you are uncertain about.",
+        "For multi-part questions, address each part in order with clear labels.",
+        "Present multiple perspectives when a topic is genuinely nuanced.",
+        "Be analytical and balanced. Avoid padding.",
+    ].join(" "),
+    coder: [
+        "You are an expert software engineer with deep knowledge across languages and frameworks.",
+        "Always provide working, production-quality code.",
+        "Use the most idiomatic approach for the language.",
+        "Minimal prose before the code block.",
+        "After the block note edge cases, performance considerations, and follow-up steps.",
+    ].join(" "),
+};
+
+// ── Boot ─────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+    dcLoadModels();
+    updateAuthUI();
+    checkAuth();
+    // Restore persona quick-select from saved system prompt
+    const savedSys = localStorage.getItem('dcSystemPrompt') || '';
+    if (savedSys) {
+        for (const [k, v] of Object.entries(DC_PERSONA_PROMPTS)) {
+            if (savedSys.trim() === v.trim()) {
+                document.getElementById('dc-persona-quick').value = k;
+                break;
+            }
+        }
+    }
+    document.getElementById('dc-input').addEventListener('keydown', e => {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); dcSend(); }
+    });
+    document.getElementById('dc-input').addEventListener('input', function() {
+        this.style.height = 'auto';
+        this.style.height = Math.min(this.scrollHeight, 160) + 'px';
+    });
+    document.getElementById('dc-system-prompt').addEventListener('input', function() {
+        localStorage.setItem('dcSystemPrompt', this.value);
+    });
+    const saved = localStorage.getItem('dcSystemPrompt') || '';
+    document.getElementById('dc-system-prompt').value = saved;
+    // Note: persona quick-select matching is already handled above
+});
+
+async function checkAuth() {
+    if (!authToken) return;
+    try {
+        const r = await fetch('/info', { headers: authHeaders() });
+        if (r.ok) { const d = await r.json(); if (d.user) setAuthState(authToken, d.user); }
+    } catch (_) {}
+}
+
+// ── Model loading ────────────────────────────────────────────────────────
+async function dcLoadModels() {
+    const sel = document.getElementById('dc-model-select');
+    try {
+        const resp = await fetch('/v1/models');
+        const data = await resp.json();
+        const models = data.data || [];
+        sel.innerHTML = '';
+        if (!models.length) { sel.innerHTML = '<option>no models found</option>'; return; }
+        const personaPrefixes = ['claude-','gpt4-','gemini-','coder-'];
+        // Group: base models first, then launched persona models
+        const base    = models.filter(m => !personaPrefixes.some(p => m.id.startsWith(p)));
+        const persona = models.filter(m =>  personaPrefixes.some(p => m.id.startsWith(p)));
+        if (base.length) {
+            const g = document.createElement('optgroup'); g.label = '── Base models';
+            base.forEach(m => { const o = document.createElement('option'); o.value = o.textContent = m.id; g.appendChild(o); });
+            sel.appendChild(g);
+        }
+        if (persona.length) {
+            const g = document.createElement('optgroup'); g.label = '── Launched personas (baked-in system prompt)';
+            persona.forEach(m => { const o = document.createElement('option'); o.value = o.textContent = m.id; g.appendChild(o); });
+            sel.appendChild(g);
+        }
+        dcSetStatusReady();
+    } catch (e) {
+        sel.innerHTML = '<option>error</option>';
+        dcSetStatus('err', 'Cannot reach /v1/models: ' + e.message);
+    }
+}
+
+async function dcLoadLaunchModels() {
+    const lsel = document.getElementById('dc-launch-model');
+    try {
+        const resp = await fetch('/v1/models');
+        const data = await resp.json();
+        const models = data.data || [];
+        const personaPrefixes = ['claude-','gpt4-','gemini-','coder-'];
+        lsel.innerHTML = '';
+        const base = models.filter(m => !personaPrefixes.some(p => m.id.startsWith(p)));
+        if (!base.length) { lsel.innerHTML = '<option>no base models found</option>'; return; }
+        base.forEach(m => { const o = document.createElement('option'); o.value = o.textContent = m.id; lsel.appendChild(o); });
+    } catch (e) {
+        lsel.innerHTML = '<option>error</option>';
+    }
+}
+
+function dcOnModelChange() {
+    const name = document.getElementById('dc-model-select').value.toLowerCase();
+    const thinking = ['deepseek-r1','qwq','qwen3'].some(k => name.includes(k));
+    document.getElementById('dc-model-info').textContent = thinking ? '🧠 thinking' : '';
+}
+
+// ── Persona quick-select ─────────────────────────────────────────────────
+// dcPersonaChanged() removed — launch panel no longer has a system prompt textarea
+function dcPersonaQuickChange() {
+    const persona = document.getElementById('dc-persona-quick').value;
+    const ta = document.getElementById('dc-system-prompt');
+    if (persona && DC_PERSONA_PROMPTS[persona]) {
+        // If a launched (baked) persona model is selected, switch to a base model
+        // so the system prompt textarea actually takes effect.
+        const sel = document.getElementById('dc-model-select');
+        const personaPrefixes = ['claude-','gpt4-','gemini-','coder-'];
+        const currentModel = sel.value;
+        if (personaPrefixes.some(p => currentModel.startsWith(p))) {
+            // Find the first non-persona model in the list
+            const baseOpt = Array.from(sel.options).find(o => !personaPrefixes.some(p => o.value.startsWith(p)));
+            if (baseOpt) {
+                sel.value = baseOpt.value;
+                showToast('⚠ Switched to base model "' + baseOpt.value + '" — launched models ignore the system prompt');
+            }
+        }
+        ta.value = DC_PERSONA_PROMPTS[persona];
+        ta.style.display = '';
+        localStorage.setItem('dcSystemPrompt', ta.value);
+        dcSetStatus('', 'Persona: ' + persona + ' — system prompt applied');
+    } else if (persona === '') {
+        ta.value = '';
+        localStorage.removeItem('dcSystemPrompt');
+        dcSetStatus('', 'Ready');
+    }
+}
+
+// ── Launch panel ─────────────────────────────────────────────────────────
+let dcLaunchModelsLoaded = false;
+function dcToggleLaunchPanel() {
+    const p = document.getElementById('dc-launch-panel');
+    p.classList.toggle('open');
+    if (p.classList.contains('open')) {
+        if (!dcLaunchModelsLoaded) { dcLoadLaunchModels(); dcLaunchModelsLoaded = true; }
+        // Restore last env vars if available
+        const saved = localStorage.getItem('dcLastEnvBlock');
+        if (saved) {
+            document.getElementById('dc-envvar-block').textContent = saved;
+            document.getElementById('dc-launch-result').style.display = 'block';
+        }
+    }
+}
+
+async function dcDoLaunch() {
+    const model   = document.getElementById('dc-launch-model').value;
+    const persona = document.getElementById('dc-launch-persona').value;
+    if (!model || !persona) { showToast('Select a model and persona first'); return; }
+
+    const btn = document.getElementById('dc-do-launch-btn');
+    btn.disabled = true;
+    btn.textContent = '⏳ Launching…';
+    dcSetStatus('busy', 'Creating Ollama model…');
+
+    try {
+        const resp = await fetch('/v1/launch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ persona, model }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+            showToast('Launch failed: ' + (data.detail || resp.statusText));
+            dcSetStatus('err', 'Launch failed');
+            return;
+        }
+
+        // Show env var block
+        const launchedName = data.name;
+        const baseUrl = window.location.origin + '/anthropic';
+        const envBlock =
+            `export ANTHROPIC_BASE_URL="${baseUrl}"\n` +
+            `export ANTHROPIC_API_KEY="local"\n` +
+            `export ANTHROPIC_AUTH_TOKEN="local"\n\n` +
+            `# Then in Claude Code:\n` +
+            `# /model  →  choose "${launchedName}"\n` +
+            `# or start with:  claude --model "${launchedName}"`;
+
+        document.getElementById('dc-envvar-block').textContent = envBlock;
+        document.getElementById('dc-launch-result').style.display = 'block';
+        localStorage.setItem('dcLastEnvBlock', envBlock);
+
+        // Set it as the active chat model
+        const sel = document.getElementById('dc-model-select');
+        let found = false;
+        for (const opt of sel.options) {
+            if (opt.value === launchedName) { sel.value = launchedName; found = true; break; }
+        }
+        if (!found) {
+            const opt = document.createElement('option');
+            opt.value = opt.textContent = launchedName;
+            sel.appendChild(opt);
+            sel.value = launchedName;
+        }
+
+        showToast('✅ Launched: ' + launchedName);
+        dcSetStatus('', 'Active: ' + launchedName + ' (' + data.persona_label + ' persona)');
+    } catch (e) {
+        showToast('Error: ' + e.message);
+        dcSetStatus('err', e.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '🚀 Launch';
+    }
+}
+
+function dcCopyEnvVars() {
+    const text = document.getElementById('dc-envvar-block').textContent;
+    navigator.clipboard.writeText(text).then(() => showToast('Env vars copied to clipboard'));
+}
+
+// ── System prompt toggle ─────────────────────────────────────────────────
+function dcToggleSys() {
+    const ta = document.getElementById('dc-system-prompt');
+    ta.style.display = ta.style.display === 'none' ? '' : 'none';
+}
+
+// ── Temperature display ──────────────────────────────────────────────────
+function dcTempDisplay() {
+    document.getElementById('dc-temp-val').textContent =
+        document.getElementById('dc-temp-slider').value;
+}
+
+// ── Status helpers ────────────────────────────────────────────────────────
+function dcSetStatus(state, text) {
+    document.getElementById('dc-status-text').textContent = text;
+    const dot = document.getElementById('dc-dot');
+    dot.className = 'dot' + (state === 'busy' ? ' busy' : state === 'err' ? ' err' : '');
+}
+function dcSetStatusReady() { dcSetStatus('', 'Ready'); }
+
+// ── Clear ────────────────────────────────────────────────────────────────
+function dcClearHistory() {
+    dcMessages = [];
+    dcTotalToks = 0;
+    document.getElementById('dc-chat').innerHTML = '';
+    document.getElementById('dc-token-count').textContent = '';
+    dcSetStatusReady();
+    showToast('Conversation cleared');
+}
+
+// ── Unload ───────────────────────────────────────────────────────────────
+async function unloadModelDC() {
+    try {
+        const r = await fetch('/model/unload', { method: 'POST', headers: jsonAuthHeaders() });
+        const d = await r.json();
+        showToast(r.ok ? 'Unloaded: ' + d.model : (d.detail || 'Failed'));
+    } catch (e) { showToast('Error: ' + e.message); }
+}
+
+// ── Render ────────────────────────────────────────────────────────────────
+function dcRenderContent(text) {
+    const parts = [];
+    const thinkRe = /<think>([\s\S]*?)<\/think>/gi;
+    let m, lastIdx = 0;
+    while ((m = thinkRe.exec(text)) !== null) {
+        if (m.index > lastIdx) parts.push({ type: 'text', content: text.slice(lastIdx, m.index) });
+        parts.push({ type: 'think', content: m[1] });
+        lastIdx = m.index + m[0].length;
+    }
+    if (lastIdx < text.length) parts.push({ type: 'text', content: text.slice(lastIdx) });
+    return parts.map(p =>
+        p.type === 'think'
+            ? '<details class="think-toggle"><summary>💭 Reasoning</summary>' +
+              '<div class="think-block">' + escapeHtml(p.content.trim()) + '</div></details>'
+            : renderContent(p.content)
+    ).join('');
+}
+
+function dcAddBubble(role, html, id) {
+    const chat = document.getElementById('dc-chat');
+    const wrap = document.createElement('div');
+    wrap.className = 'msg-wrapper ' + role;
+    if (id) wrap.id = id;
+    const bubble = document.createElement('div');
+    bubble.className = 'message ' + role;
+    bubble.innerHTML = html;
+    wrap.appendChild(bubble);
+    if (role === 'assistant') {
+        const acts = document.createElement('div');
+        acts.className = 'msg-actions';
+        const cp = document.createElement('button');
+        cp.textContent = '📋 Copy';
+        cp.onclick = () => navigator.clipboard.writeText(bubble.innerText).then(() => showToast('Copied'));
+        acts.appendChild(cp);
+        wrap.appendChild(acts);
+    }
+    chat.appendChild(wrap);
+    chat.scrollTop = chat.scrollHeight;
+    return wrap;
+}
+
+function dcBuildMessages(userText) {
+    const sys = document.getElementById('dc-system-prompt').value.trim();
+    const msgs = [];
+    if (sys) msgs.push({ role: 'system', content: sys });
+    msgs.push(...dcMessages);
+    msgs.push({ role: 'user', content: userText });
+    return msgs;
+}
+
+// ── Send ─────────────────────────────────────────────────────────────────
+async function dcSend() {
+    if (dcBusy) { if (dcAbort) dcAbort.abort(); return; }
+    const ta   = document.getElementById('dc-input');
+    const text = ta.value.trim();
+    if (!text) return;
+
+    ta.value = '';
+    ta.style.height = 'auto';
+
+    const model  = document.getElementById('dc-model-select').value;
+    const stream = document.getElementById('dc-stream-toggle').checked;
+    const temp   = parseFloat(document.getElementById('dc-temp-slider').value);
+
+    dcAddBubble('user', escapeHtml(text));
+    dcMessages.push({ role: 'user', content: text });
+
+    const pid  = 'dc-msg-' + Date.now();
+    const wrap = dcAddBubble('assistant',
+        '<span class="thinking"><span class="dots"><span>•</span><span>•</span><span>•</span></span></span>', pid);
+    const bubble = wrap.querySelector('.message');
+
+    dcBusy = true;
+    dcAbort = new AbortController();
+    const sendBtn = document.getElementById('dc-send-btn');
+    sendBtn.textContent = '■ Stop';
+    sendBtn.style.background = '#b91c1c';
+    dcSetStatus('busy', 'Generating…');
+
+    try {
+        const resp = await fetch('/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model, messages: dcBuildMessages(text), stream, temperature: temp }),
+            signal: dcAbort.signal,
+        });
+
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({ error: resp.statusText }));
+            bubble.innerHTML = '<span style="color:#ef4444;">Error: ' + escapeHtml(JSON.stringify(err)) + '</span>';
+            dcSetStatus('err', 'Request failed');
+            return;
+        }
+
+        if (stream) {
+            const reader  = resp.body.getReader();
+            const decoder = new TextDecoder();
+            let fullText = '';
+            let streamErr = null;
+            bubble.innerHTML = '';
+            outer: while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                for (const line of decoder.decode(value, { stream: true }).split('\n')) {
+                    if (!line.startsWith('data: ')) continue;
+                    const raw = line.slice(6).trim();
+                    if (raw === '[DONE]') break outer;
+                    try {
+                        const parsed = JSON.parse(raw);
+                        // Ollama/proxy sends {"error": "..."} on failure
+                        if (parsed.error) {
+                            streamErr = typeof parsed.error === 'string'
+                                ? parsed.error
+                                : (parsed.error.message || JSON.stringify(parsed.error));
+                            break outer;
+                        }
+                        const delta = parsed.choices?.[0]?.delta?.content;
+                        if (delta) {
+                            fullText += delta;
+                            bubble.innerHTML = dcRenderContent(fullText);
+                            document.getElementById('dc-chat').scrollTop = 99999;
+                        }
+                        if (parsed.usage) {
+                            const u = parsed.usage;
+                            dcTotalToks += (u.total_tokens || 0);
+                            document.getElementById('dc-token-count').textContent =
+                                `${u.prompt_tokens}+${u.completion_tokens}=${u.total_tokens} tok (session: ${dcTotalToks})`;
+                        }
+                    } catch (_) {}
+                }
+            }
+            if (streamErr) {
+                bubble.innerHTML = '<span style="color:#ef4444;">⚠ ' + escapeHtml(streamErr) + '</span>';
+                dcSetStatus('err', streamErr.slice(0, 80));
+                // remove the failed user turn so history stays clean
+                dcMessages.pop();
+                return;
+            }
+            dcMessages.push({ role: 'assistant', content: fullText });
+        } else {
+            const data    = await resp.json();
+            // Non-streaming error from Ollama forwarded as JSON
+            if (data.error) {
+                const msg = typeof data.error === 'string' ? data.error : (data.error.message || JSON.stringify(data.error));
+                bubble.innerHTML = '<span style="color:#ef4444;">⚠ ' + escapeHtml(msg) + '</span>';
+                dcSetStatus('err', msg.slice(0, 80));
+                dcMessages.pop();
+                return;
+            }
+            const content = data.choices?.[0]?.message?.content || '';
+            bubble.innerHTML = dcRenderContent(content);
+            dcMessages.push({ role: 'assistant', content });
+            if (data.usage) {
+                dcTotalToks += data.usage.total_tokens || 0;
+                document.getElementById('dc-token-count').textContent =
+                    `${data.usage.prompt_tokens}+${data.usage.completion_tokens}=${data.usage.total_tokens} tok (session: ${dcTotalToks})`;
+            }
+            document.getElementById('dc-chat').scrollTop = 99999;
+        }
+        dcSetStatusReady();
+    } catch (e) {
+        if (e.name === 'AbortError') {
+            bubble.innerHTML += '<br><span style="color:#f59e0b;font-size:0.78rem;">— stopped —</span>';
+            dcSetStatusReady();
+        } else {
+            bubble.innerHTML = '<span style="color:#ef4444;">Connection error: ' + escapeHtml(e.message) + '</span>';
+            dcSetStatus('err', 'Connection error');
+        }
+    } finally {
+        dcBusy = false;
+        dcAbort = null;
+        sendBtn.textContent = 'Send ↵';
+        sendBtn.style.background = '';
+    }
+}
+</script>
+</body>
+</html>

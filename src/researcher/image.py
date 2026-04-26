@@ -285,7 +285,7 @@ def preload_sd():
 #   TRANSFORMERS_OFFLINE  — set to "1" to skip network after first download
 # Ollama is NOT involved for image generation; it is only used to
 # unload/reload the qwen3 LLM around inference to free VRAM.
-_ZIMAGE_MODEL_ID = os.getenv("ZIMAGE_MODEL", "mrfakename/Z-Image-Turbo")
+_ZIMAGE_MODEL_ID = os.getenv("ZIMAGE_MODEL", "mrfakename/Z-Image-Turbo").split("#")[0].strip()
 _zimage_pipe = None
 _zimage_init_lock = threading.Lock()
 

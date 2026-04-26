@@ -17,7 +17,6 @@ from researcher.tools import (
 )
 from researcher.image import (
     generate_ai_image,
-    preload_sd,
     preload_zimage,
     _image_was_generated,
     IMAGE_BACKEND,

@@ -8,6 +8,7 @@ monkey-patches already applied at import time by researcher.crew.
 import os
 import re
 import json
+import random
 import logging
 from pathlib import Path
 
@@ -276,6 +277,105 @@ class TutorCrew:
             verbose=True,
         )
 
+    # Per quiz-type instructions injected at the top of the quiz prompt so the
+    # LLM cannot miss them.  Keys match the values sent from the frontend.
+    _QUIZ_TYPE_INSTRUCTIONS: dict[str, str] = {
+        "multiple_choice": (
+            'You MUST generate ONLY "vocabulary" or "grammar" type questions. '
+            'Every question MUST have "options": an array of exactly 4 choices. '
+            'Do NOT generate matching, reorder, cloze, translation, or listening questions.'
+        ),
+        "fill_blank": (
+            'You MUST generate ONLY "cloze" type questions. '
+            'Each question shows the student a {target_lang} sentence with EXACTLY ONE word '
+            'replaced by ___ , PLUS a {native_lang} translation of the whole sentence in '
+            'parentheses so the student knows exactly what word to write. '
+            'The blank MUST test a specific grammar point '
+            '(verb conjugation, article, preposition, adjective agreement, etc.). '
+            'Format: '
+            '"question": "<{target_lang} sentence with ___>  (<{native_lang} full translation with the target word also shown in brackets>)" '
+            'Example (French/English): '
+            '"question": "Je ___ au cinéma le vendredi.  (I [go] to the cinema on Fridays.)", '
+            '"correct_answer": "vais" '
+            'The "correct_answer" field MUST contain ONLY the missing word — never the full sentence. '
+            '"options": null. '
+            'Do NOT generate vocabulary, grammar, matching, reorder, translation, or listening questions.'
+        ),
+        "translation": (
+            'You MUST generate ONLY "translation" type questions with "options": null. '
+            'Provide a sentence and ask the student to translate it to the other language. '
+            'Do NOT generate any other question type.'
+        ),
+        "matching": (
+            'You MUST generate ONLY "matching" type questions. '
+            'Each question needs "pairs": an array of 4–6 objects '
+            'like {"left": "<target_lang word>", "right": "<native_lang translation>"}. '
+            '"options": null. '
+            '"correct_answer": pairs joined as "word1=trans1; word2=trans2". '
+            'Do NOT generate vocabulary, grammar, translation, reorder, cloze, or listening questions.'
+        ),
+        "reorder": (
+            'You MUST generate ONLY "reorder" type questions. '
+            'Each question asks the student to put shuffled words in the right order. '
+            'Fields REQUIRED for every reorder question:\n'
+            '  "question": A SHORT HINT in {native_lang} telling the student what to say '
+                '(e.g. "Translate: I eat an apple every day"). '
+                'Do NOT put the target-language sentence here.\n'
+            '  "words": a JSON array of the target-language sentence split into INDIVIDUAL '
+                'words and SHUFFLED — e.g. ["pomme", "Je", "chaque", "mange", "une", "jour"]. '
+                'This MUST be an array, not a string.\n'
+            '  "correct_answer": the full correct target-language sentence as a single string, '
+                'e.g. "Je mange une pomme chaque jour".\n'
+            '  "options": null.\n'
+            'EXAMPLE (French lesson, native=English):\n'
+            '{"type":"reorder","id":0,"question":"Translate: I eat an apple every day",'
+            '"words":["pomme","Je","chaque","mange","une","jour"],'
+            '"correct_answer":"Je mange une pomme chaque jour","options":null}\n'
+            'Do NOT generate any other question type.'
+        ),
+        "listening": (
+            'You MUST generate ONLY "listening" type questions. '
+            'Each question needs "audio_text": the exact phrase the student will hear via TTS. '
+            '"correct_answer" must be identical to "audio_text". '
+            '"options": null. '
+            'Do NOT generate any other question type.'
+        ),
+        "cloze": (
+            'You MUST generate ONLY "cloze" type questions. '
+            'Each question is a {target_lang} sentence with EXACTLY ONE word replaced by ___ . '
+            'The blank MUST be unambiguous — choose a position where only ONE specific word '
+            'is correct (e.g. a specific conjugated verb form, a specific article or '
+            'preposition required by grammar rules). '
+            'You MUST include a {native_lang} hint in parentheses after the sentence '
+            'showing what the blank is testing. '
+            'Format: '
+            '"question": "<sentence with ___>  (Hint: <what grammar/word is being tested>)" '
+            'Example: '
+            '"question": "Elle ___ ses devoirs tous les soirs.  (Hint: conjugate \'faire\' for elle)", '
+            '"correct_answer": "fait" '
+            'The "correct_answer" MUST be ONLY the missing word — never the full sentence. '
+            'Do NOT generate any other question type.'
+        ),
+        "mixed": (
+            'Mix question types freely using any combination of: '
+            '"vocabulary", "grammar", "translation", "matching", "reorder", '
+            '"listening", "cloze". Use at least 3 different types.'
+        ),
+    }
+
+    # Types allowed per quiz_type key (used for backend filtering)
+    _QUIZ_ALLOWED_TYPES: dict[str, set[str]] = {
+        "multiple_choice": {"vocabulary", "grammar"},
+        "fill_blank":      {"cloze"},
+        "translation":     {"translation"},
+        "matching":        {"matching"},
+        "reorder":         {"reorder"},
+        "listening":       {"listening"},
+        "cloze":           {"cloze"},
+        "mixed":           {"vocabulary", "grammar", "translation",
+                            "matching", "reorder", "listening", "cloze"},
+    }
+
     def build_quiz_crew(
         self,
         quiz_type: str,
@@ -287,9 +387,13 @@ class TutorCrew:
         lesson_context: str = "",
     ) -> Crew:
         """Build a Crew for generating a quiz."""
+        quiz_type_instruction = self._QUIZ_TYPE_INSTRUCTIONS.get(
+            quiz_type, self._QUIZ_TYPE_INSTRUCTIONS["mixed"]
+        )
         agent = self._build_agent(target_lang, native_lang, level)
         desc, exp = self._render_task("quiz_task", {
             "quiz_type": quiz_type,
+            "quiz_type_instruction": quiz_type_instruction,
             "num_questions": str(num_questions),
             "target_lang": target_lang,
             "native_lang": native_lang,
@@ -306,6 +410,108 @@ class TutorCrew:
             memory=False,
             verbose=True,
         )
+
+    def filter_quiz_questions(
+        self, questions: list[dict], quiz_type: str
+    ) -> list[dict]:
+        """Filter and repair questions to match the requested quiz_type.
+
+        1. Keep only questions whose type is in the allowed set.
+        2. Apply per-type structural repairs to every kept question.
+        3. If nothing survived filtering, coerce all questions to the target type.
+        """
+        allowed = self._QUIZ_ALLOWED_TYPES.get(quiz_type)
+        if allowed is None:
+            return questions  # unknown type — pass through
+
+        filtered = [q for q in questions if q.get("type") in allowed]
+
+        # ── Per-type structural repair (runs for ALL questions, including mixed) ──
+        for q in filtered:
+            qtype = q.get("type")
+
+            if qtype == "cloze":
+                if "___" not in q.get("question", ""):
+                    ans = q.get("correct_answer", "")
+                    sentence = q.get("question", "")
+                    if ans and ans in sentence:
+                        q["question"] = sentence.replace(ans, "___", 1)
+                    elif ans and " " not in ans:
+                        # single-word answer — blank the last word of correct_answer
+                        pass  # correct_answer already is just the word
+                    elif ans:
+                        parts = ans.split()
+                        # blank the last word
+                        q["question"] = " ".join(parts[:-1]) + " ___"
+                        q["correct_answer"] = parts[-1]
+
+            elif qtype == "reorder":
+                words = q.get("words")
+                if isinstance(words, str) and words.strip():
+                    words = words.split()
+                if not words or not isinstance(words, list):
+                    src = q.get("correct_answer") or ""
+                    words = src.split() if src else []
+                if words:
+                    parts = list(words)
+                    random.shuffle(parts)
+                    q["words"] = parts
+
+            elif qtype == "matching":
+                pairs = q.get("pairs")
+                # Try to rebuild pairs from correct_answer: "word1=trans1; word2=trans2"
+                if not pairs or not isinstance(pairs, list) or len(pairs) == 0:
+                    correct = q.get("correct_answer", "")
+                    rebuilt = []
+                    if correct and "=" in correct:
+                        for item in re.split(r"[;,]\s*", correct):
+                            if "=" in item:
+                                left, _, right = item.partition("=")
+                                if left.strip() and right.strip():
+                                    rebuilt.append({"left": left.strip(), "right": right.strip()})
+                    if rebuilt:
+                        q["pairs"] = rebuilt
+
+        # ── If nothing matched, coerce everything to the target type ──
+        if not filtered:
+            logger.warning(
+                "[TUTOR] quiz filter removed all questions for type=%s — coercing",
+                quiz_type,
+            )
+            work_list = list(questions)
+        else:
+            work_list = filtered
+
+        # ── Dedicated-mode full coercion ──
+        if quiz_type == "reorder":
+            for q in work_list:
+                q["type"] = "reorder"
+                words = q.get("words")
+                if isinstance(words, str) and words.strip():
+                    words = words.split()
+                if not words or not isinstance(words, list):
+                    src = q.get("correct_answer") or q.get("question", "")
+                    words = src.split() if src else []
+                if words:
+                    parts = list(words)
+                    random.shuffle(parts)
+                    q["words"] = parts
+
+        elif quiz_type in ("cloze", "fill_blank"):
+            for q in work_list:
+                q["type"] = "cloze"
+                if "___" not in q.get("question", ""):
+                    correct = q.get("correct_answer", "")
+                    sentence = q.get("question", "")
+                    if correct and correct in sentence:
+                        q["question"] = sentence.replace(correct, "___", 1)
+                    elif correct:
+                        parts = correct.split()
+                        if len(parts) > 1:
+                            q["question"] = " ".join(parts[:-1]) + " ___"
+                            q["correct_answer"] = parts[-1]
+
+        return work_list
 
     def build_appraisal_crew(
         self,
@@ -397,3 +603,169 @@ class TutorCrew:
             pass
 
         return None
+
+    # ------------------------------------------------------------------
+    # Semantic answer grading (Phase 2)
+    # ------------------------------------------------------------------
+
+    async def grade_answers(
+        self,
+        questions: list[dict],
+        student_answers: list[dict],
+        target_lang: str,
+        native_lang: str,
+        level: str,
+    ) -> list[dict]:
+        """Grade quiz answers using LLM semantic evaluation.
+
+        Returns a list of graded dicts with score (0.0–1.0), is_correct, and feedback.
+        Falls back to exact-match grading on any LLM/parse error.
+        """
+        import litellm
+
+        # Build the combined Q&A payload for the prompt
+        qa_list = []
+        for ans in student_answers:
+            qid = ans.get("question_id", -1)
+            student_answer = str(ans.get("answer", "")).strip()
+            if 0 <= qid < len(questions):
+                q = questions[qid]
+                qa_list.append({
+                    "question_id": qid,
+                    "question": q.get("question", ""),
+                    "correct_answer": q.get("correct_answer", ""),
+                    "student_answer": student_answer,
+                })
+
+        if not qa_list:
+            return []
+
+        qa_json = json.dumps(qa_list, ensure_ascii=False, indent=2)
+        desc, _ = self._render_task("grade_task", {
+            "level": level,
+            "target_lang": target_lang,
+            "native_lang": native_lang,
+            "qa_json": qa_json,
+        })
+
+        try:
+            response = await litellm.acompletion(
+                model=self._model_name,
+                base_url="http://localhost:11434",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a language teacher grading student answers. "
+                            "Be fair, accept semantically equivalent answers, "
+                            "and return only the requested JSON."
+                        ),
+                    },
+                    {"role": "user", "content": desc},
+                ],
+                temperature=0.0,
+                max_tokens=2048,
+                extra_body={
+                    "options": {"num_ctx": 8192, "num_gpu": 99},
+                    "chat_template_kwargs": {"enable_thinking": False},
+                },
+            )
+            raw = (response.choices[0].message.content or "").strip()
+            # Strip any <think>…</think> blocks from reasoning models
+            raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+        except Exception as exc:
+            logger.warning("[TUTOR] semantic grading LLM call failed: %s — falling back", exc)
+            return self._exact_match_grade(student_answers, questions)
+
+        return self._parse_grading_json(raw, student_answers, questions)
+
+    @staticmethod
+    def _parse_grading_json(
+        raw: str, student_answers: list[dict], questions: list[dict]
+    ) -> list[dict]:
+        """Parse grading JSON from LLM output; fall back to exact match on error."""
+        # Try ```json fenced block first
+        m = re.search(r"```json\s*(.*?)\s*```", raw, re.DOTALL)
+        text = m.group(1) if m else raw
+
+        # Try bare JSON array if fenced block not found
+        if not m:
+            arr = re.search(r"\[.*\]", raw, re.DOTALL)
+            if arr:
+                text = arr.group(0)
+
+        try:
+            graded = json.loads(text)
+            if isinstance(graded, list):
+                result = []
+                for g in graded:
+                    qid = int(g.get("question_id", -1))
+                    score = float(g.get("score", 0.0))
+                    score = max(0.0, min(1.0, score))
+                    student_ans = next(
+                        (a.get("answer", "") for a in student_answers
+                         if a.get("question_id") == qid),
+                        "",
+                    )
+                    correct_ans = (
+                        questions[qid].get("correct_answer", "")
+                        if 0 <= qid < len(questions) else ""
+                    )
+                    result.append({
+                        "question_id": qid,
+                        "student_answer": student_ans,
+                        "correct_answer": correct_ans,
+                        "score": score,
+                        "is_correct": score >= 0.5,
+                        "feedback": g.get("feedback", ""),
+                    })
+                return result
+        except Exception as exc:
+            logger.warning("[TUTOR] failed to parse grading JSON: %s", exc)
+
+        # Fallback
+        return TutorCrew._exact_match_grade(student_answers, questions)
+
+    @staticmethod
+    def _exact_match_grade(
+        student_answers: list[dict], questions: list[dict]
+    ) -> list[dict]:
+        """Simple case-insensitive exact match fallback.
+
+        Strips trailing punctuation before comparing so "I eat an apple." and
+        "I eat an apple" are treated as equal.  For cloze questions any non-blank
+        answer gets 0.5 because we cannot enumerate all valid alternatives when
+        the semantic LLM is unavailable.
+        """
+        _punct = re.compile(r"[.,!?;:\s]+$")
+
+        def _norm(s: str) -> str:
+            return _punct.sub("", s.strip()).lower()
+
+        result = []
+        for ans in student_answers:
+            qid = ans.get("question_id", -1)
+            student_answer = str(ans.get("answer", "")).strip()
+            if 0 <= qid < len(questions):
+                q = questions[qid]
+                correct = q.get("correct_answer", "").strip()
+                is_correct = _norm(student_answer) == _norm(correct)
+                if is_correct:
+                    score = 1.0
+                elif q.get("type") == "cloze" and student_answer:
+                    # Cannot enumerate valid alternatives without the LLM.
+                    # Give 0.5 so infrastructure failures don't punish correct answers.
+                    score = 0.5
+                    is_correct = True  # treat as passing
+                else:
+                    score = 0.0
+                result.append({
+                    "question_id": qid,
+                    "student_answer": student_answer,
+                    "correct_answer": correct,
+                    "score": score,
+                    "is_correct": is_correct,
+                    "feedback": "" if score > 0 else "Incorrect.",
+                })
+        return result
+

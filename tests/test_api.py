@@ -30,9 +30,6 @@ def _patch_external_services(tmp_path, monkeypatch):
     monkeypatch.setattr("researcher.main.DB_PATH", test_db)
     test_db.parent.mkdir(parents=True, exist_ok=True)
 
-    # Mock preload_sd so it doesn't load GPU models
-    monkeypatch.setattr("researcher.main.preload_sd", lambda: None)
-
     # Mock ResearchCrew so it doesn't need Ollama
     mock_crew = MagicMock()
     mock_result = MagicMock()

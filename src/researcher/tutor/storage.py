@@ -22,8 +22,7 @@ logger = logging.getLogger(__name__)
 async def init_tutor_tables(db: aiosqlite.Connection):
     """Create all tutor-related tables if they don't exist."""
 
-    await db.execute(
-        """
+    await db.execute("""
         CREATE TABLE IF NOT EXISTS tutor_sessions (
             id            TEXT PRIMARY KEY,
             user_id       TEXT NOT NULL DEFAULT '',
@@ -35,11 +34,9 @@ async def init_tutor_tables(db: aiosqlite.Connection):
             updated_at    TEXT NOT NULL,
             messages      TEXT NOT NULL DEFAULT '[]'
         )
-        """
-    )
+        """)
 
-    await db.execute(
-        """
+    await db.execute("""
         CREATE TABLE IF NOT EXISTS vocabulary (
             id              TEXT PRIMARY KEY,
             user_id         TEXT NOT NULL DEFAULT '',
@@ -56,12 +53,13 @@ async def init_tutor_tables(db: aiosqlite.Connection):
             created_at      TEXT NOT NULL,
             FOREIGN KEY (session_id) REFERENCES tutor_sessions(id)
         )
-        """
-    )
+        """)
 
     # Migration: add target_lang column if missing (existing databases)
     try:
-        await db.execute("ALTER TABLE vocabulary ADD COLUMN target_lang TEXT NOT NULL DEFAULT ''")
+        await db.execute(
+            "ALTER TABLE vocabulary ADD COLUMN target_lang TEXT NOT NULL DEFAULT ''"
+        )
         # Backfill from session's target_lang
         await db.execute(
             "UPDATE vocabulary SET target_lang = "
@@ -95,8 +93,7 @@ async def init_tutor_tables(db: aiosqlite.Connection):
     except Exception:
         pass
 
-    await db.execute(
-        """
+    await db.execute("""
         CREATE TABLE IF NOT EXISTS lesson_plans (
             id            TEXT PRIMARY KEY,
             user_id       TEXT NOT NULL DEFAULT '',
@@ -110,11 +107,9 @@ async def init_tutor_tables(db: aiosqlite.Connection):
             created_at    TEXT NOT NULL,
             FOREIGN KEY (session_id) REFERENCES tutor_sessions(id)
         )
-        """
-    )
+        """)
 
-    await db.execute(
-        """
+    await db.execute("""
         CREATE TABLE IF NOT EXISTS quiz_results (
             id            TEXT PRIMARY KEY,
             user_id       TEXT NOT NULL DEFAULT '',
@@ -130,8 +125,7 @@ async def init_tutor_tables(db: aiosqlite.Connection):
             created_at    TEXT NOT NULL,
             FOREIGN KEY (session_id) REFERENCES tutor_sessions(id)
         )
-        """
-    )
+        """)
 
     # Migration: add score_float column if missing (existing databases)
     try:
@@ -250,7 +244,9 @@ async def update_tutor_session_messages(
     await db.commit()
 
 
-async def delete_tutor_session(db: aiosqlite.Connection, session_id: str, user_id: str) -> bool:
+async def delete_tutor_session(
+    db: aiosqlite.Connection, session_id: str, user_id: str
+) -> bool:
     cursor = await db.execute(
         "SELECT id, user_id FROM tutor_sessions WHERE id = ?", (session_id,)
     )
@@ -293,8 +289,19 @@ async def add_vocabulary(
         "part_of_speech, mastery_level, times_reviewed, times_correct, "
         "next_review, interval_days, ease_factor, created_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, 1, 2.5, ?)",
-        (vid, user_id, session_id, target_lang, word, translation, context, phonetic,
-         part_of_speech, tomorrow, now),
+        (
+            vid,
+            user_id,
+            session_id,
+            target_lang,
+            word,
+            translation,
+            context,
+            phonetic,
+            part_of_speech,
+            tomorrow,
+            now,
+        ),
     )
     await db.commit()
     return {
@@ -345,7 +352,13 @@ async def add_vocabulary_batch(
                 now,
             ),
         )
-        results.append({"id": vid, "word": e.get("word", ""), "translation": e.get("translation", "")})
+        results.append(
+            {
+                "id": vid,
+                "word": e.get("word", ""),
+                "translation": e.get("translation", ""),
+            }
+        )
     await db.commit()
     return results
 
@@ -432,7 +445,9 @@ async def update_vocabulary_mastery(
     await sm2_review(db, vocab_id, grade)
 
 
-def _sm2_compute(interval_days: int, ease_factor: float, times_correct: int, grade: int):
+def _sm2_compute(
+    interval_days: int, ease_factor: float, times_correct: int, grade: int
+):
     """Compute next SM-2 interval and ease_factor.
 
     grade: 0-5  (0=total blackout, 2=incorrect but recalled, 3=correct with difficulty,
@@ -472,8 +487,12 @@ async def sm2_review(db: aiosqlite.Connection, vocab_id: str, grade: int):
     ease_factor = row[1] or 2.5
     times_correct = row[2] or 0
 
-    new_interval, new_ef = _sm2_compute(interval_days, ease_factor, times_correct, grade)
-    next_review = (datetime.now(timezone.utc) + timedelta(days=new_interval)).date().isoformat()
+    new_interval, new_ef = _sm2_compute(
+        interval_days, ease_factor, times_correct, grade
+    )
+    next_review = (
+        (datetime.now(timezone.utc) + timedelta(days=new_interval)).date().isoformat()
+    )
 
     await db.execute(
         "UPDATE vocabulary SET next_review = ?, interval_days = ?, ease_factor = ? WHERE id = ?",
@@ -531,7 +550,9 @@ async def list_vocabulary_due(
     ]
 
 
-async def delete_vocabulary(db: aiosqlite.Connection, vocab_id: str, user_id: str) -> bool:
+async def delete_vocabulary(
+    db: aiosqlite.Connection, vocab_id: str, user_id: str
+) -> bool:
     cursor = await db.execute(
         "SELECT id FROM vocabulary WHERE id = ? AND user_id = ?", (vocab_id, user_id)
     )
@@ -564,7 +585,18 @@ async def save_lesson_plan(
         "INSERT INTO lesson_plans "
         "(id, user_id, session_id, title, topic, lesson_type, target_lang, level, content, created_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (lid, user_id, session_id, title, topic, lesson_type, target_lang, level, json.dumps(content), now),
+        (
+            lid,
+            user_id,
+            session_id,
+            title,
+            topic,
+            lesson_type,
+            target_lang,
+            level,
+            json.dumps(content),
+            now,
+        ),
     )
     await db.commit()
     return {"id": lid, "title": title, "topic": topic, "created_at": now}
@@ -642,15 +674,27 @@ async def save_quiz(
         "(id, user_id, session_id, lesson_id, quiz_type, questions, answers, "
         "score, total, feedback, created_at) "
         "VALUES (?, ?, ?, ?, ?, ?, '[]', 0, ?, '', ?)",
-        (qid, user_id, session_id, lesson_id, quiz_type, json.dumps(questions), len(questions), now),
+        (
+            qid,
+            user_id,
+            session_id,
+            lesson_id,
+            quiz_type,
+            json.dumps(questions),
+            len(questions),
+            now,
+        ),
     )
     await db.commit()
-    return {"id": qid, "quiz_type": quiz_type, "total": len(questions), "created_at": now}
+    return {
+        "id": qid,
+        "quiz_type": quiz_type,
+        "total": len(questions),
+        "created_at": now,
+    }
 
 
-async def get_quiz(
-    db: aiosqlite.Connection, quiz_id: str, user_id: str
-) -> dict | None:
+async def get_quiz(db: aiosqlite.Connection, quiz_id: str, user_id: str) -> dict | None:
     cursor = await db.execute(
         "SELECT id, session_id, lesson_id, quiz_type, questions, answers, "
         "score, score_float, total, feedback, created_at "
@@ -729,7 +773,47 @@ async def list_quiz_results(
     ]
 
 
-async def get_student_stats(db: aiosqlite.Connection, user_id: str, session_id: str) -> dict:
+async def list_quiz_results_by_lang(
+    db: aiosqlite.Connection, user_id: str, target_lang: str
+) -> list[dict]:
+    """List all quiz results for a user in a given target language (cross-session)."""
+    # First, get all session IDs for this language
+    cursor = await db.execute(
+        "SELECT id FROM tutor_sessions WHERE user_id = ? AND target_lang = ?",
+        (user_id, target_lang),
+    )
+    rows = await cursor.fetchall()
+    session_ids = [r[0] for r in rows]
+
+    if not session_ids:
+        return []
+
+    placeholders = ",".join("?" * len(session_ids))
+
+    cursor = await db.execute(
+        f"SELECT id, session_id, lesson_id, quiz_type, score, total, created_at "
+        f"FROM quiz_results WHERE user_id = ? AND session_id IN ({placeholders}) "
+        f"ORDER BY created_at DESC",
+        (user_id, *session_ids),
+    )
+    rows = await cursor.fetchall()
+    return [
+        {
+            "id": r[0],
+            "session_id": r[1],
+            "lesson_id": r[2],
+            "quiz_type": r[3],
+            "score": r[4],
+            "total": r[5],
+            "created_at": r[6],
+        }
+        for r in rows
+    ]
+
+
+async def get_student_stats(
+    db: aiosqlite.Connection, user_id: str, session_id: str
+) -> dict:
     """Aggregate statistics for appraisal."""
     # Vocabulary stats
     cursor = await db.execute(
@@ -782,13 +866,21 @@ async def get_student_stats(db: aiosqlite.Connection, user_id: str, session_id: 
             "avg_mastery": avg_mastery,
             "total_reviewed": total_reviewed,
             "total_correct": total_correct,
-            "accuracy": round(total_correct / total_reviewed * 100, 1) if total_reviewed > 0 else 0,
+            "accuracy": (
+                round(total_correct / total_reviewed * 100, 1)
+                if total_reviewed > 0
+                else 0
+            ),
         },
         "quizzes": {
             "total_taken": quiz_count,
             "total_score": quiz_score_sum,
             "total_questions": quiz_total_sum,
-            "avg_score": round(quiz_score_sum / quiz_total_sum * 100, 1) if quiz_total_sum > 0 else 0,
+            "avg_score": (
+                round(quiz_score_sum / quiz_total_sum * 100, 1)
+                if quiz_total_sum > 0
+                else 0
+            ),
         },
         "lessons_completed": lesson_count,
         "total_interactions": message_count,
@@ -848,13 +940,15 @@ async def get_cross_session_stats(
         except (json.JSONDecodeError, TypeError):
             pass
         total_messages += msg_count
-        session_summaries.append({
-            "name": r[1],
-            "level": r[2],
-            "messages": msg_count,
-            "created": r[4],
-            "last_active": r[5],
-        })
+        session_summaries.append(
+            {
+                "name": r[1],
+                "level": r[2],
+                "messages": msg_count,
+                "created": r[4],
+                "last_active": r[5],
+            }
+        )
 
     vocab_reviewed = vrow[2] or 0
     vocab_correct = vrow[3] or 0
@@ -870,13 +964,21 @@ async def get_cross_session_stats(
                 "avg_mastery": round(vrow[1] or 0, 2),
                 "total_reviewed": vocab_reviewed,
                 "total_correct": vocab_correct,
-                "accuracy": round(vocab_correct / vocab_reviewed * 100, 1) if vocab_reviewed > 0 else 0,
+                "accuracy": (
+                    round(vocab_correct / vocab_reviewed * 100, 1)
+                    if vocab_reviewed > 0
+                    else 0
+                ),
             },
             "quizzes": {
                 "total_taken": qrow[0] or 0,
                 "total_score": quiz_score_sum,
                 "total_questions": quiz_total_sum,
-                "avg_score": round(quiz_score_sum / quiz_total_sum * 100, 1) if quiz_total_sum > 0 else 0,
+                "avg_score": (
+                    round(quiz_score_sum / quiz_total_sum * 100, 1)
+                    if quiz_total_sum > 0
+                    else 0
+                ),
             },
             "lessons_completed": lrow[0] or 0,
             "total_interactions": total_messages,

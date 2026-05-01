@@ -103,21 +103,32 @@ grade_task:
     - Accept minor typos and alternate transliterations.
     - Ignore trailing punctuation differences (e.g. "apple." vs "apple" are equal).
     - Ignore leading/trailing whitespace and capitalisation differences.
+    - If the student's answer is an exact match to correct_answer (case-insensitive,
+      ignoring trailing punctuation), you MUST give score=1.0.
     - Award partial credit (0.5) for partially correct answers
-      (e.g. correct word, wrong gender/tense/accent).
+      (e.g. correct word, wrong gender/tense).
     - Score 0.0 for answers that are clearly wrong or blank.
+    - For "translation" type: accept any accurate paraphrase that conveys the same
+      meaning. Different word order, synonym choices, and minor structural variations
+      should score 0.7–1.0 if the meaning is preserved. Only deduct heavily for
+      incorrect meaning or missing key content.
     - For "matching" type: the answer format is "word1=trans1; word2=trans2; ...".
       Award proportional partial credit: (correct pairs) / (total pairs) as the score.
     - For "cloze" type: the correct_answer contains ONLY the missing word, not
       the full sentence. The question field may contain a hint in parentheses —
       ignore the hint when comparing. Award 1.0 if the student's word is the
       correct word OR any other word that is grammatically valid AND semantically
-      appropriate in the blank (e.g. if both "avons" and "achetons" can correctly
-      complete "Nous ___ du pain", accept both). Only mark wrong (0.0) if the
-      answer changes the meaning, is the wrong word class, or is grammatically
-      incorrect for the blank position.
+      appropriate in the blank. Only mark wrong (0.0) if the answer is the wrong
+      word class or grammatically incorrect for the blank position.
     - For "reorder" type: award 1.0 for the correct sentence, 0.5 if the words are
       mostly correct but in a slightly wrong order, 0.0 if completely wrong.
+    - For "listening" type: accept minor diacritic/accent differences (e.g. "cinema"
+      vs "cinéma", "ou" vs "où" should score 0.9–1.0, not 0.0). Only mark wrong
+      if the student wrote completely different words.
+
+    IMPORTANT: Do NOT include the correct answer in the "feedback" string.
+    The UI displays the correct answer separately. Your feedback should only explain
+    WHY the answer is right or wrong (e.g. grammar point, what was missing).
 
     Questions and student answers (JSON):
     {qa_json}
@@ -127,7 +138,7 @@ grade_task:
     - "question_id": integer (same as in the input)
     - "score": float between 0.0 and 1.0
     - "is_correct": boolean (true if score >= 0.5)
-    - "feedback": one short sentence in {native_lang} explaining the result
+    - "feedback": one short sentence in {native_lang} explaining WHY (not the answer)
   expected_output: >
     A JSON array wrapped in ```json fences. Each element has question_id (int),
     score (float 0.0–1.0), is_correct (bool), and feedback (string in {native_lang}).

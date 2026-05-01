@@ -41,7 +41,7 @@ class TutorCrew:
     """
 
     DEFAULT_LLM_PARAMS: dict = {
-        "temperature": 0.6,   # slightly more creative for natural conversation
+        "temperature": 0.6,  # slightly more creative for natural conversation
         "top_k": 40,
         "top_p": 0.9,
         "min_p": 0.0,
@@ -149,7 +149,8 @@ class TutorCrew:
             planning_model = TOOL_CAPABLE_MODEL
             logger.info(
                 "[TUTOR] %s lacks tool support — planning with %s",
-                self._model_name, planning_model,
+                self._model_name,
+                planning_model,
             )
         planning_llm = self._make_planning_llm(planning_model)
         planning_llm._allow_fc = True  # allow function calling for planning
@@ -233,13 +234,16 @@ class TutorCrew:
     ) -> Crew:
         """Build a Crew for a conversation turn."""
         agent = self._build_agent(target_lang, native_lang, level)
-        desc, exp = self._render_task("conversation_task", {
-            "target_lang": target_lang,
-            "native_lang": native_lang,
-            "level": level,
-            "context": context,
-            "message": message,
-        })
+        desc, exp = self._render_task(
+            "conversation_task",
+            {
+                "target_lang": target_lang,
+                "native_lang": native_lang,
+                "level": level,
+                "context": context,
+                "message": message,
+            },
+        )
 
         task = Task(description=desc, expected_output=exp, agent=agent, context=[])
         return Crew(
@@ -260,13 +264,16 @@ class TutorCrew:
     ) -> Crew:
         """Build a Crew for generating a lesson plan."""
         agent = self._build_agent(target_lang, native_lang, level)
-        desc, exp = self._render_task("lesson_task", {
-            "topic": topic,
-            "lesson_type": lesson_type,
-            "target_lang": target_lang,
-            "native_lang": native_lang,
-            "level": level,
-        })
+        desc, exp = self._render_task(
+            "lesson_task",
+            {
+                "topic": topic,
+                "lesson_type": lesson_type,
+                "target_lang": target_lang,
+                "native_lang": native_lang,
+                "level": level,
+            },
+        )
 
         task = Task(description=desc, expected_output=exp, agent=agent, context=[])
         return Crew(
@@ -283,28 +290,28 @@ class TutorCrew:
         "multiple_choice": (
             'You MUST generate ONLY "vocabulary" or "grammar" type questions. '
             'Every question MUST have "options": an array of exactly 4 choices. '
-            'Do NOT generate matching, reorder, cloze, translation, or listening questions.'
+            "Do NOT generate matching, reorder, cloze, translation, or listening questions."
         ),
         "fill_blank": (
             'You MUST generate ONLY "cloze" type questions. '
-            'Each question shows the student a {target_lang} sentence with EXACTLY ONE word '
-            'replaced by ___ , PLUS a {native_lang} translation of the whole sentence in '
-            'parentheses so the student knows exactly what word to write. '
-            'The blank MUST test a specific grammar point '
-            '(verb conjugation, article, preposition, adjective agreement, etc.). '
-            'Format: '
+            "Each question shows the student a {target_lang} sentence with EXACTLY ONE word "
+            "replaced by ___ , PLUS a {native_lang} translation of the whole sentence in "
+            "parentheses so the student knows exactly what word to write. "
+            "The blank MUST test a specific grammar point "
+            "(verb conjugation, article, preposition, adjective agreement, etc.). "
+            "Format: "
             '"question": "<{target_lang} sentence with ___>  (<{native_lang} full translation with the target word also shown in brackets>)" '
-            'Example (French/English): '
+            "Example (French/English): "
             '"question": "Je ___ au cinéma le vendredi.  (I [go] to the cinema on Fridays.)", '
             '"correct_answer": "vais" '
             'The "correct_answer" field MUST contain ONLY the missing word — never the full sentence. '
             '"options": null. '
-            'Do NOT generate vocabulary, grammar, matching, reorder, translation, or listening questions.'
+            "Do NOT generate vocabulary, grammar, matching, reorder, translation, or listening questions."
         ),
         "translation": (
             'You MUST generate ONLY "translation" type questions with "options": null. '
-            'Provide a sentence and ask the student to translate it to the other language. '
-            'Do NOT generate any other question type.'
+            "Provide a sentence and ask the student to translate it to the other language. "
+            "Do NOT generate any other question type."
         ),
         "matching": (
             'You MUST generate ONLY "matching" type questions. '
@@ -312,52 +319,55 @@ class TutorCrew:
             'like {"left": "<target_lang word>", "right": "<native_lang translation>"}. '
             '"options": null. '
             '"correct_answer": pairs joined as "word1=trans1; word2=trans2". '
-            'Do NOT generate vocabulary, grammar, translation, reorder, cloze, or listening questions.'
+            "Do NOT generate vocabulary, grammar, translation, reorder, cloze, or listening questions."
         ),
         "reorder": (
             'You MUST generate ONLY "reorder" type questions. '
-            'Each question asks the student to put shuffled words in the right order. '
-            'Fields REQUIRED for every reorder question:\n'
+            "Each question asks the student to put shuffled words in the right order. "
+            "Fields REQUIRED for every reorder question:\n"
             '  "question": A SHORT HINT in {native_lang} telling the student what to say '
-                '(e.g. "Translate: I eat an apple every day"). '
-                'Do NOT put the target-language sentence here.\n'
-            '  "words": a JSON array of the target-language sentence split into INDIVIDUAL '
-                'words and SHUFFLED — e.g. ["pomme", "Je", "chaque", "mange", "une", "jour"]. '
-                'This MUST be an array, not a string.\n'
-            '  "correct_answer": the full correct target-language sentence as a single string, '
-                'e.g. "Je mange une pomme chaque jour".\n'
+            '(e.g. "Translate: I eat an apple every day"). '
+            "Do NOT put the target-language sentence here.\n"
+            '  "correct_answer": the COMPLETE, GRAMMATICALLY CORRECT target-language sentence '
+            "as a single string. Every word that appears in the sentence MUST be here — "
+            "including articles (le/la/les/un/une/du/de la), pronouns (je/tu/il/nous/vous/ils), "
+            "prepositions (à/de/en/au/aux), and conjunctions. "
+            'Example: "Je mange une pomme chaque jour".\n'
+            '  "words": copy correct_answer split into a SHUFFLED array of INDIVIDUAL words. '
+            "This array must contain EXACTLY the same words as correct_answer, nothing more, "
+            'nothing less. Example: ["pomme","Je","chaque","mange","une","jour"].\n'
             '  "options": null.\n'
-            'EXAMPLE (French lesson, native=English):\n'
+            "EXAMPLE (French lesson, native=English):\n"
             '{"type":"reorder","id":0,"question":"Translate: I eat an apple every day",'
             '"words":["pomme","Je","chaque","mange","une","jour"],'
             '"correct_answer":"Je mange une pomme chaque jour","options":null}\n'
-            'Do NOT generate any other question type.'
+            "Do NOT generate any other question type."
         ),
         "listening": (
             'You MUST generate ONLY "listening" type questions. '
             'Each question needs "audio_text": the exact phrase the student will hear via TTS. '
             '"correct_answer" must be identical to "audio_text". '
             '"options": null. '
-            'Do NOT generate any other question type.'
+            "Do NOT generate any other question type."
         ),
         "cloze": (
             'You MUST generate ONLY "cloze" type questions. '
-            'Each question is a {target_lang} sentence with EXACTLY ONE word replaced by ___ . '
-            'The blank MUST be unambiguous — choose a position where only ONE specific word '
-            'is correct (e.g. a specific conjugated verb form, a specific article or '
-            'preposition required by grammar rules). '
-            'You MUST include a {native_lang} hint in parentheses after the sentence '
-            'showing what the blank is testing. '
-            'Format: '
+            "Each question is a {target_lang} sentence with EXACTLY ONE word replaced by ___ . "
+            "The blank MUST be unambiguous — choose a position where only ONE specific word "
+            "is correct (e.g. a specific conjugated verb form, a specific article or "
+            "preposition required by grammar rules). "
+            "You MUST include a {native_lang} hint in parentheses after the sentence "
+            "showing what the blank is testing. "
+            "Format: "
             '"question": "<sentence with ___>  (Hint: <what grammar/word is being tested>)" '
-            'Example: '
+            "Example: "
             '"question": "Elle ___ ses devoirs tous les soirs.  (Hint: conjugate \'faire\' for elle)", '
             '"correct_answer": "fait" '
             'The "correct_answer" MUST be ONLY the missing word — never the full sentence. '
-            'Do NOT generate any other question type.'
+            "Do NOT generate any other question type."
         ),
         "mixed": (
-            'Mix question types freely using any combination of: '
+            "Mix question types freely using any combination of: "
             '"vocabulary", "grammar", "translation", "matching", "reorder", '
             '"listening", "cloze". Use at least 3 different types.'
         ),
@@ -366,14 +376,21 @@ class TutorCrew:
     # Types allowed per quiz_type key (used for backend filtering)
     _QUIZ_ALLOWED_TYPES: dict[str, set[str]] = {
         "multiple_choice": {"vocabulary", "grammar"},
-        "fill_blank":      {"cloze"},
-        "translation":     {"translation"},
-        "matching":        {"matching"},
-        "reorder":         {"reorder"},
-        "listening":       {"listening"},
-        "cloze":           {"cloze"},
-        "mixed":           {"vocabulary", "grammar", "translation",
-                            "matching", "reorder", "listening", "cloze"},
+        "fill_blank": {"cloze"},
+        "translation": {"translation"},
+        "matching": {"matching"},
+        "reorder": {"reorder"},
+        "listening": {"listening"},
+        "cloze": {"cloze"},
+        "mixed": {
+            "vocabulary",
+            "grammar",
+            "translation",
+            "matching",
+            "reorder",
+            "listening",
+            "cloze",
+        },
     }
 
     def build_quiz_crew(
@@ -391,16 +408,19 @@ class TutorCrew:
             quiz_type, self._QUIZ_TYPE_INSTRUCTIONS["mixed"]
         )
         agent = self._build_agent(target_lang, native_lang, level)
-        desc, exp = self._render_task("quiz_task", {
-            "quiz_type": quiz_type,
-            "quiz_type_instruction": quiz_type_instruction,
-            "num_questions": str(num_questions),
-            "target_lang": target_lang,
-            "native_lang": native_lang,
-            "level": level,
-            "vocabulary_context": vocabulary_context,
-            "lesson_context": lesson_context,
-        })
+        desc, exp = self._render_task(
+            "quiz_task",
+            {
+                "quiz_type": quiz_type,
+                "quiz_type_instruction": quiz_type_instruction,
+                "num_questions": str(num_questions),
+                "target_lang": target_lang,
+                "native_lang": native_lang,
+                "level": level,
+                "vocabulary_context": vocabulary_context,
+                "lesson_context": lesson_context,
+            },
+        )
 
         task = Task(description=desc, expected_output=exp, agent=agent, context=[])
         return Crew(
@@ -446,16 +466,24 @@ class TutorCrew:
                         q["correct_answer"] = parts[-1]
 
             elif qtype == "reorder":
-                words = q.get("words")
-                if isinstance(words, str) and words.strip():
-                    words = words.split()
-                if not words or not isinstance(words, list):
-                    src = q.get("correct_answer") or ""
-                    words = src.split() if src else []
-                if words:
-                    parts = list(words)
+                # Always derive words from correct_answer to guarantee all
+                # function words (articles, pronouns, prepositions) are present.
+                # The LLM-provided words field is unreliable — it often omits
+                # words like "Je", "du", "les", "de la", etc.
+                src = (q.get("correct_answer") or "").strip()
+                if src:
+                    parts = src.split()
                     random.shuffle(parts)
                     q["words"] = parts
+                else:
+                    # Fallback only when correct_answer is empty
+                    words = q.get("words")
+                    if isinstance(words, str) and words.strip():
+                        words = words.split()
+                    if words and isinstance(words, list):
+                        parts = list(words)
+                        random.shuffle(parts)
+                        q["words"] = parts
 
             elif qtype == "matching":
                 pairs = q.get("pairs")
@@ -468,9 +496,53 @@ class TutorCrew:
                             if "=" in item:
                                 left, _, right = item.partition("=")
                                 if left.strip() and right.strip():
-                                    rebuilt.append({"left": left.strip(), "right": right.strip()})
+                                    rebuilt.append(
+                                        {"left": left.strip(), "right": right.strip()}
+                                    )
                     if rebuilt:
                         q["pairs"] = rebuilt
+                else:
+                    # Normalize all pairs to {left, right} canonical format
+                    norm = []
+                    for p in pairs:
+                        if isinstance(p, dict):
+                            left = (
+                                p.get("left") or p.get("term") or p.get("word") or ""
+                            )
+                            right = (
+                                p.get("right")
+                                or p.get("definition")
+                                or p.get("translation")
+                                or p.get("meaning")
+                                or ""
+                            )
+                            if not left:
+                                vals = list(p.values())
+                                left = str(vals[0]) if vals else ""
+                                right = str(vals[1]) if len(vals) > 1 else right
+                            if left and right:
+                                norm.append(
+                                    {
+                                        "left": str(left).strip(),
+                                        "right": str(right).strip(),
+                                    }
+                                )
+                        elif isinstance(p, str):
+                            m = re.match(r"^(.+?)\s*[=:\-]\s*(.+)$", p)
+                            if m:
+                                norm.append(
+                                    {
+                                        "left": m.group(1).strip(),
+                                        "right": m.group(2).strip(),
+                                    }
+                                )
+                    if norm:
+                        q["pairs"] = norm
+                        # Build correct_answer from normalized pairs when missing
+                        if not q.get("correct_answer"):
+                            q["correct_answer"] = "; ".join(
+                                f"{p['left']}={p['right']}" for p in norm
+                            )
 
         # ── If nothing matched, coerce everything to the target type ──
         if not filtered:
@@ -486,14 +558,10 @@ class TutorCrew:
         if quiz_type == "reorder":
             for q in work_list:
                 q["type"] = "reorder"
-                words = q.get("words")
-                if isinstance(words, str) and words.strip():
-                    words = words.split()
-                if not words or not isinstance(words, list):
-                    src = q.get("correct_answer") or q.get("question", "")
-                    words = src.split() if src else []
-                if words:
-                    parts = list(words)
+                # Always derive from correct_answer for completeness
+                src = (q.get("correct_answer") or "").strip()
+                if src:
+                    parts = src.split()
                     random.shuffle(parts)
                     q["words"] = parts
 
@@ -523,13 +591,16 @@ class TutorCrew:
     ) -> Crew:
         """Build a Crew for student appraisal."""
         agent = self._build_agent(target_lang, native_lang, level)
-        desc, exp = self._render_task("appraisal_task", {
-            "target_lang": target_lang,
-            "native_lang": native_lang,
-            "level": level,
-            "stats": stats,
-            "recent_messages": recent_messages,
-        })
+        desc, exp = self._render_task(
+            "appraisal_task",
+            {
+                "target_lang": target_lang,
+                "native_lang": native_lang,
+                "level": level,
+                "stats": stats,
+                "recent_messages": recent_messages,
+            },
+        )
 
         task = Task(description=desc, expected_output=exp, agent=agent, context=[])
         return Crew(
@@ -568,13 +639,15 @@ class TutorCrew:
                 or set(translation) <= {"-", " ", ":"}
             ):
                 continue
-            entries.append({
-                "word": word,
-                "translation": translation,
-                "part_of_speech": pos,
-                "context": "",
-                "phonetic": "",
-            })
+            entries.append(
+                {
+                    "word": word,
+                    "translation": translation,
+                    "part_of_speech": pos,
+                    "context": "",
+                    "phonetic": "",
+                }
+            )
         return entries
 
     @staticmethod
@@ -630,23 +703,28 @@ class TutorCrew:
             student_answer = str(ans.get("answer", "")).strip()
             if 0 <= qid < len(questions):
                 q = questions[qid]
-                qa_list.append({
-                    "question_id": qid,
-                    "question": q.get("question", ""),
-                    "correct_answer": q.get("correct_answer", ""),
-                    "student_answer": student_answer,
-                })
+                qa_list.append(
+                    {
+                        "question_id": qid,
+                        "question": q.get("question", ""),
+                        "correct_answer": q.get("correct_answer", ""),
+                        "student_answer": student_answer,
+                    }
+                )
 
         if not qa_list:
             return []
 
         qa_json = json.dumps(qa_list, ensure_ascii=False, indent=2)
-        desc, _ = self._render_task("grade_task", {
-            "level": level,
-            "target_lang": target_lang,
-            "native_lang": native_lang,
-            "qa_json": qa_json,
-        })
+        desc, _ = self._render_task(
+            "grade_task",
+            {
+                "level": level,
+                "target_lang": target_lang,
+                "native_lang": native_lang,
+                "qa_json": qa_json,
+            },
+        )
 
         try:
             response = await litellm.acompletion(
@@ -674,7 +752,9 @@ class TutorCrew:
             # Strip any <think>…</think> blocks from reasoning models
             raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
         except Exception as exc:
-            logger.warning("[TUTOR] semantic grading LLM call failed: %s — falling back", exc)
+            logger.warning(
+                "[TUTOR] semantic grading LLM call failed: %s — falling back", exc
+            )
             return self._exact_match_grade(student_answers, questions)
 
         return self._parse_grading_json(raw, student_answers, questions)
@@ -703,22 +783,36 @@ class TutorCrew:
                     score = float(g.get("score", 0.0))
                     score = max(0.0, min(1.0, score))
                     student_ans = next(
-                        (a.get("answer", "") for a in student_answers
-                         if a.get("question_id") == qid),
+                        (
+                            a.get("answer", "")
+                            for a in student_answers
+                            if a.get("question_id") == qid
+                        ),
                         "",
                     )
                     correct_ans = (
                         questions[qid].get("correct_answer", "")
-                        if 0 <= qid < len(questions) else ""
+                        if 0 <= qid < len(questions)
+                        else ""
                     )
-                    result.append({
-                        "question_id": qid,
-                        "student_answer": student_ans,
-                        "correct_answer": correct_ans,
-                        "score": score,
-                        "is_correct": score >= 0.5,
-                        "feedback": g.get("feedback", ""),
-                    })
+                    # Guard against LLM being too strict: if student answer exactly
+                    # matches the correct answer (case-insensitive, trailing punct stripped),
+                    # force score=1.0 regardless of what the model returned.
+                    _trail = re.compile(r"[.,!?;:\s]+$")
+                    norm_s = _trail.sub("", str(student_ans).strip()).lower()
+                    norm_c = _trail.sub("", str(correct_ans).strip()).lower()
+                    if norm_s and norm_s == norm_c:
+                        score = 1.0
+                    result.append(
+                        {
+                            "question_id": qid,
+                            "student_answer": student_ans,
+                            "correct_answer": correct_ans,
+                            "score": score,
+                            "is_correct": score >= 0.5,
+                            "feedback": g.get("feedback", ""),
+                        }
+                    )
                 return result
         except Exception as exc:
             logger.warning("[TUTOR] failed to parse grading JSON: %s", exc)
@@ -733,14 +827,29 @@ class TutorCrew:
         """Simple case-insensitive exact match fallback.
 
         Strips trailing punctuation before comparing so "I eat an apple." and
-        "I eat an apple" are treated as equal.  For cloze questions any non-blank
-        answer gets 0.5 because we cannot enumerate all valid alternatives when
-        the semantic LLM is unavailable.
+        "I eat an apple" are treated as equal.
         """
+        import unicodedata
+
         _punct = re.compile(r"[.,!?;:\s]+$")
 
         def _norm(s: str) -> str:
             return _punct.sub("", s.strip()).lower()
+
+        def _normalize_text(text: str) -> str:
+            """Normalize text for comparison: lowercase, strip punctuation."""
+            text = text.lower().strip()
+            text = _punct.sub("", text)
+            text = re.sub(r"\s+", " ", text)
+            return text
+
+        def _strip_accents(s: str) -> str:
+            """Remove diacritics/accents for accent-insensitive comparison."""
+            return "".join(
+                c
+                for c in unicodedata.normalize("NFKD", s)
+                if not unicodedata.combining(c)
+            )
 
         result = []
         for ans in student_answers:
@@ -749,23 +858,78 @@ class TutorCrew:
             if 0 <= qid < len(questions):
                 q = questions[qid]
                 correct = q.get("correct_answer", "").strip()
-                is_correct = _norm(student_answer) == _norm(correct)
-                if is_correct:
-                    score = 1.0
-                elif q.get("type") == "cloze" and student_answer:
-                    # Cannot enumerate valid alternatives without the LLM.
-                    # Give 0.5 so infrastructure failures don't punish correct answers.
-                    score = 0.5
-                    is_correct = True  # treat as passing
-                else:
-                    score = 0.0
-                result.append({
-                    "question_id": qid,
-                    "student_answer": student_answer,
-                    "correct_answer": correct,
-                    "score": score,
-                    "is_correct": is_correct,
-                    "feedback": "" if score > 0 else "Incorrect.",
-                })
-        return result
+                qtype = q.get("type", "")
 
+                if qtype == "translation":
+                    normalized_student = _normalize_text(student_answer)
+                    normalized_correct = _normalize_text(correct)
+                    is_correct = normalized_student == normalized_correct
+                    if is_correct:
+                        score = 1.0
+                        feedback = "Correct translation!"
+                    else:
+                        score = 0.0
+                        # Do NOT embed correct answer — UI shows it via _showCorrection
+                        feedback = "Incorrect."
+
+                elif qtype == "reorder":
+                    normalized_student = _normalize_text(student_answer)
+                    normalized_correct = _normalize_text(correct)
+                    is_correct = normalized_student == normalized_correct
+                    if is_correct:
+                        score = 1.0
+                        feedback = "Correct word order!"
+                    else:
+                        score = 0.0
+                        feedback = "Incorrect."
+
+                elif qtype == "cloze":
+                    if student_answer:
+                        normalized_student = _normalize_text(student_answer)
+                        normalized_correct = _normalize_text(correct)
+                        if normalized_student == normalized_correct:
+                            score = 1.0
+                            is_correct = True
+                            feedback = "Correct!"
+                        else:
+                            score = 0.0
+                            is_correct = False
+                            feedback = "Incorrect."
+                    else:
+                        score = 0.0
+                        is_correct = False
+                        feedback = "Incorrect."
+
+                elif qtype == "listening":
+                    # Accept minor accent/diacritic differences (cinema vs cinéma)
+                    normalized_student = _strip_accents(_normalize_text(student_answer))
+                    normalized_correct = _strip_accents(_normalize_text(correct))
+                    is_correct = normalized_student == normalized_correct
+                    if is_correct:
+                        score = 1.0
+                        feedback = "Correct!"
+                    else:
+                        score = 0.0
+                        feedback = "Incorrect."
+
+                else:
+                    # Regular questions — case-insensitive exact match
+                    is_correct = _norm(student_answer) == _norm(correct)
+                    if is_correct:
+                        score = 1.0
+                        feedback = "Correct!"
+                    else:
+                        score = 0.0
+                        feedback = "Incorrect."
+
+                result.append(
+                    {
+                        "question_id": qid,
+                        "student_answer": student_answer,
+                        "correct_answer": correct,
+                        "score": score,
+                        "is_correct": is_correct,
+                        "feedback": feedback,
+                    }
+                )
+        return result

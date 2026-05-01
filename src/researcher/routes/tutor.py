@@ -48,6 +48,7 @@ from researcher.tutor.storage import (
     get_quiz,
     save_quiz_results,
     list_quiz_results,
+    list_quiz_results_by_lang,
     update_vocabulary_mastery,
     get_student_stats,
     get_cross_session_stats,
@@ -70,6 +71,8 @@ def _build_tutor_context(messages: list, max_messages: int = 10) -> str:
     for msg in recent:
         role = msg.get("role", "user")
         text = msg.get("content", "")[:500]
+        # Normalize role to lowercase for consistent formatting
+        role = role.lower() if role else "user"
         lines.append(f"{role.capitalize()}: {text}")
     return "\n".join(lines)
 
@@ -160,7 +163,9 @@ async def _stream_tutor_crew(crew, request: Request):
 
             response_text = result.raw if hasattr(result, "raw") else str(result)
             # Strip thinking tags
-            response_text = re.sub(r"<think>[\s\S]*?</think>\s*", "", response_text).strip()
+            response_text = re.sub(
+                r"<think>[\s\S]*?</think>\s*", "", response_text
+            ).strip()
 
             yield _sse(
                 "done",
@@ -304,7 +309,10 @@ def register_tutor_routes(app):
         vocab_entries = tutor_crew.extract_vocabulary_from_response(content_text)
         if vocab_entries:
             await add_vocabulary_batch(
-                db, user["id"], session_id, vocab_entries,
+                db,
+                user["id"],
+                session_id,
+                vocab_entries,
                 target_lang=session["target_lang"],
             )
 
@@ -379,8 +387,14 @@ def register_tutor_routes(app):
             raise HTTPException(status_code=404, detail="Tutor session not found")
         target_lang = req.target_lang or session["target_lang"]
         entry = await add_vocabulary(
-            db, user["id"], req.session_id,
-            req.word, req.translation, req.context, req.phonetic, req.part_of_speech,
+            db,
+            user["id"],
+            req.session_id,
+            req.word,
+            req.translation,
+            req.context,
+            req.phonetic,
+            req.part_of_speech,
             target_lang=target_lang,
         )
         return entry
@@ -427,7 +441,11 @@ def register_tutor_routes(app):
             lesson = await get_lesson_plan(db, req.lesson_id, user["id"])
             if lesson and lesson.get("content"):
                 content = lesson["content"]
-                md = content.get("markdown", "")[:2000] if isinstance(content, dict) else str(content)[:2000]
+                md = (
+                    content.get("markdown", "")[:2000]
+                    if isinstance(content, dict)
+                    else str(content)[:2000]
+                )
                 lesson_ctx = f"Base the quiz on this lesson:\n{md}"
 
         crew = tutor_crew.build_quiz_crew(
@@ -456,7 +474,9 @@ def register_tutor_routes(app):
         response_text = body.get("response", "")
         questions = tutor_crew.extract_quiz_json(response_text)
         if not questions:
-            raise HTTPException(status_code=400, detail="Could not parse quiz JSON from response")
+            raise HTTPException(
+                status_code=400, detail="Could not parse quiz JSON from response"
+            )
 
         quiz_type = body.get("quiz_type", "mixed")
         questions = tutor_crew.filter_quiz_questions(questions, quiz_type)
@@ -509,7 +529,13 @@ def register_tutor_routes(app):
         feedback = f"Score: {score_float:.1f}/{total} ({pct}%)"
 
         await save_quiz_results(
-            db, req.quiz_id, user["id"], graded, score, feedback, score_float=score_float
+            db,
+            req.quiz_id,
+            user["id"],
+            graded,
+            score,
+            feedback,
+            score_float=score_float,
         )
 
         # Update vocabulary mastery based on quiz answers
@@ -543,6 +569,16 @@ def register_tutor_routes(app):
         quizzes = await list_quiz_results(db, user["id"], session_id)
         return {"quizzes": quizzes}
 
+    @app.get("/tutor/quizzes")
+    async def tutor_list_quizzes_by_lang(request: Request, lang: str = ""):
+        """List all quiz results for a target language (cross-session)."""
+        user = await get_current_user(request)
+        db = request.app.state.db
+        if not lang:
+            raise HTTPException(status_code=400, detail="lang query parameter required")
+        quizzes = await list_quiz_results_by_lang(db, user["id"], lang)
+        return {"quizzes": quizzes}
+
     @app.get("/tutor/quiz/{quiz_id}")
     async def tutor_get_quiz(quiz_id: str, request: Request):
         user = await get_current_user(request)
@@ -571,9 +607,7 @@ def register_tutor_routes(app):
         stats = await get_student_stats(db, user["id"], req.session_id)
 
         # Cross-session stats for same target language
-        cross = await get_cross_session_stats(
-            db, user["id"], session["target_lang"]
-        )
+        cross = await get_cross_session_stats(db, user["id"], session["target_lang"])
         stats["cross_session"] = cross
 
         stats_str = json.dumps(stats, indent=2)
@@ -629,7 +663,9 @@ def register_tutor_routes(app):
         if not text:
             raise HTTPException(status_code=400, detail="Empty text")
         if not source_lang or not target_lang:
-            raise HTTPException(status_code=400, detail="source_lang and target_lang required")
+            raise HTTPException(
+                status_code=400, detail="source_lang and target_lang required"
+            )
 
         tutor_crew = request.app.state.tutor_crew
 
@@ -644,6 +680,7 @@ def register_tutor_routes(app):
 
         def _call_llm():
             from litellm import completion
+
             resp = completion(
                 model=tutor_crew._model_name,
                 messages=[{"role": "user", "content": prompt}],
@@ -655,8 +692,14 @@ def register_tutor_routes(app):
         try:
             translation = await loop.run_in_executor(None, _call_llm)
             # Strip thinking tags if present (qwen3/deepseek-r1)
-            translation = re.sub(r'<think>.*?</think>', '', translation, flags=re.DOTALL).strip()
-            return {"translation": translation, "source_lang": source_lang, "target_lang": target_lang}
+            translation = re.sub(
+                r"<think>.*?</think>", "", translation, flags=re.DOTALL
+            ).strip()
+            return {
+                "translation": translation,
+                "source_lang": source_lang,
+                "target_lang": target_lang,
+            }
         except Exception as e:
             logger.error("Translation failed: %s", e)
             raise HTTPException(status_code=500, detail=f"Translation failed: {e}")

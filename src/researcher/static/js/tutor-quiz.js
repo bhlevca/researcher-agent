@@ -288,17 +288,20 @@ function _renderReorder(q, i, div, text) {
     // Show the hint (native-language cue), not a blank generic instruction
     text.textContent = q.question || 'Put the words in the correct order.';
 
-    // Normalise words: LLM may give a string, a wrong-order array, or nothing.
-    let rawWords = q.words;
-    if (typeof rawWords === 'string' && rawWords.trim()) {
-        // LLM gave a space-separated string instead of an array
-        rawWords = rawWords.split(/\s+/).filter(Boolean);
+    // Always derive the word pool from correct_answer to guarantee all
+    // function words (articles, pronouns, prepositions) are present.
+    // The LLM-provided words array is unreliable.
+    const correctSrc = (q.correct_answer || '').trim();
+    let rawWords = correctSrc ? correctSrc.split(/\s+/).filter(Boolean) : null;
+
+    // Fallback only if correct_answer is empty
+    if (!rawWords || rawWords.length === 0) {
+        rawWords = q.words;
+        if (typeof rawWords === 'string' && rawWords.trim()) {
+            rawWords = rawWords.split(/\s+/).filter(Boolean);
+        }
     }
-    if (!Array.isArray(rawWords) || rawWords.length === 0) {
-        // Fall back: split correct_answer into word tokens
-        const src = q.correct_answer || '';
-        rawWords = src.split(/\s+/).filter(Boolean);
-    }
+    if (!Array.isArray(rawWords)) rawWords = [];
     if (rawWords.length === 0) {
         // Last resort: nothing usable — render a plain text input so it's not blank
         const inp = document.createElement('input');
@@ -587,7 +590,7 @@ function showQuizResults(result, questions) {
                 if (inp) inp.style.borderColor = d.is_correct ? '#34d399' : '#ef4444';
                 if (!d.is_correct) _showCorrection(qDiv, d.correct_answer);
             } else {
-                // Standard: radio or text input
+                // Standard: radio or text input (includes translation)
                 if (d.is_correct) {
                     const selected = qDiv.querySelector('.quiz-option.selected');
                     if (selected) selected.classList.add('correct');
@@ -602,6 +605,7 @@ function showQuizResults(result, questions) {
                     const textInput = qDiv.querySelector('.quiz-answer-input');
                     if (textInput) {
                         textInput.style.borderColor = '#ef4444';
+                        // Show correct answer once (feedback intentionally omits it)
                         _showCorrection(qDiv, d.correct_answer);
                     }
                 }

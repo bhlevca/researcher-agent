@@ -5,6 +5,14 @@ import json as _json
 import logging
 import threading
 from pathlib import Path
+
+# Ensure CrewAI uses a stable storage directory name independent of cwd.
+# The default CrewAI storage uses Path.cwd().name, which can vary when the
+# server is started from different working directories (e.g. project root vs.
+# src/researcher). Fix it here by defaulting to the repository root name.
+project_root = Path(__file__).resolve().parents[2]
+os.environ.setdefault("CREWAI_STORAGE_DIR", project_root.name)
+
 from crewai import Agent, Crew, Process, Task, LLM
 from crewai.memory import Memory
 from crewai.agent.planning_config import PlanningConfig

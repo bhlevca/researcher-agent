@@ -126,7 +126,7 @@ async def get_optional_user(request: Request) -> dict | None:
     try:
         payload = _decode_token(auth[7:])
         return {"id": payload["sub"], "username": payload["username"]}
-    except HTTPException:
+    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
         return None
 
 
@@ -137,8 +137,7 @@ async def get_optional_user(request: Request) -> dict | None:
 
 async def init_users_table(db):
     """Create the ``users`` table if it doesn't exist."""
-    await db.execute(
-        """
+    await db.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id          TEXT PRIMARY KEY,
             username    TEXT UNIQUE NOT NULL,
@@ -146,8 +145,7 @@ async def init_users_table(db):
             model       TEXT DEFAULT '',
             created_at  TEXT NOT NULL
         )
-    """
-    )
+    """)
     await db.commit()
 
 
@@ -176,17 +174,19 @@ async def migrate_sessions_table(db):
 
     # Add tutor_llm_params column to users table (stores JSON)
     if "tutor_llm_params" not in ucols:
-        await db.execute("ALTER TABLE users ADD COLUMN tutor_llm_params TEXT DEFAULT '' ")
+        await db.execute(
+            "ALTER TABLE users ADD COLUMN tutor_llm_params TEXT DEFAULT '' "
+        )
         await db.commit()
         logger.info("Migrated users table: added tutor_llm_params column")
 
     # Add composer_llm_params column to users table (stores JSON)
     if "composer_llm_params" not in ucols:
-        await db.execute("ALTER TABLE users ADD COLUMN composer_llm_params TEXT DEFAULT '' ")
+        await db.execute(
+            "ALTER TABLE users ADD COLUMN composer_llm_params TEXT DEFAULT '' "
+        )
         await db.commit()
         logger.info("Migrated users table: added composer_llm_params column")
-
-
 
 
 # ---------------------------------------------------------------------------

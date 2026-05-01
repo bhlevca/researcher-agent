@@ -31,9 +31,9 @@
 
 ## Known Issues (Quiz Features)
 
-- [ ] Reorder quiz: Does not work reliably, often fails to render or grade correctly. Needs major rework.
-- [ ] Translation quiz: Grading is unreliable, too strict or too lenient, and feedback is unclear. Needs redesign.
-- [ ] Matching quiz: Often fails to build the answer grid or serialize student pair selections correctly. Needs full backend/frontend fix.
+- [x] Reorder quiz: Does not work reliably, often fails to render or grade correctly. Fixed: words now always derived from correct_answer; accent-fold grading.
+- [x] Translation quiz: Grading is unreliable, too strict or too lenient, and feedback is unclear. Fixed: LLM grader hardened; correct answer shown once; feedback separated.
+- [x] Matching quiz: Often fails to build the answer grid or serialize student pair selections correctly. Fixed: pair normalization + correct_answer rebuild.
 
 ## v1.5.0 — High-Resolution Tiled Image Generation
 
@@ -216,6 +216,12 @@
   - [ ] Inline corrections and vocabulary extraction during dialog
 - [ ] Optional scene illustration via Z-Image pipeline
 - [ ] Save dialog transcripts to lesson_plans table
+- [x] Translation quiz: Input deleted, correct version listed twice, too strict marking
+- [x] Cloze quiz: Giving 1/2 point for perfect answers (should give full points)
+- [x] Reorder quiz: French vocabulary errors (e.g., "heures" instead of "heureux"), missing articles/prepositions
+- [x] Listening quiz: Incorrect marking for minor differences (e.g., "cinema" vs "cinéma")
+- [x] UI: Need vertical scroll for all windows bigger than visible area
+
 
 ### Phase 5 — Lesson Export
 - [ ] Add `/tutor/lessons/{id}/export` endpoint:

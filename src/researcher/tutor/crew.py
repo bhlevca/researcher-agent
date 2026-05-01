@@ -356,6 +356,21 @@ class TutorCrew:
             "The blank MUST be unambiguous — choose a position where only ONE specific word "
             "is correct (e.g. a specific conjugated verb form, a specific article or "
             "preposition required by grammar rules). "
+            "CRITICAL RULES:\n"
+            "  1. correct_answer MUST be the grammatically correct word for the SUBJECT shown "
+            "in the sentence. Double-check subject/verb agreement before writing the answer.\n"
+            "     Examples: 'Je ___ un chat' → correct_answer=\"ai\" (not \"a\", not \"as\")\n"
+            "              'Elle ___ un livre' → correct_answer=\"lit\"\n"
+            "              'Nous ___ au parc' → correct_answer=\"allons\"\n"
+            "  2. Apply elision rules: when the blank answer starts with a vowel and the "
+            "preceding pronoun ends in 'e' (Je, Le, La, De, Ne, Que), use the elided form "
+            "with apostrophe instead.\n"
+            "     Examples: 'Je ai' → write as \"J'___ un chat\"\n"
+            "              'Je ai' is NEVER correct — use \"J'\" before vowels\n"
+            "              'Je aime' → \"J'___ la musique\"\n"
+            "              'Je habite' → \"J'___ à Paris\"\n"
+            "  3. When options are provided, make sure correct_answer matches EXACTLY one "
+            "of the options, and that the other options are WRONG for the given subject.\n"
             "You MUST include a {native_lang} hint in parentheses after the sentence "
             "showing what the blank is testing. "
             "Format: "
@@ -464,6 +479,33 @@ class TutorCrew:
                         # blank the last word
                         q["question"] = " ".join(parts[:-1]) + " ___"
                         q["correct_answer"] = parts[-1]
+
+                # ── French elision repair ──────────────────────────────────────
+                # If the question has "Je ___" and the correct_answer starts with
+                # a vowel, the sentence should use “J’___” (elision).
+                # Also fix options if present.
+                _ELISION_PAIRS = [
+                    (re.compile(r"\bJe ___"), "J'___"),
+                    (re.compile(r"\bje ___"), "j'___"),
+                    (re.compile(r"\bLe ___"), "L'___"),
+                    (re.compile(r"\ble ___"), "l'___"),
+                    (re.compile(r"\bLa ___"), "L'___"),
+                    (re.compile(r"\bla ___"), "l'___"),
+                    (re.compile(r"\bDe ___"), "D'___"),
+                    (re.compile(r"\bde ___"), "d'___"),
+                    (re.compile(r"\bNe ___"), "N'___"),
+                    (re.compile(r"\bne ___"), "n'___"),
+                    (re.compile(r"\bQue ___"), "Qu'___"),
+                    (re.compile(r"\bque ___"), "qu'___"),
+                ]
+                correct = q.get("correct_answer", "")
+                if correct and correct[:1].lower() in "aeiouh":
+                    question = q.get("question", "")
+                    for pat, repl in _ELISION_PAIRS:
+                        new_q = pat.sub(repl, question)
+                        if new_q != question:
+                            q["question"] = new_q
+                            break
 
             elif qtype == "reorder":
                 # Always derive words from correct_answer to guarantee all

@@ -239,6 +239,26 @@ OLLAMA_IMAGE_URL = os.getenv("OLLAMA_IMAGE_URL", "http://localhost:11434/api/gen
 _SD_MODEL_ID = os.getenv("SD_MODEL", "stable-diffusion-v1-5/stable-diffusion-v1-5")
 
 
+def _hf_hub_cache_root() -> Path:
+    """Resolve Hugging Face hub cache root, honoring HF env vars."""
+    explicit = os.getenv("HUGGINGFACE_HUB_CACHE")
+    if explicit:
+        return Path(explicit)
+    hf_home = os.getenv("HF_HOME")
+    if hf_home:
+        return Path(hf_home) / "hub"
+    return Path.home() / ".cache" / "huggingface" / "hub"
+
+
+def _hf_model_cache_present(repo_id: str) -> bool:
+    """True if a model has at least one cached snapshot on disk."""
+    model_dir = _hf_hub_cache_root() / f"models--{repo_id.replace('/', '--')}"
+    snapshots = model_dir / "snapshots"
+    if not snapshots.exists() or not snapshots.is_dir():
+        return False
+    return any(snapshots.iterdir())
+
+
 def _get_sd_pipe():
     """Lazy-load SD pipeline. Uses CPU offload so VRAM is only used during generation."""
     global _sd_pipe
@@ -252,6 +272,17 @@ def _get_sd_pipe():
                 import warnings
 
                 print("[SD] Loading Stable Diffusion pipeline…", flush=True)
+                offline_transformers = os.getenv("TRANSFORMERS_OFFLINE", "0") == "1"
+                offline_hf_hub = os.getenv("HF_HUB_OFFLINE", "0") == "1"
+                offline = offline_transformers or offline_hf_hub
+                has_cache = _hf_model_cache_present(_SD_MODEL_ID)
+                if not has_cache:
+                    if offline:
+                        raise RuntimeError(
+                            "SD model cache missing while offline. "
+                            "Unset HF_HUB_OFFLINE/TRANSFORMERS_OFFLINE to allow download."
+                        )
+                    print(f"[SD] Cache missing for {_SD_MODEL_ID}; bootstrapping download…", flush=True)
                 # Suppress the harmless "position_ids UNEXPECTED" load report
                 _real_stdout = _sys.stdout
                 _sys.stdout = open(os.devnull, "w")
@@ -263,6 +294,7 @@ def _get_sd_pipe():
                             torch_dtype=torch.float16,
                             safety_checker=None,
                             requires_safety_checker=False,
+                            local_files_only=offline,
                         )
                 finally:
                     _sys.stdout.close()
@@ -274,7 +306,30 @@ def _get_sd_pipe():
 
 def preload_sd():
     """Call from the server to warm up the SD pipeline in a background thread."""
-    threading.Thread(target=_get_sd_pipe, daemon=True).start()
+    def _warmup():
+        # Opt-in: temporarily disable offline flags during warm-up bootstrap.
+        # Keep default OFF so TRANSFORMERS_OFFLINE=1 remains authoritative.
+        force_online = os.getenv("IMAGE_WARMUP_FORCE_ONLINE", "0") == "1"
+        old_t = os.environ.get("TRANSFORMERS_OFFLINE")
+        old_h = os.environ.get("HF_HUB_OFFLINE")
+        try:
+            if force_online:
+                os.environ["TRANSFORMERS_OFFLINE"] = "0"
+                os.environ["HF_HUB_OFFLINE"] = "0"
+            _get_sd_pipe()
+        except Exception as e:
+            _logger.warning("SD warm-up skipped: %s", e)
+        finally:
+            if old_t is None:
+                os.environ.pop("TRANSFORMERS_OFFLINE", None)
+            else:
+                os.environ["TRANSFORMERS_OFFLINE"] = old_t
+            if old_h is None:
+                os.environ.pop("HF_HUB_OFFLINE", None)
+            else:
+                os.environ["HF_HUB_OFFLINE"] = old_h
+
+    threading.Thread(target=_warmup, daemon=True).start()
 
 
 # --------------- ZImagePipeline backend (diffusers + CUDA) ---------------
@@ -285,7 +340,7 @@ def preload_sd():
 #   TRANSFORMERS_OFFLINE  — set to "1" to skip network after first download
 # Ollama is NOT involved for image generation; it is only used to
 # unload/reload the qwen3 LLM around inference to free VRAM.
-_ZIMAGE_MODEL_ID = os.getenv("ZIMAGE_MODEL", "mrfakename/Z-Image-Turbo")
+_ZIMAGE_MODEL_ID = os.getenv("ZIMAGE_MODEL", "mrfakename/Z-Image-Turbo").split("#")[0].strip()
 _zimage_pipe = None
 _zimage_init_lock = threading.Lock()
 
@@ -305,19 +360,63 @@ def _get_zimage_pipe():
                 import sys as _sys
 
                 hf_token = os.getenv("HUGGINGFACE_TOKEN") or os.getenv("HF_TOKEN")
-                offline = os.getenv("TRANSFORMERS_OFFLINE", "0") == "1"
+                offline_transformers = os.getenv("TRANSFORMERS_OFFLINE", "0") == "1"
+                offline_hf_hub = os.getenv("HF_HUB_OFFLINE", "0") == "1"
+                offline = offline_transformers or offline_hf_hub
+                has_cache = _hf_model_cache_present(_ZIMAGE_MODEL_ID)
+                if not has_cache:
+                    if offline:
+                        raise RuntimeError(
+                            "ZImage model cache missing while offline. "
+                            "Unset HF_HUB_OFFLINE/TRANSFORMERS_OFFLINE to allow download."
+                        )
+                    _sys.stderr.write(
+                        f"[ZIMG] Cache missing for {_ZIMAGE_MODEL_ID}; bootstrapping download...\n"
+                    )
 
                 print(
                     f"[ZIMG] Loading ZImagePipeline ({_ZIMAGE_MODEL_ID})"
                     f"{' [offline]' if offline else ''}...",
                     flush=True,
                 )
-                pipe = ZImagePipeline.from_pretrained(
-                    _ZIMAGE_MODEL_ID,
-                    torch_dtype=torch.bfloat16,
-                    token=hf_token,
-                    local_files_only=offline,
-                )
+                try:
+                    pipe = ZImagePipeline.from_pretrained(
+                        _ZIMAGE_MODEL_ID,
+                        torch_dtype=torch.bfloat16,
+                        token=hf_token,
+                        local_files_only=offline,
+                    )
+                except Exception as e:
+                    msg = str(e).lower()
+                    cache_miss = (
+                        "cannot find an appropriate cached snapshot folder" in msg
+                        or "outgoing traffic has been disabled" in msg
+                    )
+                    cache_corrupt = (
+                        "no file named" in msg and "snapshots" in msg
+                    )
+
+                    if offline and (cache_miss or cache_corrupt):
+                        raise RuntimeError(
+                            "ZImage cache is missing or incomplete while offline. "
+                            "Temporarily unset HF_HUB_OFFLINE/TRANSFORMERS_OFFLINE "
+                            "(or set IMAGE_WARMUP_FORCE_ONLINE=1) to repair cache."
+                        ) from e
+
+                    # If online is allowed and cache is bad/incomplete, force-refresh.
+                    if (not offline) and (cache_miss or cache_corrupt):
+                        _sys.stderr.write(
+                            "[ZIMG] Cache missing/incomplete. Forcing model re-download...\n"
+                        )
+                        pipe = ZImagePipeline.from_pretrained(
+                            _ZIMAGE_MODEL_ID,
+                            torch_dtype=torch.bfloat16,
+                            token=hf_token,
+                            local_files_only=False,
+                            force_download=True,
+                        )
+                    else:
+                        raise
                 # Leverage diffusers memory optimizations for low VRAM.
                 # Use sequential CPU offload (moves individual layers to GPU
                 # one at a time) for minimal peak VRAM — essential when sharing
@@ -372,7 +471,30 @@ def _get_zimage_pipe():
 
 def preload_zimage():
     """Warm up the ZImagePipeline in a background thread."""
-    threading.Thread(target=_get_zimage_pipe, daemon=True).start()
+    def _warmup():
+        # Opt-in: temporarily disable offline flags during warm-up bootstrap.
+        # Keep default OFF so TRANSFORMERS_OFFLINE=1 remains authoritative.
+        force_online = os.getenv("IMAGE_WARMUP_FORCE_ONLINE", "0") == "1"
+        old_t = os.environ.get("TRANSFORMERS_OFFLINE")
+        old_h = os.environ.get("HF_HUB_OFFLINE")
+        try:
+            if force_online:
+                os.environ["TRANSFORMERS_OFFLINE"] = "0"
+                os.environ["HF_HUB_OFFLINE"] = "0"
+            _get_zimage_pipe()
+        except Exception as e:
+            _logger.warning("ZImage warm-up skipped: %s", e)
+        finally:
+            if old_t is None:
+                os.environ.pop("TRANSFORMERS_OFFLINE", None)
+            else:
+                os.environ["TRANSFORMERS_OFFLINE"] = old_t
+            if old_h is None:
+                os.environ.pop("HF_HUB_OFFLINE", None)
+            else:
+                os.environ["HF_HUB_OFFLINE"] = old_h
+
+    threading.Thread(target=_warmup, daemon=True).start()
 
 
 @tool("GenerateAIImage")

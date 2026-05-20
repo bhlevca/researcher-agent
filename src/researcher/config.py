@@ -53,11 +53,28 @@ def probe_model_capabilities(model: str) -> dict:
 
     try:
         import requests as _req
-        resp = _req.post(
-            f"{OLLAMA_BASE}/api/show",
-            json={"name": bare_name},
-            timeout=10,
-        )
+
+        def _show(payload: dict):
+            return _req.post(
+                f"{OLLAMA_BASE}/api/show",
+                json=payload,
+                timeout=10,
+            )
+
+        # Ollama variants accept either {"name": ...} or {"model": ...}.
+        resp = _show({"name": bare_name})
+        if resp.status_code == 404:
+            resp = _show({"model": bare_name})
+
+        if resp.status_code == 404:
+            logger.info(
+                "[PROBE] /api/show unavailable for %s at %s; assuming no tools",
+                bare_name,
+                OLLAMA_BASE,
+            )
+            _model_caps_cache[model] = caps
+            return caps
+
         resp.raise_for_status()
         info = resp.json()
         template = info.get("template", "")
@@ -72,7 +89,12 @@ def probe_model_capabilities(model: str) -> dict:
             bare_name, caps["supports_tools"], caps["is_thinking"], caps["family"],
         )
     except Exception as e:
-        logger.warning("[PROBE] Failed to probe %s: %s — assuming no tools", bare_name, e)
+        logger.warning(
+            "[PROBE] Failed to probe %s at %s: %s — assuming no tools",
+            bare_name,
+            OLLAMA_BASE,
+            e,
+        )
 
     _model_caps_cache[model] = caps
     return caps

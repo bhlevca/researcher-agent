@@ -5,6 +5,7 @@ import io
 import queue
 import asyncio
 import logging
+import json
 
 from fastapi import HTTPException, Request
 
@@ -13,6 +14,7 @@ from researcher.postprocess import _extract_usage
 from researcher.auth import get_current_user
 from researcher.ingestion import get_file_context
 from researcher.image import load_image_params_from_json
+from researcher.crew import ResearchCrew
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +27,24 @@ def register_ask_routes(app):
         """Programmatic API endpoint. POST JSON with {topic: "..."}. Returns structured response."""
         user = await get_current_user(request)
 
+        # Ensure runtime model matches the user's saved model.
+        db = request.app.state.db
+        cursor_model = await db.execute(
+            "SELECT model, llm_params FROM users WHERE id = ?", (user["id"],)
+        )
+        row_model = await cursor_model.fetchone()
+        saved_model = row_model[0] if row_model and row_model[0] else None
+        effective_model = saved_model or request.app.state.current_model
+        if effective_model != request.app.state.current_model:
+            new_crew = ResearchCrew(model=effective_model)
+            if row_model and row_model[1]:
+                try:
+                    new_crew.update_llm_params(json.loads(row_model[1]))
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            request.app.state.research_crew = new_crew
+            request.app.state.current_model = effective_model
+
         file_context = ""
         if req.file_ids:
             db = request.app.state.db
@@ -34,7 +54,6 @@ def register_ask_routes(app):
         research_crew = request.app.state.research_crew
 
         # Ensure image params from DB are applied before generation
-        db = request.app.state.db
         cursor = await db.execute(
             "SELECT image_params FROM users WHERE id = ?", (user["id"],)
         )

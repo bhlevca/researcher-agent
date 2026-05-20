@@ -28,6 +28,13 @@
 - [x] Auth (`auth.py`), files (`ingestion.py`), TTS (`tts.py`) already extracted
 - [x] All 200 tests pass
 
+
+## Known Issues (Quiz Features)
+
+- [x] Reorder quiz: Does not work reliably, often fails to render or grade correctly. Fixed: words now always derived from correct_answer; accent-fold grading.
+- [x] Translation quiz: Grading is unreliable, too strict or too lenient, and feedback is unclear. Fixed: LLM grader hardened; correct answer shown once; feedback separated.
+- [x] Matching quiz: Often fails to build the answer grid or serialize student pair selections correctly. Fixed: pair normalization + correct_answer rebuild.
+
 ## v1.5.0 — High-Resolution Tiled Image Generation
 
 - [ ] Research tiled diffusion approaches:
@@ -166,29 +173,41 @@
 ## v2.3.0 — Language Tutor Enhancements
 
 ### Phase 1 — Spaced Repetition System (SRS)
-- [ ] Implement SM-2 algorithm in `tutor/storage.py`:
-  - [ ] Add `next_review`, `interval_days`, `ease_factor` columns to `vocabulary` table
-  - [ ] Schedule reviews based on mastery level and past performance
-  - [ ] Update intervals on correct/incorrect quiz answers
-- [ ] Add `/tutor/vocabulary/due` endpoint — returns words due for review
-- [ ] Add "Review Due (N)" button in Vocabulary tab that launches a focused quiz
-- [ ] Auto-schedule newly extracted vocabulary for first review (1 day)
+- [x] Implement SM-2 algorithm in `tutor/storage.py`:
+  - [x] Add `next_review`, `interval_days`, `ease_factor` columns to `vocabulary` table (with migration)
+  - [x] Schedule reviews based on mastery level and past performance (`sm2_review()`, `_sm2_compute()`)
+  - [x] Update intervals on correct/incorrect quiz answers (via `update_vocabulary_mastery`)
+- [x] Add `/tutor/vocabulary/due` endpoint — returns words due for review (today or past-due)
+- [x] Add "Review Due (N)" button in Vocabulary tab that launches a focused flashcard quiz
+- [x] Auto-schedule newly extracted vocabulary for first review (1 day)
+
+## v2.4.0 — OpenAI-compatible /v1 Proxy (ollama launch layer)
+- [x] Add `routes/proxy.py` with OpenAI-compatible endpoints:
+  - [x] `GET  /v1/models` — list Ollama models in OpenAI format
+  - [x] `GET  /v1/models/{model_id}` — single model record
+  - [x] `POST /v1/chat/completions` — streaming + non-streaming chat proxy with reasoning hint injection
+  - [x] `POST /v1/completions` — legacy text completions pass-through
+  - [x] `POST /v1/embeddings` — embeddings pass-through
+- [x] Optional `PROXY_API_KEY` env var — if set, requires `Authorization: Bearer <key>`
+- [x] Auto-inject reasoning system prompt for thinking models (deepseek-r1, qwq, qwen3)
+- [x] Documented in README.md and .env.example
+- [x] Usage: set `OPENAI_BASE_URL=http://localhost:8000/v1` in any OpenAI-compatible tool
 
 ### Phase 2 — Semantic Answer Grading
-- [ ] Replace exact string match in quiz grading with LLM-based evaluation:
-  - [ ] Accept synonyms, alternate spellings, minor typos
-  - [ ] Partial credit scoring (0.0–1.0 instead of binary)
-  - [ ] Detailed feedback explaining why an answer is wrong
-- [ ] Update `quiz_results` schema to store float scores
-- [ ] Add grading prompt template to `tutor/config/tasks.yaml`
+- [x] Replace exact string match in quiz grading with LLM-based evaluation:
+  - [x] Accept synonyms, alternate spellings, minor typos
+  - [x] Partial credit scoring (0.0–1.0 instead of binary)
+  - [x] Detailed feedback explaining why an answer is wrong
+- [x] Update `quiz_results` schema to store float scores
+- [x] Add grading prompt template to `tutor/config/tasks.yaml`
 
 ### Phase 3 — Richer Quiz Types
-- [ ] Matching quiz: pair words with translations (drag-and-drop or numbered)
-- [ ] Sentence reordering: shuffle words, student reconstructs correct order
-- [ ] Listening comprehension: TTS plays phrase, student types what they heard
-- [ ] Cloze passages: fill gaps in a paragraph (context-dependent answers)
-- [ ] Update quiz UI to handle new question formats
-- [ ] Update quiz generation prompt to produce new formats
+- [x] Matching quiz: pair words with translations (numbered dropdowns)
+- [x] Sentence reordering: shuffle word chips, student reconstructs correct order
+- [x] Listening comprehension: TTS plays phrase, student types what they heard
+- [x] Cloze passages: fill gaps in a paragraph (context-dependent answers)
+- [x] Update quiz UI to handle new question formats
+- [x] Update quiz generation prompt to produce new formats
 
 ### Phase 4 — Situational Dialogs
 - [ ] Add "situation" dialog generator:
@@ -197,6 +216,12 @@
   - [ ] Inline corrections and vocabulary extraction during dialog
 - [ ] Optional scene illustration via Z-Image pipeline
 - [ ] Save dialog transcripts to lesson_plans table
+- [x] Translation quiz: Input deleted, correct version listed twice, too strict marking
+- [x] Cloze quiz: Giving 1/2 point for perfect answers (should give full points)
+- [x] Reorder quiz: French vocabulary errors (e.g., "heures" instead of "heureux"), missing articles/prepositions
+- [x] Listening quiz: Incorrect marking for minor differences (e.g., "cinema" vs "cinéma")
+- [x] UI: Need vertical scroll for all windows bigger than visible area
+
 
 ### Phase 5 — Lesson Export
 - [ ] Add `/tutor/lessons/{id}/export` endpoint:

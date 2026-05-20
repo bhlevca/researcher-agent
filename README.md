@@ -103,6 +103,7 @@ cp .env.example .env
 | `SD_MODEL` | HuggingFace repo for Stable Diffusion | `stable-diffusion-v1-5/stable-diffusion-v1-5` |
 | `HUGGINGFACE_TOKEN` | HuggingFace token for gated model downloads | *(optional)* |
 | `TRANSFORMERS_OFFLINE` | Set to `1` after first model download for offline use | `0` |
+| `PROXY_API_KEY` | Bearer token required for `/v1/*` proxy endpoints (empty = open) | *(optional)* |
 
 ### Authentication Setup
 

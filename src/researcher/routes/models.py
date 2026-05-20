@@ -32,7 +32,7 @@ def register_model_routes(app):
     @app.get("/models")
     async def list_models(request: Request):
         """Query Ollama for available local models."""
-        await get_current_user(request)
+        user = await get_current_user(request)
         try:
             async with httpx.AsyncClient(timeout=5) as client:
                 resp = await client.get(f"{OLLAMA_BASE}/api/tags")
@@ -47,7 +47,13 @@ def register_model_routes(app):
                 }
                 for m in data.get("models", [])
             ]
-            return {"models": models, "current": request.app.state.current_model}
+            db = request.app.state.db
+            cursor = await db.execute(
+                "SELECT model FROM users WHERE id = ?", (user["id"],)
+            )
+            row = await cursor.fetchone()
+            current = (row[0] if row and row[0] else None) or request.app.state.current_model
+            return {"models": models, "current": current}
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Cannot reach Ollama: {e}")
 

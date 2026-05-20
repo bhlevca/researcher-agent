@@ -12,7 +12,10 @@
                 "--port", "8000",
                 "--reload"
             ],
-            "cwd": "${workspaceFolder}/src",
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src"
+            },
             "envFile": "${workspaceFolder}/.env",
             "jinja": true
         }

@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 import aiosqlite
 
 from researcher.crew import ResearchCrew
-from researcher.image import generate_ai_image
+from researcher.image import generate_ai_image, preload_sd, preload_zimage
 from researcher.config import STATIC_DIR, DB_PATH
 from researcher.tutor.crew import TutorCrew
 from researcher.tutor.storage import init_tutor_tables
@@ -133,6 +133,19 @@ async def lifespan(app: FastAPI):
 
     # Composer tables
     await init_composer_tables(db)
+
+    # Optional image backend warm-up/bootstrap.
+    # This can prefill HF cache on startup when missing.
+    # Disable with IMAGE_WARMUP=0.
+    image_backend = os.getenv("IMAGE_BACKEND", "sd").lower()
+    image_warmup = os.getenv("IMAGE_WARMUP", "1") == "1"
+    if image_warmup:
+        if image_backend == "zimage":
+            logger.info("Warming up ZImage backend in background")
+            preload_zimage()
+        elif image_backend == "sd":
+            logger.info("Warming up Stable Diffusion backend in background")
+            preload_sd()
 
     yield
 

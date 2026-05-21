@@ -96,7 +96,8 @@ function closeLlmSettings() {
 // ── Image Parameters helpers ──
 const IMG_PARAM_KEYS = [
     'hires_enabled', 'hires_width', 'hires_height',
-    'tile_overlap', 'hires_strength', 'tile_width', 'tile_height'
+    'tile_overlap', 'hires_strength', 'realesrgan_enabled',
+    'tile_width', 'tile_height'
 ];
 
 function updateImgParamDisplay(key) {
@@ -104,7 +105,11 @@ function updateImgParamDisplay(key) {
     const valEl = document.getElementById('val-img-' + key);
     if (!el || !valEl) return;
     if (el.type === 'checkbox') {
-        valEl.textContent = el.checked ? 'On' : 'Off';
+        if (key === 'realesrgan_enabled') {
+            valEl.textContent = el.checked ? 'Real-ESRGAN' : 'High-Pass';
+        } else {
+            valEl.textContent = el.checked ? 'On' : 'Off';
+        }
     } else {
         valEl.textContent = el.value;
     }

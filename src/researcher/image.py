@@ -5,6 +5,7 @@ OOM retry cascade, and high-resolution tiled generation with overlap
 blending.  Extracted from crew.py during v1.1.0 refactoring.
 """
 
+import cv2
 import math
 import os
 import gc
@@ -26,6 +27,7 @@ _GENERATED_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # --------------- Tiled image generation / stitching ---------------
+
 
 def _compute_tile_grid(
     target_w: int,
@@ -122,7 +124,9 @@ def stitch_tiles(
         # Only feather edges that overlap with adjacent tiles;
         # border edges (touching the canvas boundary) stay at full weight.
         mask = _make_blend_mask(
-            tw, th, overlap,
+            tw,
+            th,
+            overlap,
             feather_left=(x > 0),
             feather_right=(x + tw < target_w),
             feather_top=(y > 0),
@@ -157,6 +161,7 @@ def _tile_position_label(
         return v
     return f"{v}-{h}"
 
+
 # --------------- Stable Diffusion AI image generation ---------------
 _sd_pipe = None
 _sd_lock = threading.Lock()  # guards lazy pipeline init
@@ -177,6 +182,7 @@ _ZIMAGE_HIRES_WIDTH = int(os.getenv("ZIMAGE_HIRES_WIDTH", "2048"))
 _ZIMAGE_HIRES_HEIGHT = int(os.getenv("ZIMAGE_HIRES_HEIGHT", "2048"))
 _ZIMAGE_TILE_OVERLAP = int(os.getenv("ZIMAGE_TILE_OVERLAP", "192"))
 _ZIMAGE_HIRES_STRENGTH = float(os.getenv("ZIMAGE_HIRES_STRENGTH", "0.35"))
+_REALESRGAN_ENABLED = os.getenv("IMAGE_REALESRGAN", "0") == "1"
 
 # Default image params dict — mirrors the module vars above.
 # Keys here are what the API / UI use; values are the mutable module state.
@@ -186,6 +192,7 @@ DEFAULT_IMAGE_PARAMS: dict = {
     "hires_height": 2048,
     "tile_overlap": 192,
     "hires_strength": 0.35,
+    "realesrgan_enabled": False,
     "tile_width": int(os.getenv("ZIMAGE_WIDTH", "512")),
     "tile_height": int(os.getenv("ZIMAGE_HEIGHT", "512")),
 }
@@ -199,6 +206,7 @@ def get_image_params() -> dict:
         "hires_height": _ZIMAGE_HIRES_HEIGHT,
         "tile_overlap": _ZIMAGE_TILE_OVERLAP,
         "hires_strength": _ZIMAGE_HIRES_STRENGTH,
+        "realesrgan_enabled": _REALESRGAN_ENABLED,
         "tile_width": int(os.getenv("ZIMAGE_WIDTH", "512")),
         "tile_height": int(os.getenv("ZIMAGE_HEIGHT", "512")),
     }
@@ -206,7 +214,7 @@ def get_image_params() -> dict:
 
 def update_image_params(params: dict) -> dict:
     """Update runtime image parameters. Only known keys are accepted."""
-    global ZIMAGE_HIRES, _ZIMAGE_HIRES_WIDTH, _ZIMAGE_HIRES_HEIGHT, _ZIMAGE_TILE_OVERLAP, _ZIMAGE_HIRES_STRENGTH
+    global ZIMAGE_HIRES, _ZIMAGE_HIRES_WIDTH, _ZIMAGE_HIRES_HEIGHT, _ZIMAGE_TILE_OVERLAP, _ZIMAGE_HIRES_STRENGTH, _REALESRGAN_ENABLED
     if "hires_enabled" in params:
         ZIMAGE_HIRES = bool(params["hires_enabled"])
     if "hires_width" in params:
@@ -217,6 +225,8 @@ def update_image_params(params: dict) -> dict:
         _ZIMAGE_TILE_OVERLAP = max(0, min(256, int(params["tile_overlap"])))
     if "hires_strength" in params:
         _ZIMAGE_HIRES_STRENGTH = max(0.05, min(1.0, float(params["hires_strength"])))
+    if "realesrgan_enabled" in params:
+        _REALESRGAN_ENABLED = bool(params["realesrgan_enabled"])
     # tile_width / tile_height are read from ZIMAGE_WIDTH/HEIGHT env vars
     # and used as the native pipeline resolution — not changeable at runtime
     # because changing them would require re-validating VRAM constraints.
@@ -282,7 +292,10 @@ def _get_sd_pipe():
                             "SD model cache missing while offline. "
                             "Unset HF_HUB_OFFLINE/TRANSFORMERS_OFFLINE to allow download."
                         )
-                    print(f"[SD] Cache missing for {_SD_MODEL_ID}; bootstrapping download…", flush=True)
+                    print(
+                        f"[SD] Cache missing for {_SD_MODEL_ID}; bootstrapping download…",
+                        flush=True,
+                    )
                 # Suppress the harmless "position_ids UNEXPECTED" load report
                 _real_stdout = _sys.stdout
                 _sys.stdout = open(os.devnull, "w")
@@ -306,6 +319,7 @@ def _get_sd_pipe():
 
 def preload_sd():
     """Call from the server to warm up the SD pipeline in a background thread."""
+
     def _warmup():
         # Opt-in: temporarily disable offline flags during warm-up bootstrap.
         # Keep default OFF so TRANSFORMERS_OFFLINE=1 remains authoritative.
@@ -340,7 +354,9 @@ def preload_sd():
 #   TRANSFORMERS_OFFLINE  — set to "1" to skip network after first download
 # Ollama is NOT involved for image generation; it is only used to
 # unload/reload the qwen3 LLM around inference to free VRAM.
-_ZIMAGE_MODEL_ID = os.getenv("ZIMAGE_MODEL", "mrfakename/Z-Image-Turbo").split("#")[0].strip()
+_ZIMAGE_MODEL_ID = (
+    os.getenv("ZIMAGE_MODEL", "mrfakename/Z-Image-Turbo").split("#")[0].strip()
+)
 _zimage_pipe = None
 _zimage_init_lock = threading.Lock()
 
@@ -392,9 +408,7 @@ def _get_zimage_pipe():
                         "cannot find an appropriate cached snapshot folder" in msg
                         or "outgoing traffic has been disabled" in msg
                     )
-                    cache_corrupt = (
-                        "no file named" in msg and "snapshots" in msg
-                    )
+                    cache_corrupt = "no file named" in msg and "snapshots" in msg
 
                     if offline and (cache_miss or cache_corrupt):
                         raise RuntimeError(
@@ -428,7 +442,9 @@ def _get_zimage_pipe():
                     # Fallback to model-level offload
                     try:
                         pipe.enable_model_cpu_offload()
-                        _sys.stderr.write("[ZIMG] Model CPU offload enabled (fallback)\n")
+                        _sys.stderr.write(
+                            "[ZIMG] Model CPU offload enabled (fallback)\n"
+                        )
                     except Exception:
                         _sys.stderr.write("[ZIMG] CPU offload unavailable\n")
 
@@ -471,6 +487,7 @@ def _get_zimage_pipe():
 
 def preload_zimage():
     """Warm up the ZImagePipeline in a background thread."""
+
     def _warmup():
         # Opt-in: temporarily disable offline flags during warm-up bootstrap.
         # Keep default OFF so TRANSFORMERS_OFFLINE=1 remains authoritative.
@@ -495,6 +512,122 @@ def preload_zimage():
                 os.environ["HF_HUB_OFFLINE"] = old_h
 
     threading.Thread(target=_warmup, daemon=True).start()
+
+
+def apply_high_pass_filter(image: Image.Image, strength: float = 0.3) -> Image.Image:
+    """BH Simple high-pass filter for sharpness enhancement"""
+    img_array = np.array(image)
+    if img_array.ndim == 2:  # Grayscale
+        img_array = np.expand_dims(img_array, axis=2)
+    elif img_array.shape[2] == 4:  # RGBA
+        img_array = img_array[:, :, :3]
+
+    img_float = img_array.astype(np.float32) / 255.0
+    blurred = cv2.GaussianBlur(img_float, (0, 0), 1.0)
+    high_pass = img_float - blurred
+    result = img_float + strength * high_pass
+    result = np.clip(result, 0, 1)
+    return Image.fromarray((result * 255).astype(np.uint8))
+
+
+def apply_advanced_high_pass(
+    image: Image.Image, radius: int = 3, strength: float = 0.4
+) -> Image.Image:
+    """BH Fixed advanced high-pass filter with proper type handling"""
+    img_array = np.array(image)
+    if img_array.ndim == 2:  # Grayscale
+        img_array = np.expand_dims(img_array, axis=2)
+    elif img_array.shape[2] == 4:  # RGBA
+        img_array = img_array[:, :, :3]
+
+    # Convert to float32 consistently
+    img_float = img_array.astype(np.float32) / 255.0
+
+    # Apply Laplacian with proper type handling
+    laplacian = cv2.Laplacian(img_float, cv2.CV_32F, ksize=radius)
+    high_pass = cv2.convertScaleAbs(laplacian).astype(np.float32) / 255.0
+
+    # Blend with proper type matching
+    result = cv2.addWeighted(img_float, 1.0, high_pass, strength, 0)
+    result = np.clip(result, 0, 1)
+
+    return Image.fromarray((result * 255).astype(np.uint8))
+
+
+def _apply_realesrgan(img: Image.Image) -> Image.Image:
+    """Apply Real-ESRGAN x2 super-resolution to a PIL image.
+
+    Downloads RealESRGAN_x2plus.pth on first use via HuggingFace Hub.
+    Returns image at 2x the input resolution, or the original image if
+    spandrel is not installed, weights are unavailable, or inference fails.
+    """
+    import sys as _sys
+    import torch
+
+    try:
+        import spandrel
+    except ImportError:
+        _sys.stderr.write("[ESRGAN] spandrel not installed — skipping\n")
+        return img
+
+    _weights_dir = Path.home() / ".cache" / "researcher_agent" / "realesrgan"
+    _weights_dir.mkdir(parents=True, exist_ok=True)
+    weights_path = _weights_dir / "RealESRGAN_x2plus.pth"
+
+    if not weights_path.exists():
+        offline = (
+            os.getenv("TRANSFORMERS_OFFLINE", "0") == "1"
+            or os.getenv("HF_HUB_OFFLINE", "0") == "1"
+        )
+        if offline:
+            _sys.stderr.write(
+                "[ESRGAN] Weights not cached and offline mode is set — skipping\n"
+            )
+            return img
+        try:
+            from huggingface_hub import hf_hub_download
+            _sys.stderr.write("[ESRGAN] Downloading RealESRGAN_x2plus.pth...\n")
+            hf_hub_download(
+                repo_id="ai-forever/Real-ESRGAN",
+                filename="RealESRGAN_x2plus.pth",
+                local_dir=str(_weights_dir),
+            )
+            _sys.stderr.write("[ESRGAN] Weights downloaded.\n")
+        except Exception as _e:
+            _sys.stderr.write(f"[ESRGAN] Failed to download weights: {_e}\n")
+            return img
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = None
+    try:
+        model_descriptor = spandrel.ModelLoader().load_from_file(str(weights_path))
+        model = model_descriptor.model.eval().to(device)
+        if device == "cuda":
+            model = model.half()
+
+        img_rgb = img.convert("RGB")
+        img_np = np.array(img_rgb).astype(np.float32) / 255.0
+        img_t = torch.from_numpy(img_np).permute(2, 0, 1).unsqueeze(0)
+        img_t = img_t.half().to(device) if device == "cuda" else img_t.to(device)
+
+        with torch.inference_mode():
+            out_t = model(img_t)
+
+        out_np = out_t.squeeze(0).permute(1, 2, 0).clamp(0, 1).float().cpu().numpy()
+        result = Image.fromarray((out_np * 255).astype(np.uint8))
+        _sys.stderr.write(
+            f"[ESRGAN] {img.size[0]}x{img.size[1]} → "
+            f"{result.size[0]}x{result.size[1]}\n"
+        )
+        return result
+    except Exception as _e:
+        _sys.stderr.write(f"[ESRGAN] Inference failed: {_e}\n")
+        return img
+    finally:
+        if model is not None:
+            del model
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
 
 @tool("GenerateAIImage")
@@ -580,7 +713,9 @@ def generate_ai_image(prompt: str) -> str:
                     timeout=30,
                 )
                 _unloaded_models.append(_fallback_model)
-                _sys.stderr.write(f"[ZIMG] Unloaded LLM (fallback): {_fallback_model}\n")
+                _sys.stderr.write(
+                    f"[ZIMG] Unloaded LLM (fallback): {_fallback_model}\n"
+                )
             except Exception as e2:
                 _sys.stderr.write(f"[ZIMG] Fallback unload also failed: {e2}\n")
 
@@ -631,8 +766,7 @@ def generate_ai_image(prompt: str) -> str:
                 # Each pass only doubles, so moderate strength (0.4-0.5)
                 # produces sharp detail without hallucination.
                 _sys.stderr.write(
-                    f"[ZIMG] Hi-res: generating base image "
-                    f"({tile_w}x{tile_h})...\n"
+                    f"[ZIMG] Hi-res: generating base image " f"({tile_w}x{tile_h})...\n"
                 )
                 _sys.stderr.flush()
 
@@ -671,9 +805,7 @@ def generate_ai_image(prompt: str) -> str:
                         raise
 
                 if base_img is None:
-                    raise RuntimeError(
-                        f"Failed to generate base image: {last_exc}"
-                    )
+                    raise RuntimeError(f"Failed to generate base image: {last_exc}")
 
                 # Step 2: build progressive 2x scale schedule
                 # e.g. 512→2048 = [1024, 2048], 512→1024 = [1024]
@@ -699,6 +831,7 @@ def generate_ai_image(prompt: str) -> str:
                 current_img = base_img
                 total_tiles_refined = 0
                 refinement_ok = True
+                _esrgan_used = False
 
                 try:
                     from diffusers import ZImageImg2ImgPipeline
@@ -752,9 +885,7 @@ def generate_ai_image(prompt: str) -> str:
 
                     for pass_idx, (step_w, step_h) in enumerate(scale_steps):
                         # Upscale current image to this step's size
-                        upscaled = current_img.resize(
-                            (step_w, step_h), Image.LANCZOS
-                        )
+                        upscaled = current_img.resize((step_w, step_h), Image.LANCZOS)
                         _sys.stderr.write(
                             f"[ZIMG] Pass {pass_idx+1}/{len(scale_steps)}: "
                             f"upscaled to {step_w}x{step_h}\n"
@@ -766,12 +897,8 @@ def generate_ai_image(prompt: str) -> str:
                         )
                         stride_x = tile_w - overlap
                         stride_y = tile_h - overlap
-                        cols = max(
-                            1, math.ceil((step_w - overlap) / stride_x)
-                        )
-                        rows = max(
-                            1, math.ceil((step_h - overlap) / stride_y)
-                        )
+                        cols = max(1, math.ceil((step_w - overlap) / stride_x))
+                        rows = max(1, math.ceil((step_h - overlap) / stride_y))
                         _sys.stderr.write(
                             f"[ZIMG]   Refining {len(positions)} tiles "
                             f"({cols}x{rows}), strength={_ZIMAGE_HIRES_STRENGTH}, "
@@ -851,14 +978,32 @@ def generate_ai_image(prompt: str) -> str:
 
                         if pass_ok and len(refined_tiles) == len(positions):
                             current_img = stitch_tiles(
-                                refined_tiles, positions,
-                                step_w, step_h, overlap,
+                                refined_tiles,
+                                positions,
+                                step_w,
+                                step_h,
+                                overlap,
                             )
                             total_tiles_refined += len(refined_tiles)
                             _sys.stderr.write(
                                 f"[ZIMG]   Pass {pass_idx+1} complete "
                                 f"({step_w}x{step_h})\n"
                             )
+                            # Real-ESRGAN branch: after first pass use ESRGAN
+                            # instead of continuing with more img2img passes
+                            if _REALESRGAN_ENABLED and pass_idx == 0 and len(scale_steps) > 1:
+                                _sys.stderr.write(
+                                    "[ZIMG] Real-ESRGAN: upscaling after first pass...\n"
+                                )
+                                _esrgan_out = _apply_realesrgan(current_img)
+                                if _esrgan_out.size != (target_w, target_h):
+                                    current_img = _esrgan_out.resize(
+                                        (target_w, target_h), Image.LANCZOS
+                                    )
+                                else:
+                                    current_img = _esrgan_out
+                                _esrgan_used = True
+                                break  # skip remaining img2img passes
                         else:
                             # OOM on this pass — use Lanczos result, skip
                             # further refinement passes
@@ -869,9 +1014,7 @@ def generate_ai_image(prompt: str) -> str:
                                 f"using Lanczos-only from here\n"
                             )
                             # Still upscale remaining steps with Lanczos
-                            for _, (rw, rh) in enumerate(
-                                scale_steps[pass_idx+1:]
-                            ):
+                            for _, (rw, rh) in enumerate(scale_steps[pass_idx + 1 :]):
                                 current_img = current_img.resize(
                                     (rw, rh), Image.LANCZOS
                                 )
@@ -879,13 +1022,23 @@ def generate_ai_image(prompt: str) -> str:
 
                     img = current_img
                     if refinement_ok:
-                        gen_method = (
-                            f"hi-res progressive img2img: "
-                            f"{base_img.size[0]}x{base_img.size[1]} → "
-                            f"{' → '.join(f'{w}x{h}' for w, h in scale_steps)}, "
-                            f"{total_tiles_refined} tiles total, "
-                            f"strength={_ZIMAGE_HIRES_STRENGTH}, overlap={overlap}"
-                        )
+                        if _esrgan_used:
+                            gen_method = (
+                                f"hi-res img2img+Real-ESRGAN: "
+                                f"{base_img.size[0]}x{base_img.size[1]} → "
+                                f"{scale_steps[0][0]}x{scale_steps[0][1]} (img2img) → "
+                                f"{img.size[0]}x{img.size[1]} (ESRGAN x2), "
+                                f"{total_tiles_refined} tiles, "
+                                f"strength={_ZIMAGE_HIRES_STRENGTH}"
+                            )
+                        else:
+                            gen_method = (
+                                f"hi-res progressive img2img: "
+                                f"{base_img.size[0]}x{base_img.size[1]} → "
+                                f"{' → '.join(f'{w}x{h}' for w, h in scale_steps)}, "
+                                f"{total_tiles_refined} tiles total, "
+                                f"strength={_ZIMAGE_HIRES_STRENGTH}, overlap={overlap}"
+                            )
                     else:
                         gen_method = (
                             f"hi-res partial: base "
@@ -905,9 +1058,7 @@ def generate_ai_image(prompt: str) -> str:
                         "[ZIMG] ZImageImg2ImgPipeline not available, "
                         "using Lanczos-only upscale\n"
                     )
-                    img = base_img.resize(
-                        (target_w, target_h), Image.LANCZOS
-                    )
+                    img = base_img.resize((target_w, target_h), Image.LANCZOS)
                     gen_method = (
                         f"hi-res Lanczos-only: base "
                         f"{base_img.size[0]}x{base_img.size[1]} → "
@@ -919,9 +1070,7 @@ def generate_ai_image(prompt: str) -> str:
                         f"[ZIMG] img2img refinement failed ({ref_exc}), "
                         f"using Lanczos-only upscale\n"
                     )
-                    img = base_img.resize(
-                        (target_w, target_h), Image.LANCZOS
-                    )
+                    img = base_img.resize((target_w, target_h), Image.LANCZOS)
                     gen_method = (
                         f"hi-res Lanczos-only: base "
                         f"{base_img.size[0]}x{base_img.size[1]} → "
@@ -929,12 +1078,20 @@ def generate_ai_image(prompt: str) -> str:
                         f"(refinement error: {ref_exc})"
                     )
 
+                # BH Apply post-processing sharpening
+                # High-pass only runs when Real-ESRGAN is not active
+                if not _REALESRGAN_ENABLED:
+                    try:
+                        img = apply_advanced_high_pass(img, radius=3, strength=0.3)
+                    except ImportError:
+                        # Fallback if OpenCV not available
+                        img = apply_high_pass_filter(img, strength=0.3)
+
                 fname = f"{_uuid.uuid4().hex[:12]}.png"
                 img.save(_GENERATED_DIR / fname)
                 img_tag = f"![generated image](/static/generated/{fname})"
                 _sys.stderr.write(
-                    f"[ZIMG] Hi-res done ({target_w}x{target_h}): "
-                    f"{img_tag}\n"
+                    f"[ZIMG] Hi-res done ({target_w}x{target_h}): " f"{img_tag}\n"
                 )
                 _sys.stderr.flush()
             else:
@@ -949,8 +1106,7 @@ def generate_ai_image(prompt: str) -> str:
                 for _w, _h in _sizes:
                     try:
                         _sys.stderr.write(
-                            f"[ZIMG] Running inference ({_w}x{_h}): "
-                            f"{prompt[:80]}\n"
+                            f"[ZIMG] Running inference ({_w}x{_h}): " f"{prompt[:80]}\n"
                         )
                         _sys.stderr.flush()
 
@@ -1009,7 +1165,9 @@ def generate_ai_image(prompt: str) -> str:
             _sys.stderr.write(f"[ZIMG] GPU freed — {_free:.2f} GiB available\n")
 
             # Reload the LLM(s) now that VRAM is free
-            for _mname in (_unloaded_models or [os.getenv("MODEL", "qwen3.5:9b").replace("ollama/", "")]):
+            for _mname in _unloaded_models or [
+                os.getenv("MODEL", "qwen3.5:9b").replace("ollama/", "")
+            ]:
                 try:
                     _requests.post(
                         OLLAMA_IMAGE_URL,

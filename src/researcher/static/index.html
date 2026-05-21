@@ -187,6 +187,17 @@
                 <div class="llm-param-hint">img2img denoising strength for tile refinement. Lower = more faithful to base image, higher = more detail/creativity. 0.2–0.45 recommended.</div>
                 <input type="range" id="param-img-hires_strength" min="0.05" max="1.0" step="0.05" value="0.35" oninput="updateImgParamDisplay('hires_strength')">
             </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label">
+                    <span>Sharpening Mode</span>
+                    <span class="llm-param-value" id="val-img-realesrgan_enabled">High-Pass</span>
+                </div>
+                <div class="llm-param-hint">High-Pass: 2 img2img passes + OpenCV sharpen (default). Real-ESRGAN: 1 img2img pass + AI upscaler — sharper output, faster.</div>
+                <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;margin-top:0.3rem;">
+                    <input type="checkbox" id="param-img-realesrgan_enabled" onchange="updateImgParamDisplay('realesrgan_enabled'); applyLlmParams()" style="width:1.1rem;height:1.1rem;">
+                    <span style="color:#94a3b8;font-size:0.8rem;">Use Real-ESRGAN (uncheck for High-Pass)</span>
+                </label>
+            </div>
             <div class="llm-param-group" style="opacity:0.6;">
                 <div class="llm-param-label"><span>Tile Width</span><span class="llm-param-value" id="val-img-tile_width">512</span></div>
                 <div class="llm-param-hint">Native tile width (set via ZIMAGE_WIDTH env var). Read-only — changing requires VRAM validation.</div>

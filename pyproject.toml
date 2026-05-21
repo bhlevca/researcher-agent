@@ -12,6 +12,8 @@ dependencies = [
     "langchain-community",
     "httpx",
     "Pillow",
+    "spandrel",
+    "opencv-python",
     "diffusers",
     "transformers",
     "accelerate",

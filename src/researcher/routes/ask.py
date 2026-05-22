@@ -58,7 +58,11 @@ def register_ask_routes(app):
             "SELECT image_params FROM users WHERE id = ?", (user["id"],)
         )
         row = await cursor.fetchone()
-        load_image_params_from_json(row[0] if row and row[0] else None)
+        import sys as _sys, json as _json
+        _raw = row[0] if row and row[0] else None
+        _parsed = _json.loads(_raw) if _raw else {}
+        _sys.stderr.write(f"[ASKDBG] image_params from DB: realesrgan_enabled={_parsed.get('realesrgan_enabled', 'MISSING')}\n")
+        load_image_params_from_json(_raw)
 
         crew = research_crew.build_crew(topic)
         semaphore = request.app.state.crew_semaphore

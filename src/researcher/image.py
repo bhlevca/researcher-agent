@@ -881,6 +881,7 @@ def generate_ai_image(prompt: str) -> str:
                     _sys.stderr.write(
                         f"[ZIMG] FG prompt: {_fg_refine_prompt}\n"
                         f"[ZIMG] BG prompt: {_bg_refine_prompt}\n"
+                        f"[ZIMG] REALESRGAN_ENABLED={_REALESRGAN_ENABLED}\n"
                     )
 
                     for pass_idx, (step_w, step_h) in enumerate(scale_steps):

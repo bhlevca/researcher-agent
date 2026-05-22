@@ -225,8 +225,14 @@ def register_model_routes(app):
         )
         row = await cursor.fetchone()
         saved = row[0] if row and row[0] else None
+        import json as _json
+        _saved_dict = _json.loads(saved) if saved else {}
+        logger.info("[GET /image-params] user=%s DB realesrgan_enabled=%s",
+                    user["username"], _saved_dict.get("realesrgan_enabled", "MISSING"))
         load_image_params_from_json(saved)
-        return {"params": get_image_params()}
+        result = get_image_params()
+        logger.info("[GET /image-params] returning realesrgan_enabled=%s", result.get("realesrgan_enabled"))
+        return {"params": result}
 
     @app.post("/image-params")
     async def set_img_params(request: Request):
@@ -243,7 +249,8 @@ def register_model_routes(app):
             (json.dumps(updated), user["id"]),
         )
         await db.commit()
-        logger.info("Image params updated and saved: %s", params)
+        logger.info("[POST /image-params] user=%s received realesrgan=%s → saved realesrgan=%s",
+                    user["username"], params.get("realesrgan_enabled", "MISSING"), updated.get("realesrgan_enabled"))
         return {"params": updated}
 
     @app.post("/image-params/reset")

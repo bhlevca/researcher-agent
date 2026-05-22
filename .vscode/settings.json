@@ -8,5 +8,7 @@
     "[python]": {
         "editor.formatOnSave": true
     },
-    "github.copilot.chat.implicitContext.enabled": false
+    "github.copilot.chat.implicitContext.enabled": false,
+    "github.copilot.chat.getChangedFilesTool.enabled": false,
+    "github.copilot.chat.gpt55GetChangedFilesTool.enabled": false
 }

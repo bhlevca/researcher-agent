@@ -6,6 +6,7 @@
     <title>Language Tutor</title>
     <link rel="stylesheet" href="/static/css/main.css">
     <link rel="stylesheet" href="/static/css/tutor.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
 <body>
     <header>
@@ -34,23 +35,23 @@
         <div class="tutor-config">
             <label>Target
                 <select id="tutor-target-lang">
-                    <option value="French" selected>French</option>
-                    <option value="German">German</option>
-                    <option value="Spanish">Spanish</option>
-                    <option value="Italian">Italian</option>
-                    <option value="Portuguese">Portuguese</option>
-                    <option value="Dutch">Dutch</option>
-                    <option value="Russian">Russian</option>
-                    <option value="Chinese">Chinese</option>
-                    <option value="Japanese">Japanese</option>
-                    <option value="Romanian">Romanian</option>
-                    <option value="Korean">Korean</option>
-                    <option value="Arabic">Arabic</option>
-                    <option value="Turkish">Turkish</option>
-                    <option value="Polish">Polish</option>
-                    <option value="Swedish">Swedish</option>
-                    <option value="Greek">Greek</option>
-                    <option value="Hindi">Hindi</option>
+                    <option value="French"     data-code="fr" selected>French</option>
+                    <option value="German"     data-code="de">German</option>
+                    <option value="Spanish"    data-code="es">Spanish</option>
+                    <option value="Italian"    data-code="it">Italian</option>
+                    <option value="Portuguese" data-code="pt">Portuguese</option>
+                    <option value="Dutch"      data-code="nl">Dutch</option>
+                    <option value="Russian"    data-code="ru">Russian</option>
+                    <option value="Chinese"    data-code="zh">Chinese</option>
+                    <option value="Japanese"   data-code="ja">Japanese</option>
+                    <option value="Romanian"   data-code="ro">Romanian</option>
+                    <option value="Korean"     data-code="ko">Korean</option>
+                    <option value="Arabic"     data-code="ar">Arabic</option>
+                    <option value="Turkish"    data-code="tr">Turkish</option>
+                    <option value="Polish"     data-code="pl">Polish</option>
+                    <option value="Swedish"    data-code="sv">Swedish</option>
+                    <option value="Greek"      data-code="el">Greek</option>
+                    <option value="Hindi"      data-code="hi">Hindi</option>
                 </select>
             </label>
             <label>Native
@@ -198,6 +199,11 @@
                 <div class="llm-param-hint">Maximum planning attempts before proceeding. Higher = more retries if planning fails. 1–5 recommended.</div>
                 <input type="range" id="pg-param-planning_max_attempts" min="1" max="5" step="1" value="3" oninput="_pgUpdateParamDisplay('planning_max_attempts')">
             </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Request Timeout (sec)</span><span class="llm-param-value" id="pg-val-crew_timeout_sec">300</span></div>
+                <div class="llm-param-hint">Maximum seconds the agent may run before timing out. Increase for long lessons or complex quizzes. 60–900 recommended.</div>
+                <input type="range" id="pg-param-crew_timeout_sec" min="60" max="900" step="30" value="300" oninput="_pgUpdateParamDisplay('crew_timeout_sec')">
+            </div>
         </div>
         <div class="llm-settings-actions">
             <button class="llm-btn-reset" onclick="resetPageSettings()">↺ Reset Defaults</button>
@@ -212,7 +218,23 @@
         <button class="tutor-tab" data-tab="vocab" onclick="switchTutorTab('vocab')">📝 Vocabulary</button>
         <button class="tutor-tab" data-tab="quiz" onclick="switchTutorTab('quiz')">❓ Quiz</button>
         <button class="tutor-tab" data-tab="translate" onclick="switchTutorTab('translate')">🔄 Translate</button>
+        <button class="tutor-tab" data-tab="scenarios" onclick="switchTutorTab('scenarios')">🎭 Scenarios</button>
         <button class="tutor-tab" data-tab="stats" onclick="switchTutorTab('stats')">📊 Stats</button>
+    </div>
+
+    <!-- Curriculum progress bar (shown when a session is active) -->
+    <div id="curriculum-bar" style="display:none;padding:0.4rem 1rem;background:var(--surface);border-bottom:1px solid #1a3a6e;">
+        <div style="display:flex;align-items:center;gap:0.75rem;font-size:0.78rem;color:var(--muted);">
+            <span id="curriculum-topic" style="flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></span>
+            <div style="flex:2;background:#0f3460;border-radius:4px;height:6px;min-width:80px;">
+                <div id="curriculum-fill" style="height:6px;background:#e94560;border-radius:4px;transition:width 0.3s;width:0%;"></div>
+            </div>
+            <span id="curriculum-pct" style="min-width:2.5rem;text-align:right;">0%</span>
+            <button id="curriculum-advance-btn" onclick="advanceCurriculumTopic()"
+                style="background:#0f3460;color:#94a3b8;border:1px solid #1a3a6e;padding:0.2rem 0.5rem;border-radius:0.3rem;font-size:0.72rem;cursor:pointer;">
+                Next topic ›
+            </button>
+        </div>
     </div>
 
     <!-- ═══════ CHAT panel ═══════ -->
@@ -228,6 +250,34 @@
             <button id="mic-btn" onclick="toggleMic()" title="Voice input">🎤</button>
             <button id="stop-speak-btn" onclick="stopSpeaking()" title="Stop speaking">⏹</button>
             <button id="tutor-send-btn" onclick="sendTutorMessage()">Send</button>
+        </div>
+    </div>
+
+    <!-- ═══════ SCENARIOS panel ═══════ -->
+    <div class="tutor-panel" id="panel-scenarios">
+        <div id="scenarios-content" style="padding:0.75rem;">
+            <div style="margin-bottom:0.75rem;display:flex;gap:0.5rem;align-items:center;">
+                <label style="font-size:0.8rem;color:var(--muted);">Filter by level:</label>
+                <select id="scenario-level-filter" onchange="loadScenarios()" style="font-size:0.8rem;padding:0.2rem 0.4rem;background:var(--surface);color:var(--text);border:1px solid #1a3a6e;border-radius:0.3rem;">
+                    <option value="">All levels</option>
+                    <option value="A1">A1</option><option value="A2">A2</option>
+                    <option value="B1">B1</option><option value="B2">B2</option>
+                    <option value="C1">C1</option><option value="C2">C2</option>
+                </select>
+            </div>
+            <div id="scenario-cards" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:0.75rem;"></div>
+            <!-- Active scenario chat -->
+            <div id="scenario-active" style="display:none;margin-top:1rem;">
+                <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem;">
+                    <button onclick="exitScenario()" style="background:#0f3460;color:#94a3b8;border:1px solid #1a3a6e;padding:0.25rem 0.6rem;border-radius:0.35rem;font-size:0.78rem;cursor:pointer;">← Exit</button>
+                    <span id="scenario-title-label" style="font-weight:600;font-size:0.9rem;"></span>
+                </div>
+                <div id="scenario-chat" class="chat-container" style="height:340px;"></div>
+                <div style="display:flex;gap:0.5rem;margin-top:0.5rem;">
+                    <textarea id="scenario-input" rows="2" placeholder="Your reply in character..." style="flex:1;resize:vertical;"></textarea>
+                    <button onclick="sendScenarioMessage()" style="background:#e94560;color:white;border:none;padding:0.4rem 0.9rem;border-radius:0.4rem;cursor:pointer;font-size:0.85rem;">Send</button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -273,6 +323,7 @@
                 <option value="matching">Matching</option>
                 <option value="reorder">Reorder Words</option>
                 <option value="listening">Listening</option>
+                <option value="pronunciation">Pronunciation</option>
                 <option value="mixed">Mixed</option>
             </select>
             <label style="display:flex;align-items:center;gap:0.3rem;font-size:0.78rem;color:#94a3b8;">
@@ -330,6 +381,16 @@
     <div class="tutor-panel" id="panel-stats">
         <div class="stats-content">
             <div id="stats-grid" class="stats-grid"></div>
+            <div class="charts-row" style="display:flex;gap:1.2rem;margin-top:1.4rem;flex-wrap:wrap;">
+                <div class="chart-card" style="flex:1;min-width:220px;background:var(--surface);border-radius:0.75rem;padding:1rem;">
+                    <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.5rem;">Mastery Distribution</div>
+                    <canvas id="chart-mastery" height="160"></canvas>
+                </div>
+                <div class="chart-card" style="flex:1;min-width:220px;background:var(--surface);border-radius:0.75rem;padding:1rem;">
+                    <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.5rem;">Quiz Score Trend</div>
+                    <canvas id="chart-quiz" height="160"></canvas>
+                </div>
+            </div>
             <div style="margin-top:1.5rem;">
                 <button onclick="generateAppraisal()" style="background:#e94560;color:white;border:none;padding:0.5rem 1.2rem;border-radius:0.5rem;cursor:pointer;font-size:0.85rem;">📊 Generate Appraisal</button>
             </div>
@@ -357,6 +418,8 @@
     <script src="/static/js/tutor-quiz.js"></script>
     <script src="/static/js/tutor-translate.js"></script>
     <script src="/static/js/tutor-stats.js"></script>
+    <script src="/static/js/tutor-scenarios.js"></script>
+    <script src="/static/js/tutor-curriculum.js"></script>
 
     <!-- Tutor init -->
     <script>

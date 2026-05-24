@@ -82,9 +82,10 @@ quiz_task:
       "id" (integer, 0-based), "type" (string), "question" (string),
       "options" (array or null), "correct_answer" (string).
     Plus type-specific extra fields:
-      matching  → "pairs": [{"left": word, "right": translation}, ...]
-      reorder   → "words": [shuffled word list]
-      listening → "audio_text": phrase the student will hear
+      matching      → "pairs": [{"left": word, "right": translation}, ...]
+      reorder       → "words": [shuffled word list]
+      listening     → "audio_text": phrase the student will hear
+      pronunciation → "target_sentence": the sentence the student must speak aloud
 
     Mix difficulty within the {level} CEFR band.
   expected_output: >
@@ -144,6 +145,38 @@ grade_task:
     score (float 0.0–1.0), is_correct (bool), and feedback (string in {native_lang}).
     The array length must equal the number of input questions.
     The JSON must be parseable by json.loads().
+  agent: language_tutor
+
+scenario_task:
+  description: >
+    You are playing the role of "{role_tutor}" in a situational dialog roleplay
+    with a {level}-level student of {target_lang} (native: {native_lang}).
+
+    Scenario: {title}
+    Setting: {setting}
+    Student's role: {role_student}
+
+    Conversation so far:
+    {context}
+
+    Student's latest message: "{message}"
+
+    Stay fully in character as {role_tutor}. Respond naturally in {target_lang}
+    as a native speaker in this situation would. Keep the dialog realistic and
+    appropriate to the {level} CEFR level.
+
+    If the student made a significant language error, briefly step out of
+    character to correct it (use italics: *Correction: ...*), then continue
+    the roleplay seamlessly.
+
+    At the end, add:
+    ### New Vocabulary
+    | Word | Translation | Notes |
+    |------|-------------|-------|
+    (list any words used that were new or difficult, up to 5 items)
+  expected_output: >
+    An in-character response in {target_lang} as {role_tutor}, at {level} complexity.
+    Include inline corrections in italics if needed, followed by a brief vocabulary table.
   agent: language_tutor
 
 appraisal_task:

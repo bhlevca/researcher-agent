@@ -53,6 +53,7 @@ class TutorCrew:
         "presence_penalty": 0.0,
         "max_iter": 15,
         "planning_max_attempts": 3,
+        "crew_timeout_sec": 300,
     }
 
     def __init__(self, model: str | None = None):
@@ -254,6 +255,40 @@ class TutorCrew:
             verbose=True,
         )
 
+    def build_scenario_crew(
+        self,
+        message: str,
+        context: str,
+        target_lang: str,
+        native_lang: str,
+        level: str,
+        scenario: dict,
+    ) -> Crew:
+        """Build a Crew for one turn of a situational dialog roleplay."""
+        agent = self._build_agent(target_lang, native_lang, level)
+        desc, exp = self._render_task(
+            "scenario_task",
+            {
+                "target_lang": target_lang,
+                "native_lang": native_lang,
+                "level": level,
+                "context": context,
+                "message": message,
+                "title": scenario.get("title", ""),
+                "setting": scenario.get("setting", ""),
+                "role_tutor": scenario.get("role_tutor", "Tutor"),
+                "role_student": scenario.get("role_student", "Student"),
+            },
+        )
+        task = Task(description=desc, expected_output=exp, agent=agent, context=[])
+        return Crew(
+            agents=[agent],
+            tasks=[task],
+            process=Process.sequential,
+            memory=False,
+            verbose=True,
+        )
+
     def build_lesson_crew(
         self,
         topic: str,
@@ -381,6 +416,18 @@ class TutorCrew:
             'The "correct_answer" MUST be ONLY the missing word — never the full sentence. '
             "Do NOT generate any other question type."
         ),
+        "pronunciation": (
+            'You MUST generate ONLY "pronunciation" type questions. '
+            'Each question asks the student to read a sentence aloud. '
+            'Fields REQUIRED for every pronunciation question:\n'
+            '  "question": A short instruction in {native_lang}, e.g. "Read aloud:".\n'
+            '  "target_sentence": the {target_lang} sentence the student must speak.\n'
+            '  "correct_answer": same as target_sentence.\n'
+            '  "options": null.\n'
+            'Choose sentences that contain sounds or words students at the {level} level '
+            'typically find challenging. Keep sentences short (5–10 words).\n'
+            "Do NOT generate any other question type."
+        ),
         "mixed": (
             "Mix question types freely using any combination of: "
             '"vocabulary", "grammar", "translation", "matching", "reorder", '
@@ -396,6 +443,7 @@ class TutorCrew:
         "matching": {"matching"},
         "reorder": {"reorder"},
         "listening": {"listening"},
+        "pronunciation": {"pronunciation"},
         "cloze": {"cloze"},
         "mixed": {
             "vocabulary",

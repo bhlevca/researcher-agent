@@ -194,6 +194,11 @@
                 <div class="llm-param-hint">Maximum planning attempts before proceeding. Higher = more retries if planning fails. 1–5 recommended.</div>
                 <input type="range" id="pg-param-planning_max_attempts" min="1" max="5" step="1" value="2" oninput="_pgUpdateParamDisplay('planning_max_attempts')">
             </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Request Timeout (sec)</span><span class="llm-param-value" id="pg-val-crew_timeout_sec">300</span></div>
+                <div class="llm-param-hint">Maximum seconds the agent may run before timing out. Increase for long compositions or complex harmonization. 60–900 recommended.</div>
+                <input type="range" id="pg-param-crew_timeout_sec" min="60" max="900" step="30" value="300" oninput="_pgUpdateParamDisplay('crew_timeout_sec')">
+            </div>
         </div>
         <div class="llm-settings-actions">
             <button class="llm-btn-reset" onclick="resetPageSettings()">↺ Reset Defaults</button>

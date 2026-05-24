@@ -10,6 +10,7 @@ import re
 import json
 import queue
 import asyncio
+import threading
 import logging
 
 from fastapi import HTTPException, Request
@@ -17,6 +18,7 @@ from fastapi.responses import StreamingResponse, Response
 
 from researcher.auth import get_current_user
 from researcher.config import _QueueWriter, _SESSION_ID_RE
+from researcher.composer.crew import ComposerCrew
 
 from researcher.composer.models import (
     ComposerSessionCreate,
@@ -39,6 +41,15 @@ from researcher.composer.storage import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _get_composer_crew(request: Request, uid: str) -> ComposerCrew:
+    """Return the per-user ComposerCrew, creating it on first access."""
+    if uid not in request.app.state.composer_crews:
+        request.app.state.composer_crews[uid] = ComposerCrew(
+            model=request.app.state.current_model
+        )
+    return request.app.state.composer_crews[uid]
 
 
 def _validate_sid(session_id: str):
@@ -83,9 +94,17 @@ def _run_composer_crew(crew, q: queue.Queue):
             crewai_event_bus.off(event_type, handler)
 
 
-async def _stream_composer_crew(crew, request: Request):
+async def _stream_composer_crew(crew, request: Request, uid: str, timeout_sec: int | None = None):
     """Generic SSE streamer for any composer crew run."""
-    semaphore = request.app.state.crew_semaphore
+    # Lazy-init per-user semaphore and cancel event
+    if uid not in request.app.state.crew_semaphores:
+        request.app.state.crew_semaphores[uid] = asyncio.Semaphore(1)
+    if uid not in request.app.state.cancel_events:
+        request.app.state.cancel_events[uid] = threading.Event()
+
+    semaphore = request.app.state.crew_semaphores[uid]
+    if timeout_sec is None:
+        timeout_sec = request.app.state.crew_timeout
     q: queue.Queue = queue.Queue()
 
     _verbose_noise = re.compile(
@@ -105,26 +124,39 @@ async def _stream_composer_crew(crew, request: Request):
         return True
 
     async def event_stream():
-        cancel = request.app.state.cancel_event
+        cancel = request.app.state.cancel_events[uid]
         cancel.clear()
         async with semaphore:
             loop = asyncio.get_running_loop()
             future = loop.run_in_executor(None, lambda: _run_composer_crew(crew, q))
             all_lines: list[str] = []
+            elapsed = 0.0
+
+            early_exit: str | None = None  # "cancelled" | "timeout"
 
             while not future.done():
-                if cancel.is_set():
+                if cancel.is_set() and early_exit is None:
+                    early_exit = "cancelled"
                     yield _sse("cancelled", "Request cancelled by user")
-                    return
+                if elapsed >= timeout_sec and early_exit is None:
+                    early_exit = "timeout"
+                    yield _sse("error", f"Request timed out after {timeout_sec}s")
                 await asyncio.sleep(0.15)
+                elapsed += 0.15
                 while not q.empty():
                     try:
                         line = q.get_nowait()
                         all_lines.append(line)
-                        if _should_show(line):
+                        if early_exit is None and _should_show(line):
                             yield _sse("reasoning", line)
                     except queue.Empty:
                         break
+
+            if early_exit is not None:
+                # Drain queue silently; semaphore releases after thread finished
+                while not q.empty():
+                    q.get_nowait()
+                return
 
             # Drain remaining
             while not q.empty():
@@ -238,7 +270,8 @@ def register_composer_routes(app):
         if not session:
             raise HTTPException(status_code=404, detail="Composer session not found")
 
-        composer_crew = request.app.state.composer_crew
+        uid = user["id"]
+        composer_crew = _get_composer_crew(request, uid)
         context = _build_composer_context(session["messages"])
 
         crew = composer_crew.build_chat_crew(
@@ -250,7 +283,7 @@ def register_composer_routes(app):
             tempo=session["tempo"],
         )
 
-        return await _stream_composer_crew(crew, request)
+        return await _stream_composer_crew(crew, request, uid, timeout_sec=composer_crew.get_llm_params().get("crew_timeout_sec"))
 
     # ------------------------------------------------------------------
     # Score Generation (SSE streaming)
@@ -267,7 +300,8 @@ def register_composer_routes(app):
         if not session:
             raise HTTPException(status_code=404, detail="Composer session not found")
 
-        composer_crew = request.app.state.composer_crew
+        uid = user["id"]
+        composer_crew = _get_composer_crew(request, uid)
 
         crew = composer_crew.build_score_crew(
             description=req.description,
@@ -280,7 +314,7 @@ def register_composer_routes(app):
             tempo=session["tempo"],
         )
 
-        return await _stream_composer_crew(crew, request)
+        return await _stream_composer_crew(crew, request, uid, timeout_sec=composer_crew.get_llm_params().get("crew_timeout_sec"))
 
     # ------------------------------------------------------------------
     # Harmonize (SSE streaming)
@@ -297,7 +331,8 @@ def register_composer_routes(app):
         if not session:
             raise HTTPException(status_code=404, detail="Composer session not found")
 
-        composer_crew = request.app.state.composer_crew
+        uid = user["id"]
+        composer_crew = _get_composer_crew(request, uid)
 
         crew = composer_crew.build_harmonize_crew(
             melody=req.melody,
@@ -308,7 +343,7 @@ def register_composer_routes(app):
             tempo=session["tempo"],
         )
 
-        return await _stream_composer_crew(crew, request)
+        return await _stream_composer_crew(crew, request, uid, timeout_sec=composer_crew.get_llm_params().get("crew_timeout_sec"))
 
     # ------------------------------------------------------------------
     # Analyze (SSE streaming)
@@ -325,7 +360,8 @@ def register_composer_routes(app):
         if not session:
             raise HTTPException(status_code=404, detail="Composer session not found")
 
-        composer_crew = request.app.state.composer_crew
+        uid = user["id"]
+        composer_crew = _get_composer_crew(request, uid)
 
         crew = composer_crew.build_analyze_crew(
             content=req.content,
@@ -335,7 +371,7 @@ def register_composer_routes(app):
             tempo=session["tempo"],
         )
 
-        return await _stream_composer_crew(crew, request)
+        return await _stream_composer_crew(crew, request, uid, timeout_sec=composer_crew.get_llm_params().get("crew_timeout_sec"))
 
     # ------------------------------------------------------------------
     # Compositions CRUD
@@ -362,7 +398,7 @@ def register_composer_routes(app):
                 time_sig = session.get("time_signature", time_sig)
                 tempo = session.get("tempo", tempo)
 
-        composer_crew = request.app.state.composer_crew
+        composer_crew = _get_composer_crew(request, user["id"])
         musicxml = composer_crew.extract_musicxml(
             response_text, key=key_sig, time_signature=time_sig, tempo=tempo,
         )
@@ -390,7 +426,7 @@ def register_composer_routes(app):
         if not session:
             raise HTTPException(status_code=404, detail="Composer session not found")
 
-        composer_crew = request.app.state.composer_crew
+        composer_crew = _get_composer_crew(request, user["id"])
         response_text = body.get("response", "")
         musicxml = composer_crew.extract_musicxml(
             response_text,

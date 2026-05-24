@@ -1,0 +1,92 @@
+# Situational dialog scenarios for language roleplay practice
+# Each scenario has: id, title, description, role_tutor, role_student, level, setting, starter
+
+- id: cafe
+  title: "At the Café"
+  description: "Order food and drinks, ask about the menu, pay the bill."
+  role_tutor: "Café server"
+  role_student: "Customer"
+  level: A1
+  setting: "A busy local café"
+  starter: "Welcome! What can I get for you today?"
+
+- id: directions
+  title: "Asking for Directions"
+  description: "Ask and give directions in an unfamiliar city."
+  role_tutor: "Local resident"
+  role_student: "Tourist"
+  level: A1
+  setting: "A street corner in the city center"
+  starter: "Excuse me, you look lost. Can I help you?"
+
+- id: shopping
+  title: "Shopping for Clothes"
+  description: "Browse a shop, ask about sizes, colors, and prices."
+  role_tutor: "Shop assistant"
+  role_student: "Shopper"
+  level: A2
+  setting: "A clothing boutique"
+  starter: "Good afternoon! Are you looking for anything in particular?"
+
+- id: doctor
+  title: "Doctor's Appointment"
+  description: "Describe symptoms, ask questions about treatment."
+  role_tutor: "General practitioner"
+  role_student: "Patient"
+  level: A2
+  setting: "A doctor's office"
+  starter: "Good morning. Please sit down. What seems to be the problem?"
+
+- id: job_interview
+  title: "Job Interview"
+  description: "Discuss qualifications, experience, and career goals."
+  role_tutor: "HR interviewer"
+  role_student: "Job applicant"
+  level: B1
+  setting: "A corporate office meeting room"
+  starter: "Thank you for coming in today. Can you start by telling me a little about yourself?"
+
+- id: hotel
+  title: "Hotel Check-In Problem"
+  description: "Handle a booking problem and negotiate a solution politely."
+  role_tutor: "Hotel receptionist"
+  role_student: "Guest"
+  level: B1
+  setting: "Hotel front desk"
+  starter: "Good evening. I'm afraid there's a small issue with your reservation…"
+
+- id: debate
+  title: "Friendly Debate"
+  description: "Argue and counter-argue a debatable topic with evidence."
+  role_tutor: "Debate partner"
+  role_student: "Debater"
+  level: B2
+  setting: "A university discussion club"
+  starter: "So, I believe that social media does more harm than good. What's your take?"
+
+- id: negotiation
+  title: "Business Negotiation"
+  description: "Negotiate a contract price and terms professionally."
+  role_tutor: "Supplier representative"
+  role_student: "Buyer"
+  level: B2
+  setting: "A boardroom"
+  starter: "We've reviewed your proposal. The pricing is higher than we expected. Let's discuss."
+
+- id: cultural_misunderstanding
+  title: "Navigating a Cultural Misunderstanding"
+  description: "Resolve a miscommunication caused by cultural differences tactfully."
+  role_tutor: "Local colleague"
+  role_student: "Foreign professional"
+  level: C1
+  setting: "An international workplace"
+  starter: "I wanted to talk to you about something that happened in the meeting yesterday…"
+
+- id: complaint
+  title: "Formal Complaint"
+  description: "Make and respond to a formal complaint in writing style spoken form."
+  role_tutor: "Customer service manager"
+  role_student: "Dissatisfied customer"
+  level: C1
+  setting: "Customer service department"
+  starter: "I understand you've contacted us about a serious issue. Please go ahead."

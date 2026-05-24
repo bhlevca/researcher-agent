@@ -25,6 +25,11 @@ _logger = logging.getLogger(__name__)
 _GENERATED_DIR = Path(__file__).parent / "static" / "generated"
 _GENERATED_DIR.mkdir(parents=True, exist_ok=True)
 
+# Permanent model weights directory — inside the project, never cleared by OS cache tools.
+# Falls back to the legacy cache path so existing downloads aren't re-fetched.
+_MODELS_DIR = Path(__file__).parent / "data" / "models"
+_MODELS_DIR.mkdir(parents=True, exist_ok=True)
+
 
 # --------------- Tiled image generation / stitching ---------------
 
@@ -167,8 +172,8 @@ _sd_pipe = None
 _sd_lock = threading.Lock()  # guards lazy pipeline init
 _vram_lock = threading.Lock()  # serialises GPU-heavy inference
 
-# Image backend selection
-IMAGE_BACKEND = os.getenv("IMAGE_BACKEND", "sd")  # "sd" or "zimage"
+# Image backend selection ("sd", "zimage", or "ernie")
+IMAGE_BACKEND = os.getenv("IMAGE_BACKEND", "sd")
 
 # ZImage inference settings (turbo / FLUX-distilled models need few steps)
 _ZIMAGE_STEPS = int(os.getenv("ZIMAGE_STEPS", "4"))
@@ -187,6 +192,7 @@ _REALESRGAN_ENABLED = os.getenv("IMAGE_REALESRGAN", "0") == "1"
 # Default image params dict — mirrors the module vars above.
 # Keys here are what the API / UI use; values are the mutable module state.
 DEFAULT_IMAGE_PARAMS: dict = {
+    "image_backend": os.getenv("IMAGE_BACKEND", "sd"),
     "hires_enabled": False,
     "hires_width": 2048,
     "hires_height": 2048,
@@ -201,6 +207,7 @@ DEFAULT_IMAGE_PARAMS: dict = {
 def get_image_params() -> dict:
     """Return the current runtime image generation parameters."""
     return {
+        "image_backend": IMAGE_BACKEND,
         "hires_enabled": ZIMAGE_HIRES,
         "hires_width": _ZIMAGE_HIRES_WIDTH,
         "hires_height": _ZIMAGE_HIRES_HEIGHT,
@@ -212,9 +219,16 @@ def get_image_params() -> dict:
     }
 
 
+_VALID_BACKENDS = {"sd", "zimage", "ernie", "flux"}
+
+
 def update_image_params(params: dict) -> dict:
     """Update runtime image parameters. Only known keys are accepted."""
-    global ZIMAGE_HIRES, _ZIMAGE_HIRES_WIDTH, _ZIMAGE_HIRES_HEIGHT, _ZIMAGE_TILE_OVERLAP, _ZIMAGE_HIRES_STRENGTH, _REALESRGAN_ENABLED
+    global IMAGE_BACKEND, ZIMAGE_HIRES, _ZIMAGE_HIRES_WIDTH, _ZIMAGE_HIRES_HEIGHT, _ZIMAGE_TILE_OVERLAP, _ZIMAGE_HIRES_STRENGTH, _REALESRGAN_ENABLED
+    if "image_backend" in params:
+        val = str(params["image_backend"]).lower()
+        if val in _VALID_BACKENDS:
+            IMAGE_BACKEND = val
     if "hires_enabled" in params:
         ZIMAGE_HIRES = bool(params["hires_enabled"])
     if "hires_width" in params:
@@ -308,6 +322,7 @@ def _get_sd_pipe():
                             safety_checker=None,
                             requires_safety_checker=False,
                             local_files_only=offline,
+                            cache_dir=str(_MODELS_DIR / "sd"),
                         )
                 finally:
                     _sys.stdout.close()
@@ -401,6 +416,7 @@ def _get_zimage_pipe():
                         torch_dtype=torch.bfloat16,
                         token=hf_token,
                         local_files_only=offline,
+                        cache_dir=str(_MODELS_DIR / "zimage"),
                     )
                 except Exception as e:
                     msg = str(e).lower()
@@ -428,6 +444,7 @@ def _get_zimage_pipe():
                             token=hf_token,
                             local_files_only=False,
                             force_download=True,
+                            cache_dir=str(_MODELS_DIR / "zimage"),
                         )
                     else:
                         raise
@@ -514,6 +531,192 @@ def preload_zimage():
     threading.Thread(target=_warmup, daemon=True).start()
 
 
+# --------------- ERNIE-Image backend (diffusers ErnieImagePipeline + GGUF abliterated) ---------------
+# Used when IMAGE_BACKEND=ernie.
+# Base pipeline: baidu/ERNIE-Image (transformer, VAE, scheduler)
+# PE + text_encoder: ponpoke/ERNIE-Image-Abliterated-GGUF (GGUF quantized, uncensored)
+# Reads:
+#   ERNIE_GGUF_VARIANT — quantization variant: Q4_K_M (default), Q6_K, Q8_0
+#   ERNIE_STEPS        — inference steps (default: 20)
+_ERNIE_BASE_ID = "baidu/ERNIE-Image"
+_ERNIE_GGUF_ID = "ponpoke/ERNIE-Image-Abliterated-GGUF"
+_ERNIE_VARIANT = os.getenv("ERNIE_GGUF_VARIANT", "Q4_K_M")
+_ERNIE_STEPS = int(os.getenv("ERNIE_STEPS", "20"))
+_ernie_pipe = None
+_ernie_init_lock = threading.Lock()
+
+
+def _get_ernie_pipe():
+    """Lazy-load ErnieImagePipeline with GGUF abliterated PE and text_encoder."""
+    global _ernie_pipe
+    if _ernie_pipe is None:
+        with _ernie_init_lock:
+            if _ernie_pipe is None:
+                import torch
+                from diffusers import ErnieImagePipeline
+                from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer
+                import sys as _sys
+
+                hf_token = os.getenv("HUGGINGFACE_TOKEN") or os.getenv("HF_TOKEN")
+                offline = (
+                    os.getenv("TRANSFORMERS_OFFLINE", "0") == "1"
+                    or os.getenv("HF_HUB_OFFLINE", "0") == "1"
+                )
+                ernie_dir = _MODELS_DIR / "ernie"
+                ernie_dir.mkdir(parents=True, exist_ok=True)
+                variant = _ERNIE_VARIANT
+
+                # ── Step 1: load the base pipeline (transformer, VAE, scheduler) ──
+                print(f"[ERNIE] Loading base pipeline from {_ERNIE_BASE_ID}...", flush=True)
+                pipe = ErnieImagePipeline.from_pretrained(
+                    _ERNIE_BASE_ID,
+                    torch_dtype=torch.bfloat16,
+                    token=hf_token,
+                    local_files_only=offline,
+                    cache_dir=str(ernie_dir / "base"),
+                )
+
+                # ── Step 2: swap PE and text_encoder with GGUF abliterated versions ──
+                pe_gguf = f"ernie-image-abliterated-pe-{variant}.gguf"
+                te_gguf = f"ernie-image-abliterated-te-{variant}.gguf"
+                print(
+                    f"[ERNIE] Loading abliterated PE ({pe_gguf}) and"
+                    f" text_encoder ({te_gguf})...",
+                    flush=True,
+                )
+                try:
+                    abliterated_pe = AutoModelForCausalLM.from_pretrained(
+                        _ERNIE_GGUF_ID,
+                        subfolder="abliterated_pe-GGUF",
+                        gguf_file=pe_gguf,
+                        torch_dtype=torch.bfloat16,
+                        token=hf_token,
+                        local_files_only=offline,
+                        cache_dir=str(ernie_dir / "gguf"),
+                    )
+                    abliterated_te = AutoModel.from_pretrained(
+                        _ERNIE_GGUF_ID,
+                        subfolder="abliterated_text_encoder-GGUF",
+                        gguf_file=te_gguf,
+                        torch_dtype=torch.bfloat16,
+                        token=hf_token,
+                        local_files_only=offline,
+                        cache_dir=str(ernie_dir / "gguf"),
+                    )
+                    pipe.pe = abliterated_pe
+                    pipe.text_encoder = abliterated_te
+                    _sys.stderr.write("[ERNIE] Abliterated GGUF components loaded.\n")
+                except Exception as e:
+                    _sys.stderr.write(
+                        f"[ERNIE] WARNING: Could not load GGUF components ({e}),"
+                        " falling back to base model components.\n"
+                    )
+
+                pipe.enable_model_cpu_offload()
+                _ernie_pipe = pipe
+                print("[ERNIE] Pipeline ready.", flush=True)
+    return _ernie_pipe
+
+
+def preload_ernie():
+    """Warm up the ErnieImagePipeline in a background thread."""
+
+    def _warmup():
+        force_online = os.getenv("IMAGE_WARMUP_FORCE_ONLINE", "0") == "1"
+        old_t = os.environ.get("TRANSFORMERS_OFFLINE")
+        old_h = os.environ.get("HF_HUB_OFFLINE")
+        try:
+            if force_online:
+                os.environ["TRANSFORMERS_OFFLINE"] = "0"
+                os.environ["HF_HUB_OFFLINE"] = "0"
+            _get_ernie_pipe()
+        except Exception as e:
+            _logger.warning("ERNIE warm-up skipped: %s", e)
+        finally:
+            if old_t is None:
+                os.environ.pop("TRANSFORMERS_OFFLINE", None)
+            else:
+                os.environ["TRANSFORMERS_OFFLINE"] = old_t
+            if old_h is None:
+                os.environ.pop("HF_HUB_OFFLINE", None)
+            else:
+                os.environ["HF_HUB_OFFLINE"] = old_h
+
+    threading.Thread(target=_warmup, daemon=True).start()
+
+
+# --------------- FLUX.1-schnell backend (diffusers FluxPipeline, bf16) ---------------
+# Used when IMAGE_BACKEND=flux.
+# Model: black-forest-labs/FLUX.1-schnell (Apache 2.0, no safety filter)
+# Reads:
+#   FLUX_MODEL  — HuggingFace repo id (default: black-forest-labs/FLUX.1-schnell)
+#   FLUX_STEPS  — inference steps (default: 4, schnell is distilled)
+_FLUX_MODEL_ID = os.getenv("FLUX_MODEL", "black-forest-labs/FLUX.1-schnell")
+_FLUX_STEPS = int(os.getenv("FLUX_STEPS", "4"))
+_flux_pipe = None
+_flux_init_lock = threading.Lock()
+
+
+def _get_flux_pipe():
+    """Lazy-load FluxPipeline with sequential CPU offload for 16GB VRAM."""
+    global _flux_pipe
+    if _flux_pipe is None:
+        with _flux_init_lock:
+            if _flux_pipe is None:
+                import torch
+                from diffusers import FluxPipeline
+                import sys as _sys
+
+                hf_token = os.getenv("HUGGINGFACE_TOKEN") or os.getenv("HF_TOKEN")
+                offline = (
+                    os.getenv("TRANSFORMERS_OFFLINE", "0") == "1"
+                    or os.getenv("HF_HUB_OFFLINE", "0") == "1"
+                )
+                print(
+                    f"[FLUX] Loading FluxPipeline ({_FLUX_MODEL_ID})"
+                    f"{' [offline]' if offline else ''}...",
+                    flush=True,
+                )
+                pipe = FluxPipeline.from_pretrained(
+                    _FLUX_MODEL_ID,
+                    torch_dtype=torch.bfloat16,
+                    token=hf_token,
+                    local_files_only=offline,
+                    cache_dir=str(_MODELS_DIR / "flux"),
+                )
+                # Sequential offload: one layer at a time on GPU → minimal VRAM use
+                pipe.enable_sequential_cpu_offload()
+                _flux_pipe = pipe
+                print("[FLUX] Pipeline ready.", flush=True)
+    return _flux_pipe
+
+
+def preload_flux():
+    """Warm up the FluxPipeline in a background thread."""
+    def _warmup():
+        force_online = os.getenv("IMAGE_WARMUP_FORCE_ONLINE", "0") == "1"
+        old_t = os.environ.get("TRANSFORMERS_OFFLINE")
+        old_h = os.environ.get("HF_HUB_OFFLINE")
+        try:
+            if force_online:
+                os.environ["TRANSFORMERS_OFFLINE"] = "0"
+                os.environ["HF_HUB_OFFLINE"] = "0"
+            _get_flux_pipe()
+        except Exception as e:
+            _logger.warning("FLUX warm-up skipped: %s", e)
+        finally:
+            if old_t is None:
+                os.environ.pop("TRANSFORMERS_OFFLINE", None)
+            else:
+                os.environ["TRANSFORMERS_OFFLINE"] = old_t
+            if old_h is None:
+                os.environ.pop("HF_HUB_OFFLINE", None)
+            else:
+                os.environ["HF_HUB_OFFLINE"] = old_h
+
+    threading.Thread(target=_warmup, daemon=True).start()
+
+
 def apply_high_pass_filter(image: Image.Image, strength: float = 0.3) -> Image.Image:
     """BH Simple high-pass filter for sharpness enhancement"""
     img_array = np.array(image)
@@ -570,29 +773,38 @@ def _apply_realesrgan(img: Image.Image) -> Image.Image:
         _sys.stderr.write("[ESRGAN] spandrel not installed — skipping\n")
         return img
 
-    _weights_dir = Path.home() / ".cache" / "researcher_agent" / "realesrgan"
-    _weights_dir.mkdir(parents=True, exist_ok=True)
-    weights_path = _weights_dir / "RealESRGAN_x2plus.pth"
+    # Resolution order for weights: permanent project dir first, then legacy cache
+    _legacy_dir = Path.home() / ".cache" / "researcher_agent" / "realesrgan"
+    weights_path = None
+    for candidate_name in ("RealESRGAN_x2.pth", "RealESRGAN_x2plus.pth"):
+        for search_dir in (_MODELS_DIR, _legacy_dir):
+            p = search_dir / candidate_name
+            if p.exists():
+                weights_path = p
+                break
+        if weights_path:
+            break
 
-    if not weights_path.exists():
+    if weights_path is None:
         offline = (
             os.getenv("TRANSFORMERS_OFFLINE", "0") == "1"
             or os.getenv("HF_HUB_OFFLINE", "0") == "1"
         )
         if offline:
             _sys.stderr.write(
-                "[ESRGAN] Weights not cached and offline mode is set — skipping\n"
+                "[ESRGAN] Weights not found and offline mode is set — skipping\n"
             )
             return img
         try:
             from huggingface_hub import hf_hub_download
-            _sys.stderr.write("[ESRGAN] Downloading RealESRGAN_x2plus.pth...\n")
+            _sys.stderr.write("[ESRGAN] Downloading RealESRGAN_x2.pth to project models dir...\n")
             hf_hub_download(
                 repo_id="ai-forever/Real-ESRGAN",
-                filename="RealESRGAN_x2plus.pth",
-                local_dir=str(_weights_dir),
+                filename="RealESRGAN_x2.pth",
+                local_dir=str(_MODELS_DIR),
             )
-            _sys.stderr.write("[ESRGAN] Weights downloaded.\n")
+            weights_path = _MODELS_DIR / "RealESRGAN_x2.pth"
+            _sys.stderr.write(f"[ESRGAN] Weights saved to {weights_path}\n")
         except Exception as _e:
             _sys.stderr.write(f"[ESRGAN] Failed to download weights: {_e}\n")
             return img
@@ -1182,8 +1394,61 @@ def generate_ai_image(prompt: str) -> str:
         if img_tag:
             return f"{img_tag}\n<!-- method: {gen_method} -->"
         return f"Error generating image via ZImagePipeline: {last_exc}"
+
+    elif backend == "ernie":
+        import sys as _sys
+        import torch
+        try:
+            pipe = _get_ernie_pipe()
+        except Exception as e:
+            return f"Error loading ERNIE pipeline: {e}"
+
+        _sys.stderr.write(f"[ERNIE] Starting inference...\n"); _sys.stderr.flush()
+        with _vram_lock:
+            try:
+                result = pipe(
+                    prompt,
+                    num_inference_steps=_ERNIE_STEPS,
+                    generator=torch.Generator().manual_seed(0),
+                ).images[0]
+            except Exception as e:
+                return f"Error during ERNIE generation: {e}"
+
+        fname = f"{_uuid.uuid4().hex[:12]}.png"
+        out_path = _GENERATED_DIR / fname
+        result.save(str(out_path))
+        _sys.stderr.write(f"[ERNIE] Saved: {fname}\n")
+        return f'<img src="/static/generated/{fname}" alt="{prompt[:60]}">'
+
+    elif backend == "flux":
+        import sys as _sys
+        import torch
+        try:
+            pipe = _get_flux_pipe()
+        except Exception as e:
+            return f"Error loading FLUX pipeline: {e}"
+
+        _sys.stderr.write(f"[FLUX] Starting inference ({_FLUX_STEPS} steps)...\n")
+        _sys.stderr.flush()
+        with _vram_lock:
+            try:
+                result = pipe(
+                    prompt,
+                    num_inference_steps=_FLUX_STEPS,
+                    guidance_scale=0.0,  # schnell is guidance-distilled
+                    generator=torch.Generator().manual_seed(0),
+                ).images[0]
+            except Exception as e:
+                return f"Error during FLUX generation: {e}"
+
+        fname = f"{_uuid.uuid4().hex[:12]}.png"
+        out_path = _GENERATED_DIR / fname
+        result.save(str(out_path))
+        _sys.stderr.write(f"[FLUX] Saved: {fname}\n")
+        return f'<img src="/static/generated/{fname}" alt="{prompt[:60]}">'
+
     else:
-        return f"Error: Unknown IMAGE_BACKEND '{backend}'. Use 'sd' or 'ollama'."
+        return f"Error: Unknown IMAGE_BACKEND '{backend}'. Use 'sd', 'zimage', 'ernie', or 'flux'."
 
 
 # The image tag IS the final answer — skip the post-tool LLM call.

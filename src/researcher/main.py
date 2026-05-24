@@ -8,9 +8,7 @@ sys.dont_write_bytecode = True
 os.environ.setdefault("CREWAI_TRACING_ENABLED", "false")
 
 import json
-import asyncio
 import logging
-import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -20,12 +18,9 @@ from fastapi.responses import FileResponse
 from dotenv import load_dotenv
 import aiosqlite
 
-from researcher.crew import ResearchCrew
-from researcher.image import generate_ai_image, preload_sd, preload_zimage
+from researcher.image import generate_ai_image, preload_sd, preload_zimage, preload_ernie, preload_flux
 from researcher.config import STATIC_DIR, DB_PATH
-from researcher.tutor.crew import TutorCrew
 from researcher.tutor.storage import init_tutor_tables
-from researcher.composer.crew import ComposerCrew
 from researcher.composer.storage import init_composer_tables
 
 from researcher.auth import (
@@ -59,15 +54,19 @@ async def lifespan(app: FastAPI):
     # -- Crew / model init --
     model = os.getenv("MODEL", "ollama/qwen3.5:9b")
     app.state.current_model = model
-    app.state.research_crew = ResearchCrew(model=model)
-    app.state.tutor_crew = TutorCrew(model=model)
-    app.state.composer_crew = ComposerCrew(model=model)
-    app.state.crew_semaphore = asyncio.Semaphore(1)  # serialise crew runs
-    app.state.cancel_event = threading.Event()  # crew cancellation flag
 
-    # Wipe stale memory from previous server runs so old data cannot
-    # contaminate new requests (users save sessions explicitly).
-    app.state.research_crew.reset_memory()
+    # Per-user crew instances, semaphores, and cancel events.
+    # Keyed by user_id so users are isolated from each other.
+    # The underlying Ollama inference is still serial (one GPU), but state
+    # corruption between users is prevented.
+    app.state.research_crews = {}   # user_id -> ResearchCrew
+    app.state.tutor_crews = {}      # user_id -> TutorCrew
+    app.state.composer_crews = {}   # user_id -> ComposerCrew
+    app.state.crew_semaphores = {}  # user_id -> asyncio.Semaphore(1)
+    app.state.cancel_events = {}    # user_id -> threading.Event
+
+    # Crew timeout in seconds (configurable; default 3 minutes)
+    app.state.crew_timeout = int(os.getenv("CREW_TIMEOUT_SEC", "180"))
 
     # -- SQLite session database --
     db = await aiosqlite.connect(str(DB_PATH))
@@ -146,6 +145,12 @@ async def lifespan(app: FastAPI):
         elif image_backend == "sd":
             logger.info("Warming up Stable Diffusion backend in background")
             preload_sd()
+        elif image_backend == "ernie":
+            logger.info("Warming up ERNIE backend in background")
+            preload_ernie()
+        elif image_backend == "flux":
+            logger.info("Warming up FLUX backend in background")
+            preload_flux()
 
     yield
 
@@ -172,24 +177,27 @@ register_tts_routes(app)
 # --- UI pages ---
 
 
+_NO_STORE = {"Cache-Control": "no-store"}
+
+
 @app.get("/")
 async def index():
-    return FileResponse(STATIC_DIR / "index.html")
+    return FileResponse(STATIC_DIR / "index.html", headers=_NO_STORE)
 
 
 @app.get("/tutor")
 async def tutor_page():
-    return FileResponse(STATIC_DIR / "tutor.html")
+    return FileResponse(STATIC_DIR / "tutor.html", headers=_NO_STORE)
 
 
 @app.get("/composer")
 async def composer_page():
-    return FileResponse(STATIC_DIR / "composer.html")
+    return FileResponse(STATIC_DIR / "composer.html", headers=_NO_STORE)
 
 
 @app.get("/chat-direct")
 async def chat_direct_page():
-    return FileResponse(STATIC_DIR / "chat-direct.html")
+    return FileResponse(STATIC_DIR / "chat-direct.html", headers=_NO_STORE)
 
 
 # --- Static files & server entry point ---

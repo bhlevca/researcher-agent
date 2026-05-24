@@ -121,11 +121,12 @@ async function generateQuiz() {
 
 // Map requested quiz_type → the canonical question type it produces
 const _QUIZ_TYPE_FORCED = {
-    'reorder':    'reorder',
-    'matching':   'matching',
-    'cloze':      'cloze',
-    'fill_blank': 'cloze',
-    'listening':  'listening',
+    'reorder':       'reorder',
+    'matching':      'matching',
+    'cloze':         'cloze',
+    'fill_blank':    'cloze',
+    'listening':     'listening',
+    'pronunciation': 'pronunciation',
 };
 
 function renderQuizQuestions(questions, requestedQuizType) {
@@ -155,21 +156,175 @@ function renderQuizQuestions(questions, requestedQuizType) {
         div.appendChild(text);
 
         switch (effectiveType) {
-            case 'matching':  _renderMatching(q, i, div, text); break;
-            case 'reorder':   _renderReorder(q, i, div, text); break;
-            case 'listening': _renderListening(q, i, div, text); break;
-            case 'cloze':     _renderCloze(q, i, div, text); break;
-            default:          _renderStandard(q, i, div, text); break;
+            case 'matching':      _renderMatching(q, i, div, text); break;
+            case 'reorder':       _renderReorder(q, i, div, text); break;
+            case 'listening':     _renderListening(q, i, div, text); break;
+            case 'cloze':         _renderCloze(q, i, div, text); break;
+            case 'pronunciation': _renderPronunciation(q, i, div, text); break;
+            default:              _renderStandard(q, i, div, text); break;
         }
 
         content.appendChild(div);
     });
 }
 
+// ─────────────────────────────────────────────
+// Pronunciation: Speak button + score display
+// ─────────────────────────────────────────────
+
+function _renderPronunciation(q, i, div, text) {
+    // Recover sentence from target_sentence, correct_answer, or the question field itself
+    let target = q.target_sentence || q.correct_answer || '';
+    if (!target) {
+        // LLM sometimes puts everything in q.question: "Read aloud: Bonjour!"
+        const m = (q.question || '').match(/:\s*(.+)$/);
+        if (m) target = m[1].trim();
+    }
+
+    // Build the question text safely using DOM (avoids innerHTML parsing surprises)
+    text.textContent = (q.question || 'Read aloud:') + ' ';
+    if (target) {
+        const sentence = document.createElement('strong');
+        sentence.style.cssText = 'font-size:1.1em;color:#e94560;display:inline;';
+        sentence.textContent = target;
+        text.appendChild(sentence);
+    }
+
+    // Hidden input stores last score as the "answer"
+    const hidden = document.createElement('input');
+    hidden.type = 'hidden';
+    hidden.name = 'quiz-q-' + i;
+    hidden.value = '';
+    div.appendChild(hidden);
+
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:0.6rem;align-items:center;margin-top:0.6rem;flex-wrap:wrap;';
+
+    // 🔊 Play button — let student hear the correct pronunciation first
+    const playBtn = document.createElement('button');
+    playBtn.type = 'button';
+    playBtn.textContent = '🔊 Hear it';
+    playBtn.title = 'Listen to the correct pronunciation';
+    playBtn.style.cssText = 'background:#0f3460;color:#e0e0e0;border:1px solid #1a3a6e;padding:0.3rem 0.7rem;border-radius:0.4rem;font-size:0.82rem;cursor:pointer;';
+    playBtn.onclick = async () => {
+        if (!target) return;
+        // Use correct-language TTS voice, not the UI's selected English voice
+        const cfg = typeof getTutorConfig === 'function' ? getTutorConfig() : {};
+        const langCode = cfg.target_lang_code || 'fr';
+        // Find best voice for the target language from loaded voices
+        const voice = (typeof ttsVoices !== 'undefined' && ttsVoices.length)
+            ? (ttsVoices.find(v => v.locale.toLowerCase().startsWith(langCode)) || ttsVoices[0]).name
+            : null;
+        if (voice && typeof tutorAuthHeaders === 'function') {
+            try {
+                const resp = await fetch('/tts/speak', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', ...tutorAuthHeaders() },
+                    body: JSON.stringify({ text: target, voice }),
+                });
+                if (resp.ok) {
+                    const blob = await resp.blob();
+                    const url = URL.createObjectURL(blob);
+                    const audio = new Audio(url);
+                    audio.onended = () => URL.revokeObjectURL(url);
+                    audio.play();
+                    return;
+                }
+            } catch (_) { /* fall through to browser TTS */ }
+        }
+        const utt = new SpeechSynthesisUtterance(target);
+        window.speechSynthesis.speak(utt);
+    };
+
+    const micBtn = document.createElement('button');
+    micBtn.type = 'button';
+    micBtn.textContent = '🎤 Speak';
+    micBtn.title = 'Record your pronunciation';
+    micBtn.style.cssText = 'background:#0f3460;color:#e0e0e0;border:1px solid #1a3a6e;padding:0.3rem 0.7rem;border-radius:0.4rem;font-size:0.82rem;cursor:pointer;';
+
+    const feedback = document.createElement('span');
+    feedback.style.cssText = 'font-size:0.8rem;color:#94a3b8;';
+    feedback.textContent = 'Press 🔊 to hear, then 🎤 to record';
+
+    if (target) row.appendChild(playBtn);
+    row.appendChild(micBtn);
+    row.appendChild(feedback);
+    div.appendChild(row);
+
+    async function startRecording() {
+        const cfg = typeof getTutorConfig === 'function' ? getTutorConfig() : {};
+        const lang = cfg.target_lang_code || 'fr';
+
+        micBtn.disabled = true;
+        micBtn.textContent = '🔴 Recording…';
+        feedback.textContent = 'Speak now… (auto-stops in 10s)';
+
+        let stream;
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch (e) {
+            feedback.textContent = 'Microphone error: ' + e.message;
+            micBtn.disabled = false;
+            micBtn.textContent = '🎤 Speak';
+            return;
+        }
+
+        const chunks = [];
+        const rec = new MediaRecorder(stream);
+        rec.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+
+        micBtn.textContent = '⏹ Stop';
+        micBtn.disabled = false;
+        micBtn.onclick = () => rec.stop();
+
+        rec.onstop = async () => {
+            stream.getTracks().forEach(t => t.stop());
+            micBtn.disabled = true;
+            micBtn.textContent = '⏳ Scoring…';
+            feedback.textContent = 'Processing…';
+
+            const blob = new Blob(chunks, { type: rec.mimeType });
+            const form = new FormData();
+            form.append('file', blob, 'pronunciation.webm');
+            form.append('expected', target);
+            form.append('language', lang);
+            try {
+                const resp = await fetch('/tutor/pronunciation/score',
+                    { method: 'POST', body: form, headers: tutorAuthHeaders() });
+                if (resp.ok) {
+                    const data = await resp.json();
+                    const pct = Math.round(data.score * 100);
+                    const color = pct >= 90 ? '#22c55e' : pct >= 60 ? '#f59e0b' : '#e94560';
+                    feedback.innerHTML =
+                        'You said: <em>' + escapeHtml(data.transcript || '(silence)') + '</em> — ' +
+                        '<strong style="color:' + color + ';">' + pct + '%</strong> — ' +
+                        escapeHtml(data.feedback || '');
+                    hidden.value = String(data.score);
+                } else {
+                    feedback.textContent = 'Scoring failed — try again.';
+                }
+            } catch (err) {
+                feedback.textContent = 'Error: ' + err.message;
+            }
+            // Reset button so user can try again
+            micBtn.disabled = false;
+            micBtn.textContent = '🎤 Try again';
+            micBtn.onclick = startRecording;
+        };
+
+        rec.start();
+        const autoStop = setTimeout(() => { if (rec.state === 'recording') rec.stop(); }, 10000);
+        rec.addEventListener('stop', () => clearTimeout(autoStop), { once: true });
+    }
+
+    micBtn.onclick = startRecording;
+}
+
 function _quizTypeLabel(type) {
     const labels = {
         vocabulary: 'Vocabulary', grammar: 'Grammar', translation: 'Translation',
         matching: 'Matching', reorder: 'Reorder', listening: 'Listening', cloze: 'Cloze',
+        pronunciation: 'Pronunciation',
     };
     return labels[type] || type || '';
 }

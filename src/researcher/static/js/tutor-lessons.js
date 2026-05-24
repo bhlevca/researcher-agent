@@ -121,19 +121,35 @@ async function viewLesson(id) {
         const content = document.getElementById('lessons-content');
         content.innerHTML = '';
 
-        // Back button
+        // Toolbar: Back + Export buttons
+        const toolbar = document.createElement('div');
+        toolbar.style.cssText = 'display:flex;gap:0.5rem;margin-bottom:0.75rem;flex-wrap:wrap;';
+
         const back = document.createElement('button');
         back.textContent = '← Back to lessons';
-        back.style.cssText = 'background:#0f3460;color:#94a3b8;border:1px solid #1a3a6e;padding:0.3rem 0.7rem;border-radius:0.4rem;font-size:0.78rem;cursor:pointer;margin-bottom:0.75rem;';
-        back.onclick = () => {
-            content.innerHTML = '';
-            loadLessons();
-        };
-        content.appendChild(back);
+        back.style.cssText = 'background:#0f3460;color:#94a3b8;border:1px solid #1a3a6e;padding:0.3rem 0.7rem;border-radius:0.4rem;font-size:0.78rem;cursor:pointer;';
+        back.onclick = () => { content.innerHTML = ''; loadLessons(); };
+        toolbar.appendChild(back);
+
+        const exportMd = document.createElement('a');
+        exportMd.textContent = '⬇ MD';
+        exportMd.href = '/tutor/lessons/' + id + '/export?format=md';
+        exportMd.download = '';
+        exportMd.style.cssText = 'background:#0f3460;color:#94a3b8;border:1px solid #1a3a6e;padding:0.3rem 0.7rem;border-radius:0.4rem;font-size:0.78rem;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;';
+        toolbar.appendChild(exportMd);
+
+        const exportDocx = document.createElement('a');
+        exportDocx.textContent = '⬇ DOCX';
+        exportDocx.href = '/tutor/lessons/' + id + '/export?format=docx';
+        exportDocx.download = '';
+        exportDocx.style.cssText = 'background:#0f3460;color:#94a3b8;border:1px solid #1a3a6e;padding:0.3rem 0.7rem;border-radius:0.4rem;font-size:0.78rem;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;';
+        toolbar.appendChild(exportDocx);
+
+        content.appendChild(toolbar);
 
         const viewer = document.createElement('div');
         viewer.className = 'lesson-viewer';
-        viewer.innerHTML = renderContent(data.content);
+        viewer.innerHTML = renderContent(JSON.stringify(data.content, null, 2));
         content.appendChild(viewer);
     } catch (e) { tutorShowToast('Error: ' + e.message); }
 }

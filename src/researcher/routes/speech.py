@@ -1,4 +1,4 @@
-"""Whisper speech-to-text endpoint."""
+"""Whisper speech-to-text and pronunciation scoring endpoints."""
 
 import asyncio
 import re
@@ -8,9 +8,50 @@ import logging
 import unicodedata
 from pathlib import Path
 
-from fastapi import HTTPException, UploadFile, File, Request
+from fastapi import HTTPException, UploadFile, File, Form, Request
 
 from researcher.auth import get_current_user
+
+
+def _wer(reference: str, hypothesis: str) -> float:
+    """Word Error Rate: 0.0 = perfect, 1.0+ = completely wrong.
+
+    Uses dynamic programming edit distance on word sequences.
+    Normalises both strings: lowercase, strip punctuation, collapse spaces.
+    """
+    def _norm(s: str) -> list[str]:
+        # NFD decompose so accented chars split into base + combining mark,
+        # then strip combining marks → accent-insensitive comparison
+        s = unicodedata.normalize("NFD", s.lower())
+        s = "".join(c for c in s if unicodedata.category(c) != "Mn")
+        s = re.sub(r"[^\w\s]", "", s, flags=re.UNICODE)
+        return s.split()
+
+    ref = _norm(reference)
+    hyp = _norm(hypothesis)
+    if not ref:
+        return 0.0 if not hyp else 1.0
+
+    # Wagner-Fischer DP
+    n, m = len(ref), len(hyp)
+    dp = list(range(m + 1))
+    for i in range(1, n + 1):
+        prev = dp[:]
+        dp[0] = i
+        for j in range(1, m + 1):
+            if ref[i - 1] == hyp[j - 1]:
+                dp[j] = prev[j - 1]
+            else:
+                dp[j] = 1 + min(prev[j], dp[j - 1], prev[j - 1])
+    return dp[m] / len(ref)
+
+
+def _pronunciation_score(reference: str, hypothesis: str) -> float:
+    """Convert WER to a 0.0–1.0 pronunciation score."""
+    if not hypothesis.strip():
+        return 0.0
+    wer = _wer(reference, hypothesis)
+    return max(0.0, round(1.0 - wer, 3))
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +176,76 @@ def register_speech_routes(app):
             return {"text": text}
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Transcription failed: {e}")
+        finally:
+            if tmp_path:
+                Path(tmp_path).unlink(missing_ok=True)
+
+    @app.post("/tutor/pronunciation/score")
+    async def pronunciation_score(
+        request: Request,
+        file: UploadFile = File(...),
+        expected: str = Form(""),
+        language: str = Form("auto"),
+    ):
+        """Transcribe audio and score pronunciation against an expected sentence.
+
+        Returns transcript, WER-based score (0–1), and a feedback string.
+        """
+        await get_current_user(request)
+        if not expected.strip():
+            raise HTTPException(status_code=400, detail="expected text is required")
+
+        raw_lang = (language or "").strip().lower()
+        lang = None if raw_lang in ("auto", "") else raw_lang[:2]
+        suffix = Path(file.filename or "audio.webm").suffix or ".webm"
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                content = await file.read()
+                tmp.write(content)
+                tmp_path = tmp.name
+
+            loop = asyncio.get_running_loop()
+
+            def _transcribe_for_score():
+                model = _get_whisper()
+                opts = dict(
+                    condition_on_previous_text=False,
+                    no_speech_threshold=0.6,
+                    logprob_threshold=-1.0,
+                    compression_ratio_threshold=2.4,
+                )
+                if lang:
+                    opts["language"] = lang
+                result = model.transcribe(tmp_path, **opts)
+                segments = result.get("segments", [])
+                parts = [
+                    s["text"] for s in segments
+                    if s.get("no_speech_prob", 0) < 0.6
+                    and s.get("avg_logprob", 0) >= -1.0
+                ]
+                return " ".join(parts).strip()
+
+            transcript = await loop.run_in_executor(None, _transcribe_for_score)
+            score = _pronunciation_score(expected, transcript)
+
+            if score >= 0.9:
+                feedback = "Excellent pronunciation!"
+            elif score >= 0.7:
+                feedback = "Good — a few small differences from the target."
+            elif score >= 0.4:
+                feedback = "Getting there — try again, focusing on each word."
+            else:
+                feedback = "Needs practice — compare your recording to the target."
+
+            return {
+                "transcript": transcript,
+                "expected": expected,
+                "score": score,
+                "feedback": feedback,
+            }
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Scoring failed: {e}")
         finally:
             if tmp_path:
                 Path(tmp_path).unlink(missing_ok=True)

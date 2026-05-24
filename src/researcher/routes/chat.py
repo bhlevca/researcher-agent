@@ -6,6 +6,7 @@ import re
 import json
 import asyncio
 import queue
+import threading
 import logging
 
 from fastapi import HTTPException, Request
@@ -137,22 +138,32 @@ def register_chat_routes(app):
     async def chat(req: ChatRequest, request: Request):
         user = await get_current_user(request)
 
-        # Ensure runtime model matches the user's saved model.
+        uid = user["id"]
         db = request.app.state.db
+
+        # Lazy-init per-user semaphore and cancel event
+        if uid not in request.app.state.crew_semaphores:
+            request.app.state.crew_semaphores[uid] = asyncio.Semaphore(1)
+        if uid not in request.app.state.cancel_events:
+            request.app.state.cancel_events[uid] = threading.Event()
+
+        # Ensure runtime model matches the user's saved model.
         cursor_model = await db.execute(
-            "SELECT model, llm_params FROM users WHERE id = ?", (user["id"],)
+            "SELECT model, llm_params FROM users WHERE id = ?", (uid,)
         )
         row_model = await cursor_model.fetchone()
         saved_model = row_model[0] if row_model and row_model[0] else None
         effective_model = saved_model or request.app.state.current_model
-        if effective_model != request.app.state.current_model:
+
+        existing_crew = request.app.state.research_crews.get(uid)
+        if existing_crew is None or effective_model != request.app.state.current_model:
             new_crew = ResearchCrew(model=effective_model)
             if row_model and row_model[1]:
                 try:
                     new_crew.update_llm_params(json.loads(row_model[1]))
                 except (json.JSONDecodeError, TypeError):
                     pass
-            request.app.state.research_crew = new_crew
+            request.app.state.research_crews[uid] = new_crew
             request.app.state.current_model = effective_model
 
         # Prepend attached file contents
@@ -170,17 +181,17 @@ def register_chat_routes(app):
         else:
             topic = file_context + req.message
 
-        research_crew = request.app.state.research_crew
+        research_crew = request.app.state.research_crews[uid]
 
         # Ensure image params from DB are applied before generation
         cursor = await db.execute(
-            "SELECT image_params FROM users WHERE id = ?", (user["id"],)
+            "SELECT image_params FROM users WHERE id = ?", (uid,)
         )
         row = await cursor.fetchone()
         load_image_params_from_json(row[0] if row and row[0] else None)
 
         crew = research_crew.build_crew(topic)
-        semaphore = request.app.state.crew_semaphore
+        semaphore = request.app.state.crew_semaphores[uid]
 
         q: queue.Queue = queue.Queue()
 
@@ -205,8 +216,11 @@ def register_chat_routes(app):
             return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
         async def event_stream():
-            cancel = request.app.state.cancel_event
+            cancel = request.app.state.cancel_events[uid]
             cancel.clear()
+            timeout_sec = research_crew.get_llm_params().get(
+                "crew_timeout_sec", request.app.state.crew_timeout
+            )
             async with semaphore:
                 loop = asyncio.get_running_loop()
                 future = loop.run_in_executor(None, _run_crew)
@@ -238,19 +252,32 @@ def register_chat_routes(app):
                         return False
                     return True
 
+                elapsed = 0.0
+                early_exit: str | None = None  # "cancelled" | "timeout"
+
                 while not future.done():
-                    if cancel.is_set():
+                    if cancel.is_set() and early_exit is None:
+                        early_exit = "cancelled"
                         yield _sse("cancelled", "Request cancelled by user")
-                        return
+                    if elapsed >= timeout_sec and early_exit is None:
+                        early_exit = "timeout"
+                        yield _sse("error", f"Request timed out after {timeout_sec}s")
                     await asyncio.sleep(0.15)
+                    elapsed += 0.15
                     while not q.empty():
                         try:
                             line = q.get_nowait()
                             all_lines.append(line)
-                            if _should_show(line):
+                            if early_exit is None and _should_show(line):
                                 yield _sse("reasoning", line)
                         except queue.Empty:
                             break
+
+                if early_exit is not None:
+                    # Drain queue silently; semaphore releases after thread finished
+                    while not q.empty():
+                        q.get_nowait()
+                    return
 
                 # Drain remaining
                 while not q.empty():
@@ -290,8 +317,12 @@ def register_chat_routes(app):
 
     @app.post("/chat/cancel")
     async def chat_cancel(request: Request):
-        """Signal the running crew to stop. The SSE stream will close gracefully."""
-        request.app.state.cancel_event.set()
+        """Signal the requesting user's running crew to stop."""
+        user = await get_current_user(request)
+        uid = user["id"]
+        cancel = request.app.state.cancel_events.get(uid)
+        if cancel:
+            cancel.set()
         return {"status": "cancelled"}
 
     @app.post("/chat/continue")

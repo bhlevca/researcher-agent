@@ -7,7 +7,7 @@
 const PAGE_LLM_PARAM_KEYS = [
     'temperature', 'top_k', 'top_p', 'min_p',
     'repeat_penalty', 'frequency_penalty', 'presence_penalty',
-    'num_predict', 'num_ctx', 'seed', 'max_iter', 'planning_max_attempts'
+    'num_predict', 'num_ctx', 'seed', 'max_iter', 'planning_max_attempts', 'crew_timeout_sec'
 ];
 
 function _pgUpdateParamDisplay(key) {
@@ -27,7 +27,7 @@ function _pgSetParamUI(params) {
 
 function _pgGetParamValues() {
     const params = {};
-    const intKeys = new Set(['top_k', 'num_predict', 'num_ctx', 'seed', 'max_iter', 'planning_max_attempts']);
+    const intKeys = new Set(['top_k', 'num_predict', 'num_ctx', 'seed', 'max_iter', 'planning_max_attempts', 'crew_timeout_sec']);
     for (const key of PAGE_LLM_PARAM_KEYS) {
         const el = document.getElementById('pg-param-' + key);
         if (el) {

@@ -33,9 +33,11 @@ def _patch_external_services(tmp_path, monkeypatch):
     monkeypatch.setattr("researcher.main.DB_PATH", test_db)
     test_db.parent.mkdir(parents=True, exist_ok=True)
 
-    # Mock ResearchCrew
+    # Mock ResearchCrew (now imported in route modules, not main)
     mock_rc = MagicMock()
-    monkeypatch.setattr("researcher.main.ResearchCrew", mock_rc)
+    monkeypatch.setattr("researcher.routes.chat.ResearchCrew", mock_rc)
+    monkeypatch.setattr("researcher.routes.ask.ResearchCrew", mock_rc)
+    monkeypatch.setattr("researcher.routes.models.ResearchCrew", mock_rc)
 
     # Mock TutorCrew — lightweight stub for non-crew tests
     mock_tc = MagicMock(spec=TutorCrew)
@@ -43,7 +45,25 @@ def _patch_external_services(tmp_path, monkeypatch):
     mock_tc._model_name = "ollama/test-model"
     mock_tc.extract_vocabulary_from_response = TutorCrew.extract_vocabulary_from_response
     mock_tc.extract_quiz_json = TutorCrew.extract_quiz_json
-    monkeypatch.setattr("researcher.main.TutorCrew", lambda **kw: mock_tc)
+    mock_tc.filter_quiz_questions = lambda q, qt: TutorCrew.filter_quiz_questions(mock_tc, q, qt)
+    async def _mock_grade_answers(questions, student_answers, **kw):
+        """Return deterministic grading: correct if student_answer == correct_answer."""
+        results = []
+        for ans in student_answers:
+            qid = ans.get("question_id", -1)
+            student_answer = str(ans.get("answer", "")).strip()
+            correct = questions[qid].get("correct_answer", "") if 0 <= qid < len(questions) else ""
+            is_correct = student_answer.lower() == correct.lower()
+            results.append({
+                "question_id": qid,
+                "score": 1.0 if is_correct else 0.0,
+                "is_correct": is_correct,
+                "feedback": "Correct!" if is_correct else f"Expected: {correct}",
+            })
+        return results
+    mock_tc.grade_answers = _mock_grade_answers
+    monkeypatch.setattr("researcher.routes.tutor.TutorCrew", lambda **kw: mock_tc)
+    monkeypatch.setattr("researcher.routes.models.TutorCrew", lambda **kw: mock_tc)
 
 
 @pytest.fixture

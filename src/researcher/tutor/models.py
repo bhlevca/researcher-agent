@@ -24,7 +24,8 @@ class TutorChatRequest(BaseModel):
     """Send a message in a tutor session."""
     message: str
     session_id: str
-    mode: str = "conversation"  # conversation | lesson | quiz
+    mode: str = "conversation"  # conversation | scenario
+    scenario_id: str | None = None  # required when mode == "scenario"
 
 
 class LessonPlanRequest(BaseModel):

@@ -50,6 +50,7 @@ class ComposerCrew:
         "presence_penalty": 0.0,
         "max_iter": 12,
         "planning_max_attempts": 2,
+        "crew_timeout_sec": 300,
     }
 
     def __init__(self, model: str | None = None):

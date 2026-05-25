@@ -267,7 +267,7 @@ from contextlib import contextmanager as _contextmanager
 
 
 @_contextmanager
-def _gpu_inference_ctx(tag: str = "IMG"):
+def _gpu_inference_ctx(tag: str = "IMG", min_vram_gib: float = 4.0):
     """Unified context manager for GPU image inference.
 
     1. Unloads all Ollama models via /api/ps to free VRAM.
@@ -316,7 +316,7 @@ def _gpu_inference_ctx(tag: str = "IMG"):
         torch.cuda.empty_cache()
         _free = torch.cuda.mem_get_info()[0] / (1024 ** 3)
         _sys.stderr.write(f"[{tag}]   free VRAM: {_free:.2f} GiB\n")
-        if _free > 4.0:
+        if _free > min_vram_gib:
             break
         _time.sleep(1)
     else:
@@ -699,11 +699,14 @@ def _get_ernie_pipe():
                         " falling back to base model components.\n"
                     )
 
+                # Sequential offload streams one submodule at a time through GPU —
+                # safer than model_cpu_offload for custom/GGUF architectures where
+                # accelerate's bulk-offload hooks are not applied to all submodules.
                 try:
-                    pipe.enable_model_cpu_offload()
-                    _sys.stderr.write("[ERNIE] Model CPU offload enabled\n")
+                    pipe.enable_sequential_cpu_offload()
+                    _sys.stderr.write("[ERNIE] Sequential CPU offload enabled\n")
                 except Exception:
-                    _sys.stderr.write("[ERNIE] CPU offload unavailable\n")
+                    _sys.stderr.write("[ERNIE] Sequential CPU offload unavailable\n")
                 try:
                     pipe.enable_attention_slicing()
                 except Exception:
@@ -1431,19 +1434,25 @@ def generate_ai_image(prompt: str) -> str:
     elif backend == "ernie":
         import torch
         result_img = None
-        with _gpu_inference_ctx("ERNIE"):
+        with _gpu_inference_ctx("ERNIE", min_vram_gib=4.0):
             try:
                 pipe = _get_ernie_pipe()
             except Exception as e:
                 return f"Error loading ERNIE pipeline: {e}"
             _sys.stderr.write("[ERNIE] Starting inference...\n"); _sys.stderr.flush()
             try:
-                with torch.inference_mode():
-                    result_img = pipe(
-                        prompt,
-                        num_inference_steps=_ERNIE_STEPS,
-                        generator=torch.Generator().manual_seed(0),
-                    ).images[0]
+                import warnings
+                # Suppress the harmless device-mismatch warning from the GGUF pe
+                # model: sequential_cpu_offload sets _execution_device=cuda but pe
+                # (GGUF) stays on cpu. The warning fires in .generate() but is safe.
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", message=".*input_ids.*being on a device type different.*")
+                    with torch.inference_mode():
+                        result_img = pipe(
+                            prompt,
+                            num_inference_steps=_ERNIE_STEPS,
+                            generator=torch.Generator().manual_seed(0),
+                        ).images[0]
             except Exception as e:
                 return f"Error during ERNIE generation: {e}"
 

@@ -108,8 +108,11 @@ def _get_whisper():
             if _whisper_model is None:
                 import whisper
 
-                logger.info("Loading Whisper base model (CPU)…")
-                _whisper_model = whisper.load_model("base", device="cpu")
+                # "small" has dramatically better multilingual accuracy than "base"
+                # (~244M params vs 74M). Still runs on CPU in ~3-5s for short clips.
+                model_size = os.getenv("WHISPER_MODEL", "small")
+                logger.info("Loading Whisper %s model (CPU)…", model_size)
+                _whisper_model = whisper.load_model(model_size, device="cpu")
                 logger.info("Whisper model ready.")
     return _whisper_model
 

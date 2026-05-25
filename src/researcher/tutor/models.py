@@ -26,6 +26,7 @@ class TutorChatRequest(BaseModel):
     session_id: str
     mode: str = "conversation"  # conversation | scenario
     scenario_id: str | None = None  # required when mode == "scenario"
+    save_transcript: bool = False   # auto-save scenario dialog to lesson_plans
 
 
 class LessonPlanRequest(BaseModel):

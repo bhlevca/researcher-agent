@@ -115,8 +115,11 @@ async function loadVocabulary() {
         filtered.forEach(v => {
             const ml = Math.min(5, Math.max(0, v.mastery_level || 0));
             const due = (v.next_review && v.next_review <= today);
-            html += '<tr' + (due ? ' style="background:rgba(245,158,11,0.06);"' : '') + '>' +
-                '<td style="color:#e0e0e0;font-weight:500;">' + escapeHtml(v.word) + '</td>' +
+            const difficult = (v.lapses || 0) >= 3;
+            const rowStyle = difficult ? 'background:rgba(239,68,68,0.06);' : due ? 'background:rgba(245,158,11,0.06);' : '';
+            const difficultBadge = difficult ? ' <span style="color:#ef4444;font-size:0.62rem;vertical-align:middle;" title="Lapsed ' + v.lapses + ' times">⚠ hard</span>' : '';
+            html += '<tr' + (rowStyle ? ' style="' + rowStyle + '"' : '') + '>' +
+                '<td style="color:#e0e0e0;font-weight:500;">' + escapeHtml(v.word) + difficultBadge + '</td>' +
                 '<td>' + escapeHtml(v.translation || '') + '</td>' +
                 '<td style="color:#94a3b8;font-size:0.78rem;">' + escapeHtml(v.part_of_speech || '') + '</td>' +
                 '<td style="color:#cbd5e1;font-size:0.78rem;font-style:italic;">' + escapeHtml(v.example || '') + '</td>' +

@@ -319,6 +319,7 @@ def register_tutor_routes(app):
         tutor_crew = _get_tutor_crew(request, uid)
         context = _build_tutor_context(session["messages"])
 
+        scenario = None
         if req.mode == "scenario" and req.scenario_id:
             scenario = next(
                 (s for s in _load_scenarios() if s.get("id") == req.scenario_id),
@@ -343,12 +344,30 @@ def register_tutor_routes(app):
                 level=session["level"],
             )
 
+        _scenario_ref = scenario  # capture for closure
+
         async def _save_chat_vocab(response_text: str):
+            # Save vocabulary extracted from response
             vocab_entries = tutor_crew.extract_vocabulary_from_response(response_text)
             if vocab_entries:
                 await add_vocabulary_batch(
                     db, uid, req.session_id, vocab_entries,
                     target_lang=session["target_lang"],
+                )
+            # Auto-save scenario transcript to lesson_plans after each turn
+            if _scenario_ref and req.save_transcript:
+                updated_context = _build_tutor_context(session["messages"])
+                transcript = (
+                    f"# Scenario: {_scenario_ref.get('title', '')}\n\n"
+                    f"**Setting**: {_scenario_ref.get('setting', '')}\n"
+                    f"**Your role**: {_scenario_ref.get('role_student', '')}\n\n"
+                    f"---\n\n{updated_context}"
+                )
+                await save_lesson_plan(
+                    db, uid, req.session_id,
+                    topic=f"Scenario: {_scenario_ref.get('title', '')}",
+                    lesson_type="scenario",
+                    content={"markdown": transcript},
                 )
 
         return await _stream_tutor_crew(crew, request, uid,

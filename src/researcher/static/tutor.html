@@ -262,7 +262,7 @@
 
     <!-- ═══════ SCENARIOS panel ═══════ -->
     <div class="tutor-panel" id="panel-scenarios">
-        <div id="scenarios-content" style="padding:0.75rem;">
+        <div id="scenarios-content" style="flex:1;display:flex;flex-direction:column;overflow:hidden;padding:0.75rem;min-height:0;">
             <div style="margin-bottom:0.75rem;display:flex;gap:0.5rem;align-items:center;">
                 <label style="font-size:0.8rem;color:var(--muted);">Filter by level:</label>
                 <select id="scenario-level-filter" onchange="loadScenarios()" style="font-size:0.8rem;padding:0.2rem 0.4rem;background:var(--surface);color:var(--text);border:1px solid #1a3a6e;border-radius:0.3rem;">
@@ -274,15 +274,15 @@
             </div>
             <div id="scenario-cards" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:0.75rem;"></div>
             <!-- Active scenario chat -->
-            <div id="scenario-active" style="display:none;margin-top:1rem;">
-                <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem;">
+            <div id="scenario-active" style="display:none;flex-direction:column;height:calc(100vh - 220px);min-height:400px;margin-top:0.5rem;">
+                <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem;flex-shrink:0;">
                     <button onclick="exitScenario()" style="background:#0f3460;color:#94a3b8;border:1px solid #1a3a6e;padding:0.25rem 0.6rem;border-radius:0.35rem;font-size:0.78rem;cursor:pointer;">← Exit</button>
                     <span id="scenario-title-label" style="font-weight:600;font-size:0.9rem;"></span>
                 </div>
-                <div id="scenario-chat" class="chat-container" style="height:340px;"></div>
-                <div style="display:flex;gap:0.5rem;margin-top:0.5rem;">
-                    <textarea id="scenario-input" rows="2" placeholder="Your reply in character..." style="flex:1;resize:vertical;"></textarea>
-                    <button onclick="sendScenarioMessage()" style="background:#e94560;color:white;border:none;padding:0.4rem 0.9rem;border-radius:0.4rem;cursor:pointer;font-size:0.85rem;">Send</button>
+                <div id="scenario-chat" style="flex:1;overflow-y:auto;background:var(--surface);border:1px solid #1a3a6e;border-radius:0.5rem;padding:0.75rem;display:flex;flex-direction:column;gap:0.5rem;"></div>
+                <div style="display:flex;gap:0.5rem;margin-top:0.5rem;flex-shrink:0;">
+                    <textarea id="scenario-input" rows="2" placeholder="Your reply in character..." style="flex:1;resize:none;background:var(--surface);color:var(--text);border:1px solid #1a3a6e;border-radius:0.4rem;padding:0.5rem;font-size:0.88rem;"></textarea>
+                    <button onclick="sendScenarioMessage()" style="background:#e94560;color:white;border:none;padding:0.4rem 0.9rem;border-radius:0.4rem;cursor:pointer;font-size:0.85rem;align-self:flex-end;">Send</button>
                 </div>
             </div>
         </div>

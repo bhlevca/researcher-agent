@@ -38,23 +38,50 @@ async function loadScenarios() {
     } catch (e) { cards.innerHTML = ''; }
 }
 
-function startScenario(scenario) {
+async function startScenario(scenario) {
     _activeScenario = scenario;
     _scenarioMessages = [];
     document.getElementById('scenario-cards').style.display = 'none';
     const active = document.getElementById('scenario-active');
-    active.style.display = 'block';
+    active.style.display = 'flex';
     const label = document.getElementById('scenario-title-label');
-    label.textContent = scenario.title + ' — you are: ' + (scenario.role_student || 'Student');
+    label.textContent = scenario.title;
     const chat = document.getElementById('scenario-chat');
     chat.innerHTML = '';
-    // Show the opening line from the tutor's character
-    if (scenario.starter) {
-        const msg = document.createElement('div');
-        msg.className = 'chat-message assistant';
-        msg.innerHTML = '<strong>' + escapeHtml(scenario.role_tutor) + ':</strong> ' + escapeHtml(scenario.starter);
-        chat.appendChild(msg);
-        chat.scrollTop = chat.scrollHeight;
+
+    // Auto-generate opening line from LLM in the target language
+    const thinkingBox = document.createElement('div');
+    thinkingBox.className = 'chat-message assistant';
+    thinkingBox.innerHTML = '<span class="pulse"></span>';
+    chat.appendChild(thinkingBox);
+    chat.scrollTop = chat.scrollHeight;
+
+    try {
+        const resp = await fetch('/tutor/chat', {
+            method: 'POST',
+            headers: tutorJsonHeaders(),
+            body: JSON.stringify({
+                session_id: tutorSessionId,
+                message: '__start__',
+                mode: 'scenario',
+                scenario_id: scenario.id,
+                save_transcript: false,
+            }),
+        });
+        thinkingBox.remove();
+        if (resp.ok) {
+            const result = await processTutorSSE(resp, null, []);
+            if (result && result.response) {
+                const msg = document.createElement('div');
+                msg.className = 'chat-message assistant';
+                msg.innerHTML = '<strong>' + escapeHtml(scenario.role_tutor) + ':</strong> ' + renderContent(result.response);
+                chat.appendChild(msg);
+                _scenarioMessages.push({ role: 'assistant', content: result.response });
+                chat.scrollTop = chat.scrollHeight;
+            }
+        }
+    } catch (e) {
+        thinkingBox.remove();
     }
 }
 
@@ -97,6 +124,7 @@ async function sendScenarioMessage() {
                 message: text,
                 mode: 'scenario',
                 scenario_id: _activeScenario.id,
+                save_transcript: true,
             }),
         });
         if (!resp.ok) { thinkingBox.remove(); tutorShowToast('Failed'); return; }
@@ -121,7 +149,7 @@ async function sendScenarioMessage() {
             chat.scrollTop = chat.scrollHeight;
         }
     } catch (e) {
-        liveBox.remove();
+        thinkingBox.remove();
         tutorShowToast('Error: ' + e.message);
     }
 }

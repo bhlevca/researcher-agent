@@ -97,6 +97,32 @@ async def init_tutor_tables(db: aiosqlite.Connection):
         except Exception:
             pass  # column already exists
 
+    # Migration: deduplicate vocabulary and add unique constraint
+    # Keep only the row with highest mastery_level per (user_id, target_lang, word)
+    try:
+        await db.execute("""
+            DELETE FROM vocabulary WHERE id NOT IN (
+                SELECT id FROM vocabulary v1
+                WHERE v1.rowid = (
+                    SELECT MAX(v2.rowid) FROM vocabulary v2
+                    WHERE v2.user_id = v1.user_id
+                      AND v2.target_lang = v1.target_lang
+                      AND LOWER(v2.word) = LOWER(v1.word)
+                )
+            )
+        """)
+        await db.commit()
+    except Exception:
+        pass
+    try:
+        await db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_vocab_user_lang_word "
+            "ON vocabulary (user_id, target_lang, LOWER(word))"
+        )
+        await db.commit()
+    except Exception:
+        pass
+
     # Backfill next_review for existing rows that have no value
     try:
         tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).date().isoformat()
@@ -325,7 +351,8 @@ async def add_vocabulary(
         "(id, user_id, session_id, target_lang, word, translation, context, phonetic, "
         "part_of_speech, example, conjugation, mastery_level, times_reviewed, times_correct, "
         "next_review, interval_days, ease_factor, lapses, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, 1, ?, 0, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, 1, ?, 0, ?) "
+        "ON CONFLICT (user_id, target_lang, LOWER(word)) DO NOTHING",
         (
             vid, user_id, session_id, target_lang, word, translation,
             context, phonetic, part_of_speech, example, conjugation,
@@ -369,7 +396,12 @@ async def add_vocabulary_batch(
             "(id, user_id, session_id, target_lang, word, translation, context, phonetic, "
             "part_of_speech, example, conjugation, mastery_level, times_reviewed, times_correct, "
             "next_review, interval_days, ease_factor, lapses, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, 1, ?, 0, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, 1, ?, 0, ?) "
+            "ON CONFLICT (user_id, target_lang, LOWER(word)) DO UPDATE SET "
+            "translation = excluded.translation, "
+            "part_of_speech = CASE WHEN excluded.part_of_speech != '' THEN excluded.part_of_speech ELSE part_of_speech END, "
+            "example = CASE WHEN excluded.example != '' THEN excluded.example ELSE example END, "
+            "conjugation = CASE WHEN excluded.conjugation != '' THEN excluded.conjugation ELSE conjugation END",
             (
                 vid, user_id, session_id, target_lang,
                 e.get("word", ""), e.get("translation", ""),

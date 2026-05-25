@@ -117,24 +117,18 @@ No cache headers, no ETags, no compression. Browser re-downloads all assets on e
 - [x] Reasoning now collapsible instead of overlapping the reply
 
 **Remaining — Scenario quality improvements**:
-- [ ] Tutor must conduct the entire dialog in the target language (currently sometimes reverts to native language despite CRITICAL instruction — may need stronger prompt or model fine-tuning)
-- [ ] Make scenarios more pedagogically driven: tutor should ask questions, guide the student, and prompt responses rather than just replying
-- [ ] Save scenario transcript to `lesson_plans` table so conversations can be reviewed later
-- [ ] Scenario exercise instructions should be in the target language, not native language
+- [x] Tutor must conduct the entire dialog in the target language — strengthened prompt with NON-NEGOTIABLE language rule and first-person framing
+- [x] Make scenarios more pedagogically driven — PEDAGOGY RULES added: always end with a question, correct errors briefly, prompt if student is silent
+- [x] Save scenario transcript to `lesson_plans` table — `save_transcript: true` on each real turn saves via `on_complete` callback
+- [x] Opening line auto-generated in target language — replaced static English `starter` with LLM-generated first turn (`__start__` trigger)
+- [x] Fixed `liveBox` reference bug in `tutor-scenarios.js`
 
-### T2 — Progress Visualization (HIGH)
+### T2 — Progress Visualization (HIGH) — DONE
 **Files**: `src/researcher/routes/tutor.py` (`/tutor/sessions/{id}/stats`), `src/researcher/static/tutor.html`
 
-The stats endpoint exists but there is no chart UI. Chart.js is already mentioned in TODO.
-
-**Actions**:
-- [ ] Add Chart.js (CDN) to `tutor.html`
-- [ ] Build a "Progress" tab/panel with:
-  - [ ] Vocabulary mastery histogram (0–5 bins)
-  - [ ] Quiz score trend (line chart, last 10 quizzes)
-  - [ ] Words due for SRS review (calendar heatmap or count badge)
-  - [ ] Time spent per session (bar chart)
-- [ ] `/tutor/sessions/{id}/stats` already returns aggregated data — verify all chart-needed fields are present, add any that are missing
+- [x] Chart.js 4.4 loaded in `tutor.html`
+- [x] Stats tab with mastery histogram and quiz score trend charts (`tutor-stats.js`)
+- [x] Stats grid shows vocab count, avg mastery, quiz count, avg score
 
 ### T3 — Lesson Export (MEDIUM) — DONE
 **Files**: `src/researcher/routes/tutor.py`, `src/researcher/static/js/tutor-lessons.js`
@@ -144,16 +138,14 @@ The stats endpoint exists but there is no chart UI. Chart.js is already mentione
 - [x] DOCX export — line-by-line markdown parsing into python-docx
 - [x] Download buttons use `fetch` + blob (auth headers, no JSON download bug)
 
-### T4 — Pronunciation Scoring (MEDIUM)
-**Files**: `src/researcher/routes/speech.py` (Whisper), `src/researcher/tutor/crew.py`
+### T4 — Pronunciation Scoring (MEDIUM) — DONE
+**Files**: `src/researcher/routes/speech.py`, `src/researcher/static/js/tutor-quiz.js`
 
-Whisper is available and used for dictation. It can also be used to score pronunciation by comparing the transcript to the expected utterance.
-
-**Actions**:
-- [ ] Add a `pronunciation` quiz type: agent produces a target sentence; user records audio; Whisper transcribes; WER (Word Error Rate) computed against target
-- [ ] Implement WER in a small utility function (no external library needed — it's ~20 lines)
-- [ ] Score: 1.0 = perfect, 0.0 = completely wrong; update vocabulary mastery accordingly
-- [ ] Add "Speak" button next to target sentences in tutor UI (reuse existing mic recording code)
+- [x] `pronunciation` quiz type implemented end-to-end
+- [x] WER utility in `speech.py` `_pronunciation_score()`
+- [x] `/tutor/pronunciation/score` endpoint (Whisper transcribe + WER)
+- [x] Quiz UI renders pronunciation questions with Play + Record buttons
+- [x] Pre-computed scores bypass LLM grader in quiz submit
 
 ### T5 — CEFR Curriculum Structure (MEDIUM) — DONE
 **Files**: `src/researcher/tutor/storage.py`, `src/researcher/static/tutor.html`
@@ -165,15 +157,12 @@ Whisper is available and used for dictation. It can also be used to score pronun
 - [x] `/tutor/sessions/{id}/prev-topic` endpoint added
 
 ### T6 — SM-2 Edge Cases (LOW)
-**Files**: `src/researcher/tutor/storage.py`
+**Files**: `src/researcher/tutor/storage.py`, `src/researcher/static/js/tutor-vocab.js`
 
-The SM-2 implementation uses a magic constant `2.5` for initial ease factor. The algorithm also doesn't handle the "lapse" case (quality < 2 resets the interval).
-
-**Actions**:
-- [ ] Make initial ease factor configurable via env var `SRS_INITIAL_EASE` (default 2.5)
-- [ ] Implement proper lapse handling: if quality < 2, reset `interval_days = 1`, reduce ease by 0.2 (floor 1.3)
-- [ ] Add a `lapses` counter column to `vocabulary` table
-- [ ] Words with `lapses >= 3` get flagged as "difficult" in the UI
+- [x] `SRS_INITIAL_EASE` env var (default 2.5)
+- [x] Lapse handling: grade < 3 resets interval to 1, decrements ease (floor 1.3)
+- [x] `lapses` column in `vocabulary` table (with migration)
+- [x] Words with `lapses >= 3` flagged as "difficult" (⚠ hard badge + red row tint) in vocab UI
 
 ---
 

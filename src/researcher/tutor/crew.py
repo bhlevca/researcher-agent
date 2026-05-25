@@ -126,9 +126,12 @@ class TutorCrew:
         target_lang: str,
         native_lang: str,
         level: str,
+        tools=None,
     ) -> Agent:
         """Build the language tutor agent with language-specific config."""
         agent_cfg = self._agents_config["language_tutor"]
+        if tools is None:
+            tools = TUTOR_TOOLS
 
         # Substitute template variables in the YAML config
         subs = {
@@ -196,7 +199,7 @@ class TutorCrew:
             role=_sub(agent_cfg["role"]),
             goal=_sub(agent_cfg["goal"]),
             backstory=backstory,
-            tools=TUTOR_TOOLS,
+            tools=tools,
             llm=self._llm,
             verbose=True,
             max_iter=int(self._llm_params.get("max_iter", 15)),
@@ -298,7 +301,7 @@ class TutorCrew:
         level: str,
     ) -> Crew:
         """Build a Crew for generating a lesson plan."""
-        agent = self._build_agent(target_lang, native_lang, level)
+        agent = self._build_agent(target_lang, native_lang, level, tools=[])
         desc, exp = self._render_task(
             "lesson_task",
             {
@@ -680,7 +683,7 @@ class TutorCrew:
         recent_messages: str,
     ) -> Crew:
         """Build a Crew for student appraisal."""
-        agent = self._build_agent(target_lang, native_lang, level)
+        agent = self._build_agent(target_lang, native_lang, level, tools=[])
         desc, exp = self._render_task(
             "appraisal_task",
             {
@@ -709,31 +712,36 @@ class TutorCrew:
     def extract_vocabulary_from_response(response: str) -> list[dict]:
         """Parse vocabulary tables from a tutor response.
 
-        Looks for markdown tables with columns like Word | Translation | Part of Speech.
+        Handles 3-column (Word|Translation|POS) and 5-column
+        (Word|Translation|POS|Example|Conjugation) markdown tables.
         Returns a list of dicts suitable for batch vocabulary insertion.
         """
         entries = []
-        # Match markdown table rows (skip header and separator rows)
-        table_re = re.compile(
-            r"^\|([^|]+)\|([^|]+)\|([^|]+)\|",
-            re.MULTILINE,
-        )
+        table_re = re.compile(r"^\|(.+)\|$", re.MULTILINE)
         for m in table_re.finditer(response):
-            word = m.group(1).strip()
-            translation = m.group(2).strip()
-            pos = m.group(3).strip()
-            # Skip header rows and separator rows
+            cols = [c.strip() for c in m.group(1).split("|")]
+            if len(cols) < 2:
+                continue
+            word = cols[0]
+            # Skip header and separator rows
             if (
-                word.lower() in ("word", "word/phrase", "---", "")
+                not word
+                or word.lower() in ("word", "word/phrase")
                 or set(word) <= {"-", " ", ":"}
-                or set(translation) <= {"-", " ", ":"}
+                or (len(cols) > 1 and set(cols[1]) <= {"-", " ", ":"})
             ):
                 continue
+            translation = cols[1] if len(cols) > 1 else ""
+            pos = cols[2] if len(cols) > 2 else ""
+            example = cols[3] if len(cols) > 3 else ""
+            conjugation = cols[4] if len(cols) > 4 else ""
             entries.append(
                 {
                     "word": word,
                     "translation": translation,
                     "part_of_speech": pos,
+                    "example": example,
+                    "conjugation": conjugation,
                     "context": "",
                     "phonetic": "",
                 }

@@ -210,11 +210,16 @@
 - [x] Update quiz generation prompt to produce new formats
 
 ### Phase 4 — Situational Dialogs
-- [ ] Add "situation" dialog generator:
-  - [ ] Pre-defined scenarios: restaurant, airport, hotel, doctor, shopping, directions
-  - [ ] Multi-turn roleplay with the tutor as conversation partner
-  - [ ] Inline corrections and vocabulary extraction during dialog
-- [ ] Optional scene illustration via Z-Image pipeline
+- [x] Add "situation" dialog generator:
+  - [x] Pre-defined scenarios: restaurant, airport, hotel, doctor, shopping, directions
+  - [x] Multi-turn roleplay with the tutor as conversation partner
+  - [x] Inline corrections and vocabulary extraction during dialog
+- [ ] Scenario improvements needed:
+  - [ ] Tutor must ask questions and conduct the dialog entirely in the target language (not native language)
+  - [ ] Make scenarios more logical and pedagogically useful: tutor should guide the student, prompt with questions, and correct errors inline
+  - [ ] Reasoning should not overlap the reply (now collapsible, but verify on all models)
+  - [ ] Save scenario transcript to lesson_plans so it can be reviewed later
+- [ ] Optional scene illustration via Z-Image / FLUX pipeline
 - [ ] Save dialog transcripts to lesson_plans table
 - [x] Translation quiz: Input deleted, correct version listed twice, too strict marking
 - [x] Cloze quiz: Giving 1/2 point for perfect answers (should give full points)

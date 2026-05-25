@@ -15,9 +15,11 @@ conversation_task:
 
     At the end of your response, add a section:
     ### New Vocabulary
-    | Word | Translation | Part of Speech |
-    |------|-------------|----------------|
-    (list any new words you introduced or that the student should learn)
+    | Word | Translation | Part of Speech | Example | Conjugation |
+    |------|-------------|----------------|---------|-------------|
+    (list any new words you introduced or that the student should learn;
+     for verbs fill in the Conjugation column with present tense forms,
+     leave Conjugation empty for non-verbs)
 
     If the student wrote in {native_lang} and seems to want help translating or
     is asking a question about the language, answer helpfully and then encourage
@@ -161,19 +163,23 @@ scenario_task:
 
     Student's latest message: "{message}"
 
+    CRITICAL: Your entire response MUST be in {target_lang} only. Do NOT use
+    {native_lang} anywhere in your main reply — not even a single sentence.
+
     Stay fully in character as {role_tutor}. Respond naturally in {target_lang}
     as a native speaker in this situation would. Keep the dialog realistic and
     appropriate to the {level} CEFR level.
 
-    If the student made a significant language error, briefly step out of
-    character to correct it (use italics: *Correction: ...*), then continue
-    the roleplay seamlessly.
+    If the student made a significant language error, correct it briefly in
+    italics (*Correction: ...* still in {target_lang} if possible), then
+    continue the roleplay seamlessly.
 
     At the end, add:
     ### New Vocabulary
-    | Word | Translation | Notes |
-    |------|-------------|-------|
-    (list any words used that were new or difficult, up to 5 items)
+    | Word | Translation | Part of Speech | Example | Conjugation |
+    |------|-------------|----------------|---------|-------------|
+    (list any words used that were new or difficult, up to 5 items;
+     for verbs fill in Conjugation with present tense forms)
   expected_output: >
     An in-character response in {target_lang} as {role_tutor}, at {level} complexity.
     Include inline corrections in italics if needed, followed by a brief vocabulary table.

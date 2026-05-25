@@ -81,10 +81,11 @@ async function sendScenarioMessage() {
 
     _scenarioMessages.push({ role: 'user', content: text });
 
-    const liveBox = document.createElement('div');
-    liveBox.className = 'chat-message assistant';
-    liveBox.innerHTML = '<span class="pulse"></span>';
-    chat.appendChild(liveBox);
+    // Placeholder while streaming
+    const thinkingBox = document.createElement('div');
+    thinkingBox.className = 'chat-message assistant';
+    thinkingBox.innerHTML = '<span class="pulse"></span>';
+    chat.appendChild(thinkingBox);
     chat.scrollTop = chat.scrollHeight;
 
     try {
@@ -98,15 +99,23 @@ async function sendScenarioMessage() {
                 scenario_id: _activeScenario.id,
             }),
         });
-        if (!resp.ok) { liveBox.remove(); tutorShowToast('Failed'); return; }
+        if (!resp.ok) { thinkingBox.remove(); tutorShowToast('Failed'); return; }
 
-        const result = await processTutorSSE(resp, liveBox, []);
-        liveBox.remove();
+        const reasoningLines = [];
+        const result = await processTutorSSE(resp, null, reasoningLines);
+        thinkingBox.remove();
 
         if (result && result.response) {
             const aMsg = document.createElement('div');
             aMsg.className = 'chat-message assistant';
-            aMsg.innerHTML = '<strong>' + escapeHtml(_activeScenario.role_tutor) + ':</strong> ' + renderContent(result.response);
+            let html = '<strong>' + escapeHtml(_activeScenario.role_tutor) + ':</strong> ' + renderContent(result.response);
+            if (reasoningLines.length) {
+                html += '<details style="margin-top:0.4rem;font-size:0.72rem;color:#64748b;">' +
+                    '<summary style="cursor:pointer;">reasoning</summary>' +
+                    '<pre style="white-space:pre-wrap;margin:0.3rem 0 0;">' + escapeHtml(reasoningLines.join('\n')) + '</pre>' +
+                    '</details>';
+            }
+            aMsg.innerHTML = html;
             chat.appendChild(aMsg);
             _scenarioMessages.push({ role: 'assistant', content: result.response });
             chat.scrollTop = chat.scrollHeight;

@@ -73,6 +73,17 @@ async def init_tutor_tables(db: aiosqlite.Connection):
     except Exception:
         pass  # column already exists
 
+    # Migration: add example and conjugation columns if missing
+    for col_sql in (
+        "ALTER TABLE vocabulary ADD COLUMN example     TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE vocabulary ADD COLUMN conjugation TEXT NOT NULL DEFAULT ''",
+    ):
+        try:
+            await db.execute(col_sql)
+            await db.commit()
+        except Exception:
+            pass  # column already exists
+
     # Migration: add SM-2 SRS columns if missing
     for col_sql in (
         "ALTER TABLE vocabulary ADD COLUMN next_review  TEXT NOT NULL DEFAULT ''",
@@ -303,6 +314,8 @@ async def add_vocabulary(
     phonetic: str = "",
     part_of_speech: str = "",
     target_lang: str = "",
+    example: str = "",
+    conjugation: str = "",
 ) -> dict:
     vid = uuid.uuid4().hex[:12]
     now = datetime.now(timezone.utc).isoformat()
@@ -310,22 +323,13 @@ async def add_vocabulary(
     await db.execute(
         "INSERT INTO vocabulary "
         "(id, user_id, session_id, target_lang, word, translation, context, phonetic, "
-        "part_of_speech, mastery_level, times_reviewed, times_correct, "
+        "part_of_speech, example, conjugation, mastery_level, times_reviewed, times_correct, "
         "next_review, interval_days, ease_factor, lapses, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, 1, ?, 0, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, 1, ?, 0, ?)",
         (
-            vid,
-            user_id,
-            session_id,
-            target_lang,
-            word,
-            translation,
-            context,
-            phonetic,
-            part_of_speech,
-            tomorrow,
-            SRS_INITIAL_EASE,
-            now,
+            vid, user_id, session_id, target_lang, word, translation,
+            context, phonetic, part_of_speech, example, conjugation,
+            tomorrow, SRS_INITIAL_EASE, now,
         ),
     )
     await db.commit()
@@ -336,6 +340,8 @@ async def add_vocabulary(
         "context": context,
         "phonetic": phonetic,
         "part_of_speech": part_of_speech,
+        "example": example,
+        "conjugation": conjugation,
         "mastery_level": 0,
         "next_review": tomorrow,
         "interval_days": 1,
@@ -361,22 +367,16 @@ async def add_vocabulary_batch(
         await db.execute(
             "INSERT INTO vocabulary "
             "(id, user_id, session_id, target_lang, word, translation, context, phonetic, "
-            "part_of_speech, mastery_level, times_reviewed, times_correct, "
+            "part_of_speech, example, conjugation, mastery_level, times_reviewed, times_correct, "
             "next_review, interval_days, ease_factor, lapses, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, 1, ?, 0, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, 1, ?, 0, ?)",
             (
-                vid,
-                user_id,
-                session_id,
-                target_lang,
-                e.get("word", ""),
-                e.get("translation", ""),
-                e.get("context", ""),
-                e.get("phonetic", ""),
-                e.get("part_of_speech", ""),
-                tomorrow,
-                SRS_INITIAL_EASE,
-                now,
+                vid, user_id, session_id, target_lang,
+                e.get("word", ""), e.get("translation", ""),
+                e.get("context", ""), e.get("phonetic", ""),
+                e.get("part_of_speech", ""), e.get("example", ""),
+                e.get("conjugation", ""),
+                tomorrow, SRS_INITIAL_EASE, now,
             ),
         )
         results.append(
@@ -398,21 +398,23 @@ def _vocab_row_to_dict(r) -> dict:
         "context": r[3],
         "phonetic": r[4],
         "part_of_speech": r[5],
-        "mastery_level": r[6],
-        "times_reviewed": r[7],
-        "times_correct": r[8],
-        "next_review": r[9] or "",
-        "interval_days": r[10] or 1,
-        "ease_factor": r[11] or SRS_INITIAL_EASE,
-        "lapses": r[12] or 0,
-        "created_at": r[13],
-        "difficult": (r[12] or 0) >= 3,
+        "example": r[6],
+        "conjugation": r[7],
+        "mastery_level": r[8],
+        "times_reviewed": r[9],
+        "times_correct": r[10],
+        "next_review": r[11] or "",
+        "interval_days": r[12] or 1,
+        "ease_factor": r[13] or SRS_INITIAL_EASE,
+        "lapses": r[14] or 0,
+        "created_at": r[15],
+        "difficult": (r[14] or 0) >= 3,
     }
 
 
 _VOCAB_SELECT = (
     "SELECT id, word, translation, context, phonetic, part_of_speech, "
-    "mastery_level, times_reviewed, times_correct, "
+    "example, conjugation, mastery_level, times_reviewed, times_correct, "
     "next_review, interval_days, ease_factor, lapses, created_at "
 )
 

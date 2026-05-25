@@ -114,7 +114,7 @@ def _run_tutor_crew(crew, q: queue.Queue):
             crewai_event_bus.off(event_type, handler)
 
 
-async def _stream_tutor_crew(crew, request: Request, uid: str, timeout_sec: int | None = None):
+async def _stream_tutor_crew(crew, request: Request, uid: str, timeout_sec: int | None = None, on_complete=None):
     """Generic SSE streamer for any tutor crew run."""
     # Lazy-init per-user semaphore and cancel event
     if uid not in request.app.state.crew_semaphores:
@@ -206,6 +206,13 @@ async def _stream_tutor_crew(crew, request: Request, uid: str, timeout_sec: int 
                     "reasoning": all_lines,
                 },
             )
+
+            if on_complete is not None:
+                try:
+                    await on_complete(response_text)
+                except Exception as _cb_err:
+                    import logging as _log
+                    _log.getLogger(__name__).warning("on_complete error: %s", _cb_err)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -336,8 +343,17 @@ def register_tutor_routes(app):
                 level=session["level"],
             )
 
+        async def _save_chat_vocab(response_text: str):
+            vocab_entries = tutor_crew.extract_vocabulary_from_response(response_text)
+            if vocab_entries:
+                await add_vocabulary_batch(
+                    db, uid, req.session_id, vocab_entries,
+                    target_lang=session["target_lang"],
+                )
+
         return await _stream_tutor_crew(crew, request, uid,
-            timeout_sec=tutor_crew.get_llm_params().get("crew_timeout_sec"))
+            timeout_sec=tutor_crew.get_llm_params().get("crew_timeout_sec"),
+            on_complete=_save_chat_vocab)
 
     # ------------------------------------------------------------------
     # Lesson Plans
@@ -444,88 +460,53 @@ def register_tutor_routes(app):
         lang = lesson.get("target_lang", "")
         level = lesson.get("level", "")
 
-        def _to_markdown(lesson: dict, content: dict) -> str:
-            lines = [
-                f"# {lesson['title']}",
-                f"**Language:** {lesson.get('target_lang', '')}  "
-                f"**Level:** {lesson.get('level', '')}  "
-                f"**Topic:** {lesson.get('topic', '')}",
-                "",
-            ]
-            if isinstance(content, dict):
-                for section, value in content.items():
-                    lines.append(f"## {section.replace('_', ' ').title()}")
-                    if isinstance(value, list):
-                        for item in value:
-                            if isinstance(item, dict):
-                                for k, v in item.items():
-                                    lines.append(f"- **{k}**: {v}")
-                            else:
-                                lines.append(f"- {item}")
-                    elif isinstance(value, dict):
-                        for k, v in value.items():
-                            lines.append(f"- **{k}**: {v}")
-                    else:
-                        lines.append(str(value))
-                    lines.append("")
-            else:
-                lines.append(str(content))
-            return "\n".join(lines)
+        # Content is stored as {"markdown": text} — unwrap it
+        md_text = content.get("markdown", "") if isinstance(content, dict) else str(content)
+
+        safe = "".join(c if c.isalnum() or c in "-_ " else "_" for c in title).strip()
 
         if format == "md":
-            md = _to_markdown(lesson, content)
-            safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in title)
             return Response(
-                content=md.encode("utf-8"),
+                content=md_text.encode("utf-8"),
                 media_type="text/markdown",
-                headers={
-                    "Content-Disposition": f'attachment; filename="{safe}.md"'
-                },
+                headers={"Content-Disposition": f'attachment; filename="{safe}.md"'},
             )
 
         if format == "docx":
             try:
                 from docx import Document
-                from docx.shared import Pt
+                from docx.shared import Pt, RGBColor
                 import io as _io
 
                 doc = Document()
                 doc.add_heading(title, 0)
-                doc.add_paragraph(
-                    f"Language: {lang}  |  Level: {level}  |  Topic: {lesson.get('topic','')}"
-                )
-                if isinstance(content, dict):
-                    for section, value in content.items():
-                        doc.add_heading(section.replace("_", " ").title(), 1)
-                        if isinstance(value, list):
-                            for item in value:
-                                if isinstance(item, dict):
-                                    for k, v in item.items():
-                                        doc.add_paragraph(
-                                            f"{k}: {v}", style="List Bullet"
-                                        )
-                                else:
-                                    doc.add_paragraph(str(item), style="List Bullet")
-                        elif isinstance(value, dict):
-                            for k, v in value.items():
-                                doc.add_paragraph(
-                                    f"{k}: {v}", style="List Bullet"
-                                )
-                        else:
-                            doc.add_paragraph(str(value))
+                doc.add_paragraph(f"Language: {lang}  |  Level: {level}  |  Topic: {lesson.get('topic', '')}")
+
+                # Parse markdown line-by-line into DOCX
+                for line in md_text.splitlines():
+                    if line.startswith("### "):
+                        doc.add_heading(line[4:], level=3)
+                    elif line.startswith("## "):
+                        doc.add_heading(line[3:], level=2)
+                    elif line.startswith("# "):
+                        doc.add_heading(line[2:], level=1)
+                    elif line.startswith("- ") or line.startswith("* "):
+                        doc.add_paragraph(line[2:], style="List Bullet")
+                    elif line.startswith("|"):
+                        # Markdown table row — add as plain paragraph
+                        cells = [c.strip() for c in line.strip("|").split("|")]
+                        doc.add_paragraph("  |  ".join(cells))
+                    elif line.strip():
+                        doc.add_paragraph(line)
+
                 buf = _io.BytesIO()
                 doc.save(buf)
                 buf.seek(0)
-                safe = "".join(
-                    c if c.isalnum() or c in "-_" else "_" for c in title
-                )
                 return Response(
                     content=buf.read(),
                     media_type="application/vnd.openxmlformats-officedocument"
                     ".wordprocessingml.document",
-                    headers={
-                        "Content-Disposition": f'attachment; filename="{safe}.docx"'
-                    },
+                    headers={"Content-Disposition": f'attachment; filename="{safe}.docx"'},
                 )
             except ImportError:
                 raise HTTPException(
@@ -1037,6 +1018,28 @@ def register_tutor_routes(app):
         curriculum = _load_curriculum()
         topics = curriculum.get(level, [])
         new_index = min(session.get("topic_index", 0) + 1, max(0, len(topics) - 1))
+        await set_topic_index(db, session_id, new_index)
+        current_topic = topics[new_index] if new_index < len(topics) else None
+        return {
+            "topic_index": new_index,
+            "total_topics": len(topics),
+            "current_topic": current_topic,
+            "pct": round(new_index / len(topics) * 100) if topics else 0,
+        }
+
+    @app.post("/tutor/sessions/{session_id}/prev-topic")
+    async def tutor_prev_topic(session_id: str, request: Request):
+        """Go back to the previous curriculum topic."""
+        _validate_sid(session_id)
+        user = await get_current_user(request)
+        db = request.app.state.db
+        session = await get_tutor_session(db, session_id, user["id"])
+        if not session:
+            raise HTTPException(status_code=404, detail="Tutor session not found")
+        level = session.get("level", "A1")
+        curriculum = _load_curriculum()
+        topics = curriculum.get(level, [])
+        new_index = max(0, session.get("topic_index", 0) - 1)
         await set_topic_index(db, session_id, new_index)
         current_topic = topics[new_index] if new_index < len(topics) else None
         return {

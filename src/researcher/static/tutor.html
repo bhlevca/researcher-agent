@@ -225,14 +225,21 @@
     <!-- Curriculum progress bar (shown when a session is active) -->
     <div id="curriculum-bar" style="display:none;padding:0.4rem 1rem;background:var(--surface);border-bottom:1px solid #1a3a6e;">
         <div style="display:flex;align-items:center;gap:0.75rem;font-size:0.78rem;color:var(--muted);">
-            <span id="curriculum-topic" style="flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></span>
-            <div style="flex:2;background:#0f3460;border-radius:4px;height:6px;min-width:80px;">
+            <button id="curriculum-prev-btn" onclick="prevCurriculumTopic()"
+                style="background:#0f3460;color:#94a3b8;border:1px solid #1a3a6e;padding:0.2rem 0.5rem;border-radius:0.3rem;font-size:0.72rem;cursor:pointer;">
+                ‹
+            </button>
+            <button onclick="useCurriculumTopic()" title="Generate a lesson on this topic"
+                style="flex:1;background:#0f3460;color:#e0e0e0;border:1px solid #1a3a6e;padding:0.2rem 0.6rem;border-radius:0.3rem;font-size:0.78rem;cursor:pointer;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                📖 <span id="curriculum-topic">—</span>
+            </button>
+            <div style="flex:2;background:#0f3460;border-radius:4px;height:6px;min-width:60px;">
                 <div id="curriculum-fill" style="height:6px;background:#e94560;border-radius:4px;transition:width 0.3s;width:0%;"></div>
             </div>
-            <span id="curriculum-pct" style="min-width:2.5rem;text-align:right;">0%</span>
+            <span id="curriculum-pct" style="min-width:2.5rem;text-align:right;font-size:0.72rem;">0%</span>
             <button id="curriculum-advance-btn" onclick="advanceCurriculumTopic()"
                 style="background:#0f3460;color:#94a3b8;border:1px solid #1a3a6e;padding:0.2rem 0.5rem;border-radius:0.3rem;font-size:0.72rem;cursor:pointer;">
-                Next topic ›
+                ›
             </button>
         </div>
     </div>
@@ -307,6 +314,7 @@
             <span id="vocab-count" style="color:#64748b;font-size:0.78rem;">0 words</span>
             <button id="review-due-btn" onclick="startDueReview()" title="Quiz yourself on words due for spaced-repetition review" style="display:none;background:#0f3460;border:1px solid #38bdf8;color:#38bdf8;">🔁 Review Due (<span id="review-due-count">0</span>)</button>
             <button onclick="addVocabManual()">+ Add Word</button>
+            <button id="vocab-export-btn" onclick="exportVocabCSV()" style="display:none;background:#0f3460;border:1px solid #22c55e;color:#22c55e;" title="Export vocabulary as CSV (opens in Excel)">⬇ CSV</button>
         </div>
         <div class="vocab-content">
             <div id="vocab-list"></div>

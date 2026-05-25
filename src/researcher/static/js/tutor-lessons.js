@@ -2,6 +2,25 @@
 // ── Lesson generation & management ──
 // ══════════════════════════════════════════════
 
+async function downloadLesson(id, format) {
+    try {
+        const resp = await fetch('/tutor/lessons/' + id + '/export?format=' + format, {
+            headers: tutorAuthHeaders(),
+        });
+        if (!resp.ok) { tutorShowToast('Export failed'); return; }
+        const blob = await resp.blob();
+        const disposition = resp.headers.get('Content-Disposition') || '';
+        const nameMatch = disposition.match(/filename="([^"]+)"/);
+        const filename = nameMatch ? nameMatch[1] : ('lesson.' + format);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+    } catch (e) { tutorShowToast('Export error: ' + e.message); }
+}
+
 async function generateLesson() {
     if (!tutorSessionId) { tutorShowToast('Create or load a session first'); return; }
 
@@ -131,25 +150,26 @@ async function viewLesson(id) {
         back.onclick = () => { content.innerHTML = ''; loadLessons(); };
         toolbar.appendChild(back);
 
-        const exportMd = document.createElement('a');
+        const btnStyle = 'background:#0f3460;color:#94a3b8;border:1px solid #1a3a6e;padding:0.3rem 0.7rem;border-radius:0.4rem;font-size:0.78rem;cursor:pointer;';
+
+        const exportMd = document.createElement('button');
         exportMd.textContent = '⬇ MD';
-        exportMd.href = '/tutor/lessons/' + id + '/export?format=md';
-        exportMd.download = '';
-        exportMd.style.cssText = 'background:#0f3460;color:#94a3b8;border:1px solid #1a3a6e;padding:0.3rem 0.7rem;border-radius:0.4rem;font-size:0.78rem;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;';
+        exportMd.style.cssText = btnStyle;
+        exportMd.onclick = () => downloadLesson(id, 'md');
         toolbar.appendChild(exportMd);
 
-        const exportDocx = document.createElement('a');
+        const exportDocx = document.createElement('button');
         exportDocx.textContent = '⬇ DOCX';
-        exportDocx.href = '/tutor/lessons/' + id + '/export?format=docx';
-        exportDocx.download = '';
-        exportDocx.style.cssText = 'background:#0f3460;color:#94a3b8;border:1px solid #1a3a6e;padding:0.3rem 0.7rem;border-radius:0.4rem;font-size:0.78rem;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;';
+        exportDocx.style.cssText = btnStyle;
+        exportDocx.onclick = () => downloadLesson(id, 'docx');
         toolbar.appendChild(exportDocx);
 
         content.appendChild(toolbar);
 
         const viewer = document.createElement('div');
         viewer.className = 'lesson-viewer';
-        viewer.innerHTML = renderContent(JSON.stringify(data.content, null, 2));
+        const mdText = (data.content && data.content.markdown) ? data.content.markdown : JSON.stringify(data.content, null, 2);
+        viewer.innerHTML = renderContent(mdText);
         content.appendChild(viewer);
     } catch (e) { tutorShowToast('Error: ' + e.message); }
 }

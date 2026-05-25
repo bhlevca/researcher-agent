@@ -571,6 +571,7 @@ def _get_ernie_pipe():
                 pipe = ErnieImagePipeline.from_pretrained(
                     _ERNIE_BASE_ID,
                     torch_dtype=torch.bfloat16,
+                    attn_implementation="eager",
                     token=hf_token,
                     local_files_only=offline,
                     cache_dir=str(ernie_dir / "base"),
@@ -590,6 +591,7 @@ def _get_ernie_pipe():
                         subfolder="abliterated_pe-GGUF",
                         gguf_file=pe_gguf,
                         torch_dtype=torch.bfloat16,
+                        attn_implementation="eager",
                         token=hf_token,
                         local_files_only=offline,
                         cache_dir=str(ernie_dir / "gguf"),
@@ -599,6 +601,7 @@ def _get_ernie_pipe():
                         subfolder="abliterated_text_encoder-GGUF",
                         gguf_file=te_gguf,
                         torch_dtype=torch.bfloat16,
+                        attn_implementation="eager",
                         token=hf_token,
                         local_files_only=offline,
                         cache_dir=str(ernie_dir / "gguf"),
@@ -612,7 +615,19 @@ def _get_ernie_pipe():
                         " falling back to base model components.\n"
                     )
 
-                pipe.enable_model_cpu_offload()
+                try:
+                    pipe.enable_model_cpu_offload()
+                    _sys.stderr.write("[ERNIE] Model CPU offload enabled\n")
+                except Exception:
+                    _sys.stderr.write("[ERNIE] CPU offload unavailable\n")
+                try:
+                    pipe.enable_attention_slicing()
+                except Exception:
+                    pass
+                try:
+                    pipe.enable_vae_tiling()
+                except Exception:
+                    pass
                 _ernie_pipe = pipe
                 print("[ERNIE] Pipeline ready.", flush=True)
     return _ernie_pipe
@@ -677,12 +692,20 @@ def _get_flux_pipe():
                     f"{' [offline]' if offline else ''}...",
                     flush=True,
                 )
+                _flux_local = _MODELS_DIR / "flux"
+                _flux_valid = (
+                    (_flux_local / "model_index.json").exists()
+                    and (_flux_local / "tokenizer" / "vocab.json").exists()
+                    and (_flux_local / "transformer").exists()
+                    and not (_flux_local / ".gitattributes").exists()
+                )
+                _flux_src = str(_flux_local) if _flux_valid else _FLUX_MODEL_ID
                 pipe = FluxPipeline.from_pretrained(
-                    _FLUX_MODEL_ID,
+                    _flux_src,
                     torch_dtype=torch.bfloat16,
                     token=hf_token,
-                    local_files_only=offline,
-                    cache_dir=str(_MODELS_DIR / "flux"),
+                    local_files_only=offline or _flux_valid,
+                    cache_dir=str(_MODELS_DIR) if not _flux_valid else None,
                 )
                 # Sequential offload: one layer at a time on GPU → minimal VRAM use
                 pipe.enable_sequential_cpu_offload()
@@ -1397,26 +1420,85 @@ def generate_ai_image(prompt: str) -> str:
 
     elif backend == "ernie":
         import sys as _sys
+        import time as _time
         import torch
+        import requests as _requests
+
+        _ollama_base = OLLAMA_IMAGE_URL.rsplit("/", 2)[0]
+        _unloaded_models = []
+        try:
+            _ps_resp = _requests.get(f"{_ollama_base}/api/ps", timeout=10)
+            _ps_resp.raise_for_status()
+            for _m in _ps_resp.json().get("models", []):
+                _mname = _m.get("name", "")
+                if _mname:
+                    _requests.post(
+                        OLLAMA_IMAGE_URL,
+                        json={"model": _mname, "keep_alive": 0, "prompt": ""},
+                        timeout=30,
+                    )
+                    _unloaded_models.append(_mname)
+            _sys.stderr.write(f"[ERNIE] Unloaded LLM(s): {_unloaded_models}\n")
+        except Exception as e:
+            _sys.stderr.write(f"[ERNIE] Failed to unload LLM: {e}\n")
+
+        _sys.stderr.write("[ERNIE] Waiting for VRAM to free...\n")
+        for _ in range(20):
+            torch.cuda.empty_cache()
+            _free = torch.cuda.mem_get_info()[0] / (1024**3)
+            _sys.stderr.write(f"[ERNIE]   free VRAM: {_free:.2f} GiB\n")
+            if _free > 4.0:
+                break
+            _time.sleep(1)
+        else:
+            _sys.stderr.write("[ERNIE] Warning: VRAM may still be tight\n")
+
+        result_img = None
         try:
             pipe = _get_ernie_pipe()
         except Exception as e:
             return f"Error loading ERNIE pipeline: {e}"
 
         _sys.stderr.write(f"[ERNIE] Starting inference...\n"); _sys.stderr.flush()
-        with _vram_lock:
-            try:
-                result = pipe(
+        _cudnn_was_enabled = torch.backends.cudnn.enabled
+        try:
+            # Disable cuDNN entirely — version mismatch causes
+            # CUDNN_STATUS_SUBLIBRARY_VERSION_MISMATCH in pe.generate().
+            torch.backends.cudnn.enabled = False
+            torch.backends.cuda.enable_flash_sdp(False)
+            torch.backends.cuda.enable_mem_efficient_sdp(False)
+            torch.backends.cuda.enable_math_sdp(True)
+            with torch.inference_mode():
+                result_img = pipe(
                     prompt,
                     num_inference_steps=_ERNIE_STEPS,
                     generator=torch.Generator().manual_seed(0),
                 ).images[0]
-            except Exception as e:
-                return f"Error during ERNIE generation: {e}"
+        except Exception as e:
+            return f"Error during ERNIE generation: {e}"
+        finally:
+            torch.backends.cudnn.enabled = _cudnn_was_enabled
+            torch.backends.cuda.enable_flash_sdp(True)
+            torch.backends.cuda.enable_mem_efficient_sdp(True)
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            for _mname in _unloaded_models or [
+                os.getenv("MODEL", "qwen3:9b").replace("ollama/", "")
+            ]:
+                try:
+                    _requests.post(
+                        OLLAMA_IMAGE_URL,
+                        json={"model": _mname, "prompt": ""},
+                        timeout=30,
+                    )
+                    _sys.stderr.write(f"[ERNIE] Reloaded LLM: {_mname}\n")
+                except Exception as e:
+                    _sys.stderr.write(f"[ERNIE] Failed to reload LLM {_mname}: {e}\n")
 
         fname = f"{_uuid.uuid4().hex[:12]}.png"
         out_path = _GENERATED_DIR / fname
-        result.save(str(out_path))
+        result_img.save(str(out_path))
         _sys.stderr.write(f"[ERNIE] Saved: {fname}\n")
         return f'<img src="/static/generated/{fname}" alt="{prompt[:60]}">'
 

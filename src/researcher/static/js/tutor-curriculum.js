@@ -33,9 +33,33 @@ async function advanceCurriculumTopic() {
             method: 'POST',
             headers: tutorJsonHeaders(),
         });
-        if (resp.ok) {
-            await loadCurriculumProgress();
-        }
+        if (resp.ok) await loadCurriculumProgress();
+    } catch (e) { /* ignore */ }
+    finally { if (btn) btn.disabled = false; }
+}
+
+function useCurriculumTopic() {
+    const topic = document.getElementById('curriculum-topic')?.textContent?.trim();
+    if (!topic || topic === '—') return;
+    switchTutorTab('lessons');
+    const input = document.getElementById('lesson-topic');
+    if (input) {
+        input.value = topic;
+        input.focus();
+    }
+    tutorShowToast('Topic loaded — click Generate Lesson');
+}
+
+async function prevCurriculumTopic() {
+    if (!tutorSessionId) return;
+    const btn = document.getElementById('curriculum-prev-btn');
+    if (btn) btn.disabled = true;
+    try {
+        const resp = await fetch('/tutor/sessions/' + tutorSessionId + '/prev-topic', {
+            method: 'POST',
+            headers: tutorJsonHeaders(),
+        });
+        if (resp.ok) await loadCurriculumProgress();
     } catch (e) { /* ignore */ }
     finally { if (btn) btn.disabled = false; }
 }

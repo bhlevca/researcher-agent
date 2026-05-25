@@ -125,6 +125,8 @@ async function loadTutorSession(id) {
         });
         updateTutorSessionUI();
         loadCurriculumProgress();
+        loadLessons();
+        loadVocabulary();
         closeTutorSessionsPanel();
         tutorShowToast('Loaded: ' + data.name);
     } catch (e) { tutorShowToast('Error loading session'); }
@@ -132,7 +134,6 @@ async function loadTutorSession(id) {
 
 async function saveTutorSession() {
     if (!tutorSessionId) { tutorShowToast('Create a session first'); return; }
-    if (tutorChatHistory.length === 0) { tutorShowToast('Nothing to save'); return; }
     try {
         const resp = await fetch('/tutor/sessions/' + tutorSessionId, {
             method: 'PUT',

@@ -110,14 +110,17 @@ No cache headers, no ETags, no compression. Browser re-downloads all assets on e
 ### T1 — Situational Dialogs / Roleplay Scenarios (HIGH)
 **Files**: `src/researcher/tutor/crew.py`, `src/researcher/static/tutor.html`
 
-The backend has no roleplay mode. The TODO lists "situational dialogs" as v2.3.0 priority. This is the most user-visible missing feature.
+- [x] Add `scenario` mode to `TutorCrew` task builder (in `tutor/crew.py`)
+- [x] Create `tutor/config/scenarios.yaml` with starter situations
+- [x] Add `/tutor/scenarios` endpoint (list) and `/tutor/chat` scenario mode
+- [x] Add scenario picker to `tutor.html` UI (🎭 Scenarios tab)
+- [x] Reasoning now collapsible instead of overlapping the reply
 
-**Actions**:
-- [ ] Add `scenario` mode to `TutorCrew` task builder (in `tutor/crew.py`)
-- [ ] Create `tutor/config/scenarios.yaml` with ~10 starter situations (restaurant, airport, hotel, doctor, shopping, job interview, phone call, directions, emergency, making friends)
-- [ ] Each scenario: `name`, `setting`, `user_role`, `tutor_role`, `vocabulary_focus`, `grammar_focus`, `starter_line`
-- [ ] Add `/tutor/scenarios` endpoint (list) and `/tutor/chat` scenario mode (pass `scenario_id` in request)
-- [ ] Add scenario picker to `tutor.html` UI
+**Remaining — Scenario quality improvements**:
+- [ ] Tutor must conduct the entire dialog in the target language (currently sometimes reverts to native language despite CRITICAL instruction — may need stronger prompt or model fine-tuning)
+- [ ] Make scenarios more pedagogically driven: tutor should ask questions, guide the student, and prompt responses rather than just replying
+- [ ] Save scenario transcript to `lesson_plans` table so conversations can be reviewed later
+- [ ] Scenario exercise instructions should be in the target language, not native language
 
 ### T2 — Progress Visualization (HIGH)
 **Files**: `src/researcher/routes/tutor.py` (`/tutor/sessions/{id}/stats`), `src/researcher/static/tutor.html`
@@ -133,16 +136,13 @@ The stats endpoint exists but there is no chart UI. Chart.js is already mentione
   - [ ] Time spent per session (bar chart)
 - [ ] `/tutor/sessions/{id}/stats` already returns aggregated data — verify all chart-needed fields are present, add any that are missing
 
-### T3 — Lesson Export (MEDIUM)
-**Files**: `src/researcher/routes/tutor.py`, `src/researcher/ingestion.py`
+### T3 — Lesson Export (MEDIUM) — DONE
+**Files**: `src/researcher/routes/tutor.py`, `src/researcher/static/js/tutor-lessons.js`
 
-Lessons are stored in SQLite but cannot be exported. `ingestion.py` already has DOCX/XLSX export logic.
-
-**Actions**:
-- [ ] Add `GET /tutor/lessons/{id}/export?format=md|docx` endpoint
-- [ ] Markdown export: lesson title + content + vocabulary table
-- [ ] DOCX export: reuse `ingestion.py` export utilities
-- [ ] Add download button in lesson view in `tutor.html`
+- [x] `GET /tutor/lessons/{id}/export?format=md|docx` endpoint
+- [x] Markdown export — proper `.md` file from stored content
+- [x] DOCX export — line-by-line markdown parsing into python-docx
+- [x] Download buttons use `fetch` + blob (auth headers, no JSON download bug)
 
 ### T4 — Pronunciation Scoring (MEDIUM)
 **Files**: `src/researcher/routes/speech.py` (Whisper), `src/researcher/tutor/crew.py`
@@ -155,17 +155,14 @@ Whisper is available and used for dictation. It can also be used to score pronun
 - [ ] Score: 1.0 = perfect, 0.0 = completely wrong; update vocabulary mastery accordingly
 - [ ] Add "Speak" button next to target sentences in tutor UI (reuse existing mic recording code)
 
-### T5 — CEFR Curriculum Structure (MEDIUM)
-**Files**: `src/researcher/tutor/storage.py`, `src/researcher/tutor/crew.py`
+### T5 — CEFR Curriculum Structure (MEDIUM) — DONE
+**Files**: `src/researcher/tutor/storage.py`, `src/researcher/static/tutor.html`
 
-Currently the tutor tracks level (A1/A2/B1/B2/C1/C2) but there is no topic sequence or curriculum path.
-
-**Actions**:
-- [ ] Create `tutor/knowledge/curriculum.yaml`: per-CEFR-level list of topics (grammar, vocabulary themes, functional tasks)
-- [ ] Add `current_topic_index` column to `tutor_sessions` table
-- [ ] Add `/tutor/curriculum` endpoint returning the topic sequence for a given level
-- [ ] Tutor agent: when starting a new session, pick next unfinished topic from curriculum
-- [ ] Add curriculum progress bar to tutor UI
+- [x] `curriculum.yaml` with per-CEFR-level topic sequences
+- [x] `topic_index` column in `tutor_sessions`
+- [x] `/tutor/curriculum-progress` and `/tutor/sessions/{id}/advance-topic` endpoints
+- [x] Curriculum bar in UI: clickable topic name pre-fills lesson generator, Prev/Next navigation
+- [x] `/tutor/sessions/{id}/prev-topic` endpoint added
 
 ### T6 — SM-2 Edge Cases (LOW)
 **Files**: `src/researcher/tutor/storage.py`

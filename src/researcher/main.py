@@ -136,9 +136,24 @@ async def lifespan(app: FastAPI):
     # Optional image backend warm-up/bootstrap.
     # This can prefill HF cache on startup when missing.
     # Disable with IMAGE_WARMUP=0.
-    image_backend = os.getenv("IMAGE_BACKEND", "sd").lower()
+    # Prefer the backend stored in the DB (per-user setting) over the env var,
+    # so that switching via the UI is respected on next restart.
     image_warmup = os.getenv("IMAGE_WARMUP", "1") == "1"
     if image_warmup:
+        image_backend = os.getenv("IMAGE_BACKEND", "sd").lower()
+        try:
+            cursor = await db.execute(
+                "SELECT image_params FROM users LIMIT 1"
+            )
+            row = await cursor.fetchone()
+            if row and row[0]:
+                _saved = json.loads(row[0])
+                _db_backend = str(_saved.get("image_backend", "")).lower()
+                if _db_backend in {"sd", "zimage", "ernie", "flux"}:
+                    image_backend = _db_backend
+                    logger.info("Image backend from DB: %s", image_backend)
+        except Exception as e:
+            logger.warning("Could not read image_backend from DB: %s", e)
         if image_backend == "zimage":
             logger.info("Warming up ZImage backend in background")
             preload_zimage()

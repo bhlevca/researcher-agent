@@ -58,6 +58,12 @@ class ResearchCrew:
         "frequency_penalty": 0.0,
         "presence_penalty": 0.0,
         "planning_max_attempts": 3,
+        # Hard ceiling on ReAct iterations. Each iteration is a full LLM call, so
+        # this is the biggest lever on worst-case latency: a turn that never emits
+        # a parseable "Final Answer:" burns every iteration before CrewAI force-
+        # stops it (which surfaces as "Invalid response from LLM call - None or
+        # empty"). Tunable from the params panel; lower it if a run ever hangs.
+        "max_iter": 25,
         "crew_timeout_sec": 300,
     }
 
@@ -207,10 +213,13 @@ class ResearchCrew:
             ],
             llm=self.ollama_llm,
             verbose=True,
-            max_iter=25,
+            max_iter=int(self._llm_params.get("max_iter", 10)),
             max_retry_limit=3,
             respect_context_window=True,
             planning_config=planning,
+            # respect_context_window only actually works on the executor the P3
+            # patches wrap; see patches.get_executor_class().
+            **_patches.executor_kwargs(),
         )
 
     @task

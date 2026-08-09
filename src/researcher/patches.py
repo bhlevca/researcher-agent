@@ -7,17 +7,28 @@ models (primarily qwen3.5:9b).
 
 VERSION GUARD
 -------------
-If the crewai version changes, the assertion below will fail loudly at startup.
-Before upgrading crewai, review each patch section, verify whether the upstream
-bug is still present, and update TESTED_CREWAI_VERSION once confirmed.
+Guarding on an exact version string is too brittle: a routine `uv lock --upgrade`
+turns a working install into a hard startup crash even when every patch still
+applies cleanly.  What actually matters is not the version number but whether the
+symbols each patch reaches into still exist.
+
+So the guard has two levels:
+
+* **Structural check (fatal).**  Every attribute a patch monkey-patches is
+  verified to exist before anything is applied.  A missing symbol means the patch
+  would silently no-op or explode later, so that *does* stop startup — with a
+  message naming the patch and the symbol.
+* **Version range (warning only).**  Outside the tested range you get a logged
+  warning telling you to re-verify, not a crash.
 
 HOW TO REMOVE A PATCH
 ----------------------
 1. Confirm the upstream bug is fixed (run the corresponding test_patches.py test).
-2. Delete the patch function and its call in apply_all().
-3. Update the version guard to the new tested version.
+2. Delete the patch function, its call in apply_all(), and its _PATCH_TARGETS entry.
+3. Widen TESTED_CREWAI_RANGE to the version you verified against.
 """
 
+import os
 import re as _re
 import logging
 import functools
@@ -27,15 +38,156 @@ import crewai
 _logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Version guard — update this string after verifying all patches on a new version.
+# Version range — widen the upper bound after verifying all patches on a new
+# release.  Being outside this range warns; it does not stop the app.
 # ---------------------------------------------------------------------------
-TESTED_CREWAI_VERSION = "1.14.5"
+TESTED_CREWAI_RANGE = ("1.14.5", "1.15.14")
 
-assert crewai.__version__ == TESTED_CREWAI_VERSION, (
-    f"CrewAI version mismatch: patches were written for {TESTED_CREWAI_VERSION} "
-    f"but {crewai.__version__} is installed.  Review each patch in patches.py, "
-    f"verify it is still needed, then update TESTED_CREWAI_VERSION."
-)
+
+def _version_tuple(v: str) -> tuple:
+    """Parse a version string into a comparable tuple, ignoring any suffix."""
+    parts = []
+    for chunk in v.split(".")[:3]:
+        digits = _re.match(r"\d+", chunk)
+        parts.append(int(digits.group()) if digits else 0)
+    return tuple(parts)
+
+
+def _check_version_range() -> None:
+    """Warn (never raise) when the installed crewai is outside the tested range."""
+    low, high = TESTED_CREWAI_RANGE
+    installed = crewai.__version__
+    if not (_version_tuple(low) <= _version_tuple(installed) <= _version_tuple(high)):
+        _logger.warning(
+            "CrewAI %s is outside the tested range %s–%s. All patch targets were "
+            "verified present, so startup continues — but re-check patches.py "
+            "against this release and widen TESTED_CREWAI_RANGE once confirmed.",
+            installed, low, high,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Structural guard — (patch id, module path, class name or None, attribute).
+# Every symbol a patch reaches into is listed here and verified before any
+# patch is applied.  This is what actually protects against an upstream refactor.
+# ---------------------------------------------------------------------------
+_PATCH_TARGETS = [
+    ("P1", "crewai.llms.providers.openai_compatible.completion",
+     "OpenAICompatibleCompletion", "supports_function_calling"),
+    ("P2", "crewai.utilities.reasoning_handler", "AgentReasoning", "_call_with_function"),
+    ("P2", "crewai.utilities.reasoning_handler", "AgentReasoning", "_parse_planning_response"),
+    ("P2", "crewai.agent.utils", None, "handle_reasoning"),
+    ("P3", "crewai.utilities.exceptions.context_window_exceeding_exception",
+     None, "CONTEXT_LIMIT_ERRORS"),
+    ("P3", "crewai.utilities.agent_utils", None, "is_context_length_exceeded"),
+    ("P3", "crewai.utilities.agent_utils", None, "handle_context_length"),
+    ("P3", "crewai.agents.crew_agent_executor", "CrewAgentExecutor", "_invoke_loop_native_tools"),
+    ("P3", "crewai.agents.crew_agent_executor", "CrewAgentExecutor", "_invoke_loop_react"),
+    ("P3", "crewai.agents.crew_agent_executor", "CrewAgentExecutor", "_invoke_loop_native_no_tools"),
+    ("P4", "crewai.memory.unified_memory", "Memory", "recall"),
+    ("P5", "crewai.agents.agent_builder.base_agent_executor", "BaseAgentExecutor", "_save_to_memory"),
+]
+
+
+def verify_patch_targets() -> list[str]:
+    """Return a list of human-readable descriptions of any missing patch targets.
+
+    An empty list means every symbol the patches depend on is still present.
+    """
+    import importlib
+
+    missing: list[str] = []
+    for patch_id, module_path, class_name, attr in _PATCH_TARGETS:
+        location = f"{module_path}.{class_name}.{attr}" if class_name else f"{module_path}.{attr}"
+        try:
+            module = importlib.import_module(module_path)
+        except ImportError as e:
+            missing.append(f"{patch_id}: cannot import {module_path} ({e})")
+            continue
+        owner = module
+        if class_name:
+            owner = getattr(module, class_name, None)
+            if owner is None:
+                missing.append(f"{patch_id}: {module_path}.{class_name} no longer exists")
+                continue
+        if not hasattr(owner, attr):
+            missing.append(f"{patch_id}: {location} no longer exists")
+    return missing
+
+
+def _check_patch_targets() -> None:
+    """Raise a clear, actionable error if any patch target has disappeared."""
+    missing = verify_patch_targets()
+    if missing:
+        detail = "\n  - ".join(missing)
+        raise RuntimeError(
+            f"CrewAI {crewai.__version__} has moved or removed symbols that "
+            f"researcher.patches depends on:\n  - {detail}\n"
+            f"Review each affected patch in patches.py — the upstream bug may be "
+            f"fixed (delete the patch) or the API may have moved (update the target)."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Executor selection — REACHABILITY, not just existence.
+#
+# CrewAI 1.15.14 changed Agent's default executor from CrewAgentExecutor to the
+# Flow-based crewai.experimental.AgentExecutor.  The P3 patches wrap
+# CrewAgentExecutor._invoke_loop_* — those methods still *exist* on the new
+# version, so the structural check above passes, but they are never *called*
+# under the new default.  The effect is silent: context-length errors stop being
+# summarised and retried, and the ReAct loop behaves differently.
+#
+# Agents therefore pin the executor the patches were written and tested against.
+# Set CREWAI_EXECUTOR=experimental to opt into the new one once P3 is ported.
+# ---------------------------------------------------------------------------
+from crewai.agents.crew_agent_executor import CrewAgentExecutor as _CrewAgentExecutor  # noqa: E402
+
+_EXECUTOR_CHOICE = os.getenv("CREWAI_EXECUTOR", "classic").strip().lower()
+
+
+def get_executor_class():
+    """Return the executor class agents should use.
+
+    Defaults to the classic CrewAgentExecutor, which every patch here targets.
+    Returns None to mean "use whatever CrewAI defaults to" when the caller has
+    explicitly opted into the experimental executor.
+    """
+    if _EXECUTOR_CHOICE == "experimental":
+        return None
+    return _CrewAgentExecutor
+
+
+def executor_kwargs() -> dict:
+    """Agent(**executor_kwargs()) pins the executor the patches target.
+
+    Empty when the caller has opted into CrewAI's own default via
+    CREWAI_EXECUTOR=experimental.
+    """
+    cls = get_executor_class()
+    return {"executor_class": cls} if cls is not None else {}
+
+
+def _check_executor_reachability() -> None:
+    """Warn when CrewAI's default executor is not the one the patches target."""
+    try:
+        from crewai import Agent
+
+        default_cls = Agent.model_fields["executor_class"].default
+    except Exception:  # pragma: no cover - defensive
+        return
+    if default_cls is not _CrewAgentExecutor and _EXECUTOR_CHOICE != "experimental":
+        _logger.info(
+            "CrewAI's default executor is %s, but patches P3/P5 target %s. "
+            "Agents pin the latter via patches.get_executor_class(); set "
+            "CREWAI_EXECUTOR=experimental to opt out once P3 is ported.",
+            default_cls.__name__, _CrewAgentExecutor.__name__,
+        )
+
+
+_check_patch_targets()
+_check_version_range()
+_check_executor_reachability()
 
 
 # ---------------------------------------------------------------------------

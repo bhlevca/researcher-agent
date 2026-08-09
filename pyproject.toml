@@ -1,6 +1,6 @@
 [project]
 name = "researcher-agent"
-version = "2.3.0"
+version = "2.4.0"
 dependencies = [
     "crewai[tools]>=1.14.5",
     "litellm",
@@ -19,7 +19,10 @@ dependencies = [
     "accelerate",
     "safetensors",
     "aiosqlite",
-    "openai-whisper",
+    # faster-whisper (CTranslate2) replaces openai-whisper: no numba/triton in the
+    # dependency chain, so it cannot be broken by a NumPy major bump, and it is
+    # ~4x faster on CPU at the same model size.
+    "faster-whisper",
     "edge-tts",
     "langdetect",
     "bcrypt",
@@ -27,7 +30,14 @@ dependencies = [
     "pymupdf",
     "python-docx",
     "openpyxl",
-    "pytest", 
+    # Imported directly by src/ — declared explicitly so they are never dropped
+    # as incidental transitive dependencies of another package.
+    "numpy",
+    "requests",
+    "PyYAML",
+    "json-repair",
+    "huggingface-hub",
+    "pytest",
     "pytest-asyncio",
 ]
 

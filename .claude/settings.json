@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(pip list *)"
+      "Bash(pip list *)",
+      "Bash(.venv/bin/python -c ' *)"
     ]
   }
 }

@@ -10,7 +10,7 @@ A CrewAI-powered research agent with a browser-based chat UI, voice dialog, imag
 |-----------|---------|--------------|
 | **Ollama + LLM** | Server | Local LLM inference (qwen3.5:9b recommended) |
 | **CrewAI + FastAPI** | Server | Agent orchestration, API endpoints, SSE streaming |
-| **Whisper** | Server | Speech-to-text (voice input from browser mic) |
+| **faster-whisper** | Server | Speech-to-text (voice input from browser mic) |
 | **edge-tts** | Server | Text-to-speech (audio streamed back to browser) |
 | **Stable Diffusion** | Server | AI image generation (optional, needs NVIDIA GPU) |
 | **ZImage (Z-Image-Turbo)** | Server | Fast AI image generation via diffusers (optional, needs NVIDIA GPU) |
@@ -28,7 +28,7 @@ Install these on the **server** machine:
 |---------|----------|---------|-------------------|
 | [Ollama](https://ollama.com/) | Yes | Local LLM runtime | See ollama.com |
 | Python 3.11+ | Yes | Application runtime | `pyenv install 3.12` |
-| ffmpeg | Yes | Audio format conversion (Whisper) | `sudo zypper install ffmpeg` / `sudo apt install ffmpeg` |
+| ffmpeg | No | No longer needed — faster-whisper decodes in-process via PyAV, which bundles its own ffmpeg libraries | — |
 | NVIDIA GPU + CUDA | Recommended | GPU inference for Ollama & Stable Diffusion | Driver + CUDA toolkit |
 
 ### Python Dependencies
@@ -49,7 +49,7 @@ All managed automatically via `pip install -e .`:
 | accelerate | GPU offload for SD |
 | safetensors | Fast model weight loading |
 | aiosqlite | Async SQLite for session storage |
-| openai-whisper | Speech-to-text (runs on CPU) |
+| faster-whisper | Speech-to-text (CTranslate2; int8 on CPU by default) |
 | edge-tts | Text-to-speech via Microsoft Edge voices (server-side, streams audio to browser) |
 | PyJWT | JWT token generation and validation |
 | bcrypt | Secure password hashing |

@@ -1,6 +1,111 @@
 # TODO_Claude.md — Improvement Plan for Researcher, Tutor & Composer
 
 Generated: 2026-05-23 | Project: ai-agent v2.2.0 | Branch: developer
+Updated: 2026-08-09 for v2.4.0 — see "Session notes" below before trusting older sections.
+
+---
+
+## Session notes — 2026-08-09 (v2.4.0)
+
+### What broke, and why (post-mortem)
+
+A `uv lock --upgrade` moved the venv off a coherent dependency set and took the whole app
+down. Root causes, in the order they bite:
+
+| Symptom | Actual cause |
+|---|---|
+| App would not import at all | `crewai` 1.14.5 → 1.15.14 tripped an exact-equality `assert` in `patches.py` |
+| Dialog mode ran to the 600 s timeout | CrewAI 1.15.14 changed Agent's **default executor** from `CrewAgentExecutor` to the Flow-based `crewai.experimental.AgentExecutor` |
+| P3 context-length patch silently dead | Same executor change — the patched `_invoke_loop_*` methods still exist but are never called |
+| Every image backend dead | `tokenizers` 0.23.1 vs `transformers` 5.8.1 (requires ≤ 0.23.0) |
+| Whisper dead | `numpy` 2.5 vs `numba` (requires ≤ 2.4) |
+| Voice dead *before* the upgrade | `speech.py` used `os.getenv` without `import os` (introduced in `c826f3e`) |
+
+**Lesson for the next upgrade.** The structural guard in `patches.py` checks that patched
+symbols *exist*. That is necessary but not sufficient — the executor swap kept every symbol
+alive while removing them from the execution path. When upgrading CrewAI, check
+**reachability** too: which executor `Agent` actually instantiates, and whether the patched
+methods are on it. `patches._check_executor_reachability()` now logs this at startup.
+
+### Deferred — pick these up next
+
+- [ ] **TTS reads the first reply in the wrong language.** Observed in the tutor: the opening
+      line `"Bonjour ! Ça va très bien, merci ! Et toi ? Je m'appelle [Assistant], je suis ton
+      tuteur de français."` was spoken with an English voice, mangling the French. Every
+      sentence *after* the first was detected correctly. Suspect the language sniff in
+      `tts.py` runs before the target language is known, or `langdetect` is being fed too
+      short a sample and losing to the bracketed `[Assistant]` placeholder. Fix: pass the
+      session's target language explicitly to `/tts/speak` instead of sniffing, and fall back
+      to detection only when no target language is set.
+- [ ] **Port P3 to the new executor, then unpin.** Agents currently pin
+      `executor_class=CrewAgentExecutor` via `patches.executor_kwargs()` because all five
+      patches target it, and it is what the app was tested against. `CrewAgentExecutor` is
+      deprecated upstream and will be removed. Port the context-length handling to
+      `crewai.experimental.AgentExecutor`, verify with `CREWAI_EXECUTOR=experimental`, then
+      drop the pin.
+- [ ] **`tests/test_titi.py` hits a live Ollama model at collection time**, so it fails the
+      whole run when `llama3.1:8b` is absent. All other suites are excluded from this problem.
+      Mark it `@pytest.mark.integration` and move the model call inside the test body.
+- [ ] Pytest exits 0 but aborts at interpreter teardown (`terminate called without an active
+      exception`) once the app is imported. Cosmetic, pre-existing, not STT-related.
+
+### Corrections to the older sections below
+
+- **R2 (per-user concurrency) is DONE** — `main.py` holds per-user dicts for crews,
+  semaphores and cancel events.
+- **C3 (multi-instrument) is DONE** — `musicxml_builder.py` already emits a full `part-list`
+  with per-part `score-part` and `midi-instrument`.
+- **R1 (monkey-patch isolation) is DONE** — patches live in `patches.py` with tests.
+- **R3 is still open and still real**: `/chat/cancel` sets an event that `_run_crew` never
+  reads, so the worker thread runs to completion holding the GPU, and the early-exit `return`
+  releases the semaphore while that thread is still alive.
+
+---
+
+## COMPOSER — why the music is weak, and what would actually fix it
+
+The composer is *functional* but the output is musically naive. This is not a bug in
+`musicxml_builder.py` (which is fine) and not a prompting problem that more instructions will
+solve. It is structural:
+
+**A general-purpose LLM emitting notes one at a time has no musical memory.** It cannot hear
+what it wrote four bars ago, so it produces locally-plausible, globally-incoherent note
+sequences — no motivic development, no phrase structure, no harmonic direction. That is
+exactly what "kindergarten level" sounds like. More prompt engineering will not fix it,
+because the model is being asked to do the one thing it is worst at.
+
+### The fix: move structure out of the LLM and into code
+
+Let the LLM make **high-level** decisions it is genuinely good at (form, mood, instrumentation,
+harmonic plan in Roman numerals, a short motif). Let deterministic code **realise** those
+decisions into notes, where the rules are well-defined and a computer never forgets bar 4.
+
+1. **`music21`** (MIT, BSD-licensed) — the single highest-value addition.
+   - Validate generated scores: voice-leading, parallel fifths/octaves, instrument ranges.
+   - Realise a Roman-numeral progression into actual voiced chords (`roman.RomanNumeral`).
+   - Motivic development for free: transposition, inversion, retrograde, augmentation and
+     diminution are one-liners. Applying these to a single generated motif is what makes music
+     sound *composed* rather than sampled.
+   - MIDI export and round-trip MusicXML parsing, replacing hand-rolled work.
+2. **Constrain the LLM's output shape** with Ollama's `format` parameter (JSON schema /
+   grammar-constrained decoding). The model then *cannot* emit malformed JSON, which deletes
+   most of `musicxml_fix.py` (506 lines) and the repair layer in `composer/crew.py` rather
+   than testing them harder.
+3. **Two-stage generation.** Stage 1: LLM returns a *plan* — form (AABA, 12-bar blues…), key
+   plan with modulations, a 2-bar motif, harmonic rhythm. Stage 2: code expands the plan,
+   using music21 to voice chords and develop the motif. The LLM never emits a long note list.
+4. **In-browser playback (OSMD + Tone.js).** Currently the only output is a download, so every
+   iteration costs a round-trip through MuseScore. Until you can hear a change in two seconds,
+   tuning musical quality is impractical — this gates all the work above.
+
+### Worth evaluating, but bigger commitments
+
+- **Symbolic music models** instead of a general LLM for the note-level work: the Anticipatory
+  Music Transformer, or MMM-style multi-track models. These are trained on symbolic music and
+  have real musical structure, unlike a chat model. Runs alongside Ollama on the same GPU.
+- **`abjad`** if engraving quality matters more than playback (LilyPond backend).
+- Missing MusicXML expression, once the above lands: dynamics, articulations, slurs and
+  mid-score key changes (`key_changes`) are all still unimplemented — see C1/C2 below.
 
 ---
 

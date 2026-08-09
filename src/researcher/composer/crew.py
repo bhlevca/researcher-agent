@@ -14,6 +14,7 @@ from crewai import Agent, Crew, Process, Task, LLM
 from crewai.agent.planning_config import PlanningConfig
 
 from researcher.config import probe_model_capabilities, TOOL_CAPABLE_MODEL
+import researcher.patches as _patches  # noqa: F401 — applies CrewAI compatibility patches
 from researcher.composer.tools import COMPOSER_TOOLS
 from researcher.composer.musicxml_fix import fix_musicxml
 from researcher.composer.musicxml_builder import build_musicxml
@@ -202,6 +203,7 @@ class ComposerCrew:
             max_retry_limit=2,
             respect_context_window=True,
             planning_config=planning,
+            **_patches.executor_kwargs(),
         )
 
     def _render_task(self, task_key: str, variables: dict) -> tuple[str, str]:

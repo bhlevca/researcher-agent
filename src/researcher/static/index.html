@@ -152,6 +152,11 @@
                 <input type="range" id="param-planning_max_attempts" min="1" max="5" step="1" value="3" oninput="updateParamDisplay('planning_max_attempts')">
             </div>
             <div class="llm-param-group">
+                <div class="llm-param-label"><span>Max Agent Steps</span><span class="llm-param-value" id="val-max_iter">25</span></div>
+                <div class="llm-param-hint">Hard ceiling on reasoning steps per request. Each step is a full LLM call (~20s on a 24B model), so this caps worst-case wait time. Raise it only for genuinely multi-step research. 6–12 recommended.</div>
+                <input type="range" id="param-max_iter" min="3" max="25" step="1" value="25" oninput="updateParamDisplay('max_iter')">
+            </div>
+            <div class="llm-param-group">
                 <div class="llm-param-label"><span>Request Timeout (sec)</span><span class="llm-param-value" id="val-crew_timeout_sec">300</span></div>
                 <div class="llm-param-hint">Maximum seconds the agent may run before timing out. Increase for complex or long research tasks. 60–900 recommended.</div>
                 <input type="range" id="param-crew_timeout_sec" min="60" max="900" step="30" value="300" oninput="updateParamDisplay('crew_timeout_sec')">

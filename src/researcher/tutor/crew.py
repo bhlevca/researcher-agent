@@ -16,6 +16,7 @@ from crewai import Agent, Crew, Process, Task, LLM
 from crewai.agent.planning_config import PlanningConfig
 
 from researcher.config import probe_model_capabilities, TOOL_CAPABLE_MODEL
+import researcher.patches as _patches  # noqa: F401 — applies CrewAI compatibility patches
 from researcher.tutor.tools import TUTOR_TOOLS
 
 logger = logging.getLogger(__name__)
@@ -206,6 +207,7 @@ class TutorCrew:
             max_retry_limit=2,
             respect_context_window=True,
             planning_config=planning,
+            **_patches.executor_kwargs(),
         )
 
     def _render_task(self, task_key: str, variables: dict) -> tuple[str, str]:

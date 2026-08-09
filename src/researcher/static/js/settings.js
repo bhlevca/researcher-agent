@@ -42,7 +42,7 @@ async function toggleMemoryDepth() {
 const LLM_PARAM_KEYS = [
     'temperature', 'top_k', 'top_p', 'min_p',
     'repeat_penalty', 'frequency_penalty', 'presence_penalty',
-    'num_predict', 'num_ctx', 'seed', 'planning_max_attempts', 'crew_timeout_sec'
+    'num_predict', 'num_ctx', 'seed', 'planning_max_attempts', 'max_iter', 'crew_timeout_sec'
 ];
 
 function updateParamDisplay(key) {
@@ -65,7 +65,7 @@ function getParamValues() {
     for (const key of LLM_PARAM_KEYS) {
         const el = document.getElementById('param-' + key);
         if (el) {
-            params[key] = ['top_k', 'num_predict', 'num_ctx', 'seed', 'planning_max_attempts', 'crew_timeout_sec'].includes(key)
+            params[key] = ['top_k', 'num_predict', 'num_ctx', 'seed', 'planning_max_attempts', 'max_iter', 'crew_timeout_sec'].includes(key)
                 ? parseInt(el.value, 10)
                 : parseFloat(el.value);
         }

@@ -1,5 +1,11 @@
-"""Whisper speech-to-text and pronunciation scoring endpoints."""
+"""Whisper speech-to-text and pronunciation scoring endpoints.
 
+Transcription runs on faster-whisper (CTranslate2).  Compared to openai-whisper
+it is roughly 4x faster at the same model size and, importantly, pulls in no
+numba/triton, so a NumPy major bump cannot take speech recognition offline.
+"""
+
+import os
 import asyncio
 import re
 import tempfile
@@ -58,6 +64,9 @@ logger = logging.getLogger(__name__)
 _whisper_model = None
 _whisper_lock = threading.Lock()
 
+# Silero VAD pre-filter; disable with WHISPER_VAD=0 if it clips quiet speech.
+_WHISPER_VAD = os.getenv("WHISPER_VAD", "1") == "1"
+
 # Unicode script ranges for major language families
 _SCRIPT_RANGES = {
     "latin":    re.compile(r'[\u0000-\u024F\u1E00-\u1EFF]'),
@@ -101,18 +110,71 @@ def _has_script_mismatch(text: str, lang: str) -> bool:
     return dominant not in expected
 
 
+class _FasterWhisperAdapter:
+    """Presents faster-whisper's ``(segments, info)`` API as an openai-whisper dict.
+
+    Both endpoints below filter Whisper's *segments* (by no-speech probability,
+    confidence, and Unicode script) rather than trusting the joined text, so the
+    adapter normalises to that same shape.  Keeping the dict contract here means
+    the filtering logic — and its tests — stay independent of the STT backend.
+    """
+
+    # openai-whisper spelled this ``logprob_threshold``; faster-whisper uses
+    # ``log_prob_threshold``.  Translated so callers keep one vocabulary.
+    _RENAMED_OPTS = {"logprob_threshold": "log_prob_threshold"}
+
+    def __init__(self, model):
+        self._model = model
+
+    def transcribe(self, path: str, **opts) -> dict:
+        for old, new in self._RENAMED_OPTS.items():
+            if old in opts:
+                opts[new] = opts.pop(old)
+
+        # Silero VAD drops silent regions before decoding.  This is a stronger
+        # defence against the classic "Thank you for watching." hallucination on
+        # near-silent mic clips than post-hoc no_speech_prob filtering alone.
+        opts.setdefault("vad_filter", _WHISPER_VAD)
+
+        segments, info = self._model.transcribe(path, **opts)
+        # segments is a lazy generator — decoding happens as it is consumed.
+        seg_dicts = [
+            {
+                "text": s.text,
+                "no_speech_prob": s.no_speech_prob,
+                "avg_logprob": s.avg_logprob,
+            }
+            for s in segments
+        ]
+        return {
+            "text": "".join(s["text"] for s in seg_dicts).strip(),
+            "language": info.language,
+            "segments": seg_dicts,
+        }
+
+
 def _get_whisper():
     global _whisper_model
     if _whisper_model is None:
         with _whisper_lock:
             if _whisper_model is None:
-                import whisper
+                from faster_whisper import WhisperModel
 
                 # "small" has dramatically better multilingual accuracy than "base"
-                # (~244M params vs 74M). Still runs on CPU in ~3-5s for short clips.
+                # (~244M params vs 74M). int8 on CPU keeps it off the GPU, which is
+                # already contested by Ollama and the image pipelines.
                 model_size = os.getenv("WHISPER_MODEL", "small")
-                logger.info("Loading Whisper %s model (CPU)…", model_size)
-                _whisper_model = whisper.load_model(model_size, device="cpu")
+                device = os.getenv("WHISPER_DEVICE", "cpu")
+                compute_type = os.getenv(
+                    "WHISPER_COMPUTE_TYPE", "int8" if device == "cpu" else "float16"
+                )
+                logger.info(
+                    "Loading faster-whisper %s (device=%s, compute_type=%s)…",
+                    model_size, device, compute_type,
+                )
+                _whisper_model = _FasterWhisperAdapter(
+                    WhisperModel(model_size, device=device, compute_type=compute_type)
+                )
                 logger.info("Whisper model ready.")
     return _whisper_model
 
@@ -124,7 +186,7 @@ def register_speech_routes(app):
     async def transcribe(
         request: Request, file: UploadFile = File(...), language: str = "en"
     ):
-        """Transcribe audio using Whisper (CPU). Accepts any ffmpeg-supported audio format.
+        """Transcribe audio with faster-whisper. Accepts any PyAV-decodable format.
 
         Pass language=auto to let Whisper auto-detect the spoken language.
         """

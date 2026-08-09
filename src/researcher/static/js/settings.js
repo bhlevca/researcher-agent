@@ -42,7 +42,7 @@ async function toggleMemoryDepth() {
 const LLM_PARAM_KEYS = [
     'temperature', 'top_k', 'top_p', 'min_p',
     'repeat_penalty', 'frequency_penalty', 'presence_penalty',
-    'num_predict', 'num_ctx', 'seed', 'planning_max_attempts'
+    'num_predict', 'num_ctx', 'seed', 'planning_max_attempts', 'max_iter', 'crew_timeout_sec'
 ];
 
 function updateParamDisplay(key) {
@@ -65,7 +65,7 @@ function getParamValues() {
     for (const key of LLM_PARAM_KEYS) {
         const el = document.getElementById('param-' + key);
         if (el) {
-            params[key] = ['top_k', 'num_predict', 'num_ctx', 'seed', 'planning_max_attempts'].includes(key)
+            params[key] = ['top_k', 'num_predict', 'num_ctx', 'seed', 'planning_max_attempts', 'max_iter', 'crew_timeout_sec'].includes(key)
                 ? parseInt(el.value, 10)
                 : parseFloat(el.value);
         }
@@ -95,8 +95,10 @@ function closeLlmSettings() {
 
 // ── Image Parameters helpers ──
 const IMG_PARAM_KEYS = [
+    'image_backend',
     'hires_enabled', 'hires_width', 'hires_height',
-    'tile_overlap', 'hires_strength', 'tile_width', 'tile_height'
+    'tile_overlap', 'hires_strength', 'realesrgan_enabled',
+    'tile_width', 'tile_height'
 ];
 
 function updateImgParamDisplay(key) {
@@ -104,7 +106,13 @@ function updateImgParamDisplay(key) {
     const valEl = document.getElementById('val-img-' + key);
     if (!el || !valEl) return;
     if (el.type === 'checkbox') {
-        valEl.textContent = el.checked ? 'On' : 'Off';
+        if (key === 'realesrgan_enabled') {
+            valEl.textContent = el.checked ? 'Real-ESRGAN' : 'High-Pass';
+        } else {
+            valEl.textContent = el.checked ? 'On' : 'Off';
+        }
+    } else if (el.tagName === 'SELECT') {
+        valEl.textContent = el.value;
     } else {
         valEl.textContent = el.value;
     }
@@ -128,11 +136,14 @@ function setImgParamUI(params) {
 function getImgParamValues() {
     const params = {};
     const floatKeys = new Set(['hires_strength']);
+    const stringKeys = new Set(['image_backend']);
     for (const key of IMG_PARAM_KEYS) {
         const el = document.getElementById('param-img-' + key);
         if (!el) continue;
         if (el.type === 'checkbox') {
             params[key] = el.checked;
+        } else if (stringKeys.has(key)) {
+            params[key] = el.value;
         } else if (floatKeys.has(key)) {
             params[key] = parseFloat(el.value);
         } else {

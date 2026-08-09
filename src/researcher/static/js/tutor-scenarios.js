@@ -1,0 +1,165 @@
+// ══════════════════════════════════════════════
+// ── Situational Dialog Scenarios ──
+// ══════════════════════════════════════════════
+
+let _activeScenario = null;
+let _scenarioMessages = [];
+
+async function loadScenarios() {
+    if (!tutorSessionId) return;
+    const level = (document.getElementById('scenario-level-filter') || {}).value || '';
+    const cards = document.getElementById('scenario-cards');
+    const active = document.getElementById('scenario-active');
+    if (!cards) return;
+    cards.innerHTML = '<div style="color:var(--muted);font-size:0.85rem;">Loading…</div>';
+    active.style.display = 'none';
+
+    try {
+        const url = '/tutor/scenarios' + (level ? '?level=' + level : '');
+        const resp = await fetch(url, { headers: tutorAuthHeaders() });
+        if (!resp.ok) { cards.innerHTML = ''; return; }
+        const data = await resp.json();
+        cards.innerHTML = '';
+        (data.scenarios || []).forEach(s => {
+            const card = document.createElement('div');
+            card.style.cssText = 'background:var(--surface);border:1px solid #1a3a6e;border-radius:0.6rem;padding:0.75rem;cursor:pointer;transition:border-color 0.2s;';
+            card.onmouseover = () => { card.style.borderColor = '#e94560'; };
+            card.onmouseout = () => { card.style.borderColor = '#1a3a6e'; };
+            card.innerHTML =
+                '<div style="font-weight:600;font-size:0.9rem;margin-bottom:0.3rem;">' + escapeHtml(s.title) + '</div>' +
+                '<div style="font-size:0.75rem;color:#e94560;margin-bottom:0.4rem;">' + escapeHtml(s.level) + ' · ' + escapeHtml(s.role_student || '') + '</div>' +
+                '<div style="font-size:0.8rem;color:var(--muted);">' + escapeHtml(s.description || '') + '</div>';
+            card.onclick = () => startScenario(s);
+            cards.appendChild(card);
+        });
+        if (!data.scenarios || !data.scenarios.length) {
+            cards.innerHTML = '<div style="color:var(--muted);font-size:0.85rem;">No scenarios for this level.</div>';
+        }
+    } catch (e) { cards.innerHTML = ''; }
+}
+
+async function startScenario(scenario) {
+    _activeScenario = scenario;
+    _scenarioMessages = [];
+    document.getElementById('scenario-cards').style.display = 'none';
+    const active = document.getElementById('scenario-active');
+    active.style.display = 'flex';
+    const label = document.getElementById('scenario-title-label');
+    label.textContent = scenario.title;
+    const chat = document.getElementById('scenario-chat');
+    chat.innerHTML = '';
+
+    // Auto-generate opening line from LLM in the target language
+    const thinkingBox = document.createElement('div');
+    thinkingBox.className = 'chat-message assistant';
+    thinkingBox.innerHTML = '<span class="pulse"></span>';
+    chat.appendChild(thinkingBox);
+    chat.scrollTop = chat.scrollHeight;
+
+    try {
+        const resp = await fetch('/tutor/chat', {
+            method: 'POST',
+            headers: tutorJsonHeaders(),
+            body: JSON.stringify({
+                session_id: tutorSessionId,
+                message: '__start__',
+                mode: 'scenario',
+                scenario_id: scenario.id,
+                save_transcript: false,
+            }),
+        });
+        thinkingBox.remove();
+        if (resp.ok) {
+            const result = await processTutorSSE(resp, null, []);
+            if (result && result.response) {
+                const msg = document.createElement('div');
+                msg.className = 'chat-message assistant';
+                msg.innerHTML = '<strong>' + escapeHtml(scenario.role_tutor) + ':</strong> ' + renderContent(result.response);
+                chat.appendChild(msg);
+                _scenarioMessages.push({ role: 'assistant', content: result.response });
+                chat.scrollTop = chat.scrollHeight;
+            }
+        }
+    } catch (e) {
+        thinkingBox.remove();
+    }
+}
+
+function exitScenario() {
+    _activeScenario = null;
+    _scenarioMessages = [];
+    document.getElementById('scenario-active').style.display = 'none';
+    document.getElementById('scenario-cards').style.display = 'grid';
+}
+
+async function sendScenarioMessage() {
+    if (!_activeScenario || !tutorSessionId) { tutorShowToast('Start a scenario first'); return; }
+    const input = document.getElementById('scenario-input');
+    const text = (input.value || '').trim();
+    if (!text) return;
+    input.value = '';
+
+    const chat = document.getElementById('scenario-chat');
+    const userMsg = document.createElement('div');
+    userMsg.className = 'chat-message user';
+    userMsg.innerHTML = '<strong>' + escapeHtml(_activeScenario.role_student) + ':</strong> ' + escapeHtml(text);
+    chat.appendChild(userMsg);
+    chat.scrollTop = chat.scrollHeight;
+
+    _scenarioMessages.push({ role: 'user', content: text });
+
+    // Placeholder while streaming
+    const thinkingBox = document.createElement('div');
+    thinkingBox.className = 'chat-message assistant';
+    thinkingBox.innerHTML = '<span class="pulse"></span>';
+    chat.appendChild(thinkingBox);
+    chat.scrollTop = chat.scrollHeight;
+
+    try {
+        const resp = await fetch('/tutor/chat', {
+            method: 'POST',
+            headers: tutorJsonHeaders(),
+            body: JSON.stringify({
+                session_id: tutorSessionId,
+                message: text,
+                mode: 'scenario',
+                scenario_id: _activeScenario.id,
+                save_transcript: true,
+            }),
+        });
+        if (!resp.ok) { thinkingBox.remove(); tutorShowToast('Failed'); return; }
+
+        const reasoningLines = [];
+        const result = await processTutorSSE(resp, null, reasoningLines);
+        thinkingBox.remove();
+
+        if (result && result.response) {
+            const aMsg = document.createElement('div');
+            aMsg.className = 'chat-message assistant';
+            let html = '<strong>' + escapeHtml(_activeScenario.role_tutor) + ':</strong> ' + renderContent(result.response);
+            if (reasoningLines.length) {
+                html += '<details style="margin-top:0.4rem;font-size:0.72rem;color:#64748b;">' +
+                    '<summary style="cursor:pointer;">reasoning</summary>' +
+                    '<pre style="white-space:pre-wrap;margin:0.3rem 0 0;">' + escapeHtml(reasoningLines.join('\n')) + '</pre>' +
+                    '</details>';
+            }
+            aMsg.innerHTML = html;
+            chat.appendChild(aMsg);
+            _scenarioMessages.push({ role: 'assistant', content: result.response });
+            chat.scrollTop = chat.scrollHeight;
+        }
+    } catch (e) {
+        thinkingBox.remove();
+        tutorShowToast('Error: ' + e.message);
+    }
+}
+
+// Enter key to send
+document.addEventListener('DOMContentLoaded', () => {
+    const inp = document.getElementById('scenario-input');
+    if (inp) {
+        inp.addEventListener('keydown', e => {
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendScenarioMessage(); }
+        });
+    }
+});

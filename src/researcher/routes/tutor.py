@@ -11,6 +11,7 @@ import re
 import json
 import queue
 import asyncio
+import threading
 import logging
 
 from fastapi import HTTPException, Request
@@ -18,6 +19,7 @@ from fastapi.responses import StreamingResponse
 
 from researcher.auth import get_current_user
 from researcher.config import _QueueWriter, _SESSION_ID_RE
+from researcher.tutor.crew import TutorCrew
 
 from researcher.tutor.models import (
     TutorSessionCreate,
@@ -35,6 +37,7 @@ from researcher.tutor.storage import (
     get_tutor_session,
     update_tutor_session_messages,
     delete_tutor_session,
+    set_topic_index,
     add_vocabulary,
     add_vocabulary_batch,
     list_vocabulary,
@@ -55,6 +58,15 @@ from researcher.tutor.storage import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _get_tutor_crew(request: Request, uid: str) -> TutorCrew:
+    """Return the per-user TutorCrew, creating it on first access."""
+    if uid not in request.app.state.tutor_crews:
+        request.app.state.tutor_crews[uid] = TutorCrew(
+            model=request.app.state.current_model
+        )
+    return request.app.state.tutor_crews[uid]
 
 
 def _validate_sid(session_id: str):
@@ -102,9 +114,17 @@ def _run_tutor_crew(crew, q: queue.Queue):
             crewai_event_bus.off(event_type, handler)
 
 
-async def _stream_tutor_crew(crew, request: Request):
+async def _stream_tutor_crew(crew, request: Request, uid: str, timeout_sec: int | None = None, on_complete=None):
     """Generic SSE streamer for any tutor crew run."""
-    semaphore = request.app.state.crew_semaphore
+    # Lazy-init per-user semaphore and cancel event
+    if uid not in request.app.state.crew_semaphores:
+        request.app.state.crew_semaphores[uid] = asyncio.Semaphore(1)
+    if uid not in request.app.state.cancel_events:
+        request.app.state.cancel_events[uid] = threading.Event()
+
+    semaphore = request.app.state.crew_semaphores[uid]
+    if timeout_sec is None:
+        timeout_sec = request.app.state.crew_timeout
     q: queue.Queue = queue.Queue()
 
     _verbose_noise = re.compile(
@@ -124,26 +144,38 @@ async def _stream_tutor_crew(crew, request: Request):
         return True
 
     async def event_stream():
-        cancel = request.app.state.cancel_event
+        cancel = request.app.state.cancel_events[uid]
         cancel.clear()
         async with semaphore:
             loop = asyncio.get_running_loop()
             future = loop.run_in_executor(None, lambda: _run_tutor_crew(crew, q))
             all_lines: list[str] = []
+            elapsed = 0.0
+            early_exit: str | None = None  # "cancelled" | "timeout"
 
             while not future.done():
-                if cancel.is_set():
+                if cancel.is_set() and early_exit is None:
+                    early_exit = "cancelled"
                     yield _sse("cancelled", "Request cancelled by user")
-                    return
+                if elapsed >= timeout_sec and early_exit is None:
+                    early_exit = "timeout"
+                    yield _sse("error", f"Request timed out after {timeout_sec}s")
                 await asyncio.sleep(0.15)
+                elapsed += 0.15
                 while not q.empty():
                     try:
                         line = q.get_nowait()
                         all_lines.append(line)
-                        if _should_show(line):
+                        if early_exit is None and _should_show(line):
                             yield _sse("reasoning", line)
                     except queue.Empty:
                         break
+
+            if early_exit is not None:
+                # Drain queue silently; semaphore releases after thread finished
+                while not q.empty():
+                    q.get_nowait()
+                return
 
             # Drain remaining
             while not q.empty():
@@ -174,6 +206,13 @@ async def _stream_tutor_crew(crew, request: Request):
                     "reasoning": all_lines,
                 },
             )
+
+            if on_complete is not None:
+                try:
+                    await on_complete(response_text)
+                except Exception as _cb_err:
+                    import logging as _log
+                    _log.getLogger(__name__).warning("on_complete error: %s", _cb_err)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -238,6 +277,33 @@ def register_tutor_routes(app):
     # Conversation (SSE streaming)
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Scenarios (situational dialogs)
+    # ------------------------------------------------------------------
+
+    import yaml as _scenarios_yaml
+    from pathlib import Path as _scenarios_path
+
+    _SCENARIOS_PATH = _scenarios_path(__file__).parent.parent / "tutor" / "scenarios.yaml"
+    _scenarios_cache: list = []
+
+    def _load_scenarios() -> list:
+        if not _scenarios_cache:
+            try:
+                with open(_SCENARIOS_PATH, "r", encoding="utf-8") as f:
+                    _scenarios_cache.extend(_scenarios_yaml.safe_load(f) or [])
+            except Exception as exc:
+                logger.warning("Failed to load scenarios.yaml: %s", exc)
+        return _scenarios_cache
+
+    @app.get("/tutor/scenarios")
+    async def tutor_list_scenarios(level: str = ""):
+        """Return available roleplay scenarios, optionally filtered by level."""
+        scenarios = _load_scenarios()
+        if level:
+            scenarios = [s for s in scenarios if s.get("level", "") == level]
+        return {"scenarios": scenarios}
+
     @app.post("/tutor/chat")
     async def tutor_chat(req: TutorChatRequest, request: Request):
         """Conversational exchange with the tutor agent — SSE streaming."""
@@ -249,18 +315,64 @@ def register_tutor_routes(app):
         if not session:
             raise HTTPException(status_code=404, detail="Tutor session not found")
 
-        tutor_crew = request.app.state.tutor_crew
+        uid = user["id"]
+        tutor_crew = _get_tutor_crew(request, uid)
         context = _build_tutor_context(session["messages"])
 
-        crew = tutor_crew.build_conversation_crew(
-            message=req.message,
-            context=context,
-            target_lang=session["target_lang"],
-            native_lang=session["native_lang"],
-            level=session["level"],
-        )
+        scenario = None
+        if req.mode == "scenario" and req.scenario_id:
+            scenario = next(
+                (s for s in _load_scenarios() if s.get("id") == req.scenario_id),
+                None,
+            )
+            if not scenario:
+                raise HTTPException(status_code=404, detail="Scenario not found")
+            crew = tutor_crew.build_scenario_crew(
+                message=req.message,
+                context=context,
+                target_lang=session["target_lang"],
+                native_lang=session["native_lang"],
+                level=session["level"],
+                scenario=scenario,
+            )
+        else:
+            crew = tutor_crew.build_conversation_crew(
+                message=req.message,
+                context=context,
+                target_lang=session["target_lang"],
+                native_lang=session["native_lang"],
+                level=session["level"],
+            )
 
-        return await _stream_tutor_crew(crew, request)
+        _scenario_ref = scenario  # capture for closure
+
+        async def _save_chat_vocab(response_text: str):
+            # Save vocabulary extracted from response
+            vocab_entries = tutor_crew.extract_vocabulary_from_response(response_text)
+            if vocab_entries:
+                await add_vocabulary_batch(
+                    db, uid, req.session_id, vocab_entries,
+                    target_lang=session["target_lang"],
+                )
+            # Auto-save scenario transcript to lesson_plans after each turn
+            if _scenario_ref and req.save_transcript:
+                updated_context = _build_tutor_context(session["messages"])
+                transcript = (
+                    f"# Scenario: {_scenario_ref.get('title', '')}\n\n"
+                    f"**Setting**: {_scenario_ref.get('setting', '')}\n"
+                    f"**Your role**: {_scenario_ref.get('role_student', '')}\n\n"
+                    f"---\n\n{updated_context}"
+                )
+                await save_lesson_plan(
+                    db, uid, req.session_id,
+                    topic=f"Scenario: {_scenario_ref.get('title', '')}",
+                    lesson_type="scenario",
+                    content={"markdown": transcript},
+                )
+
+        return await _stream_tutor_crew(crew, request, uid,
+            timeout_sec=tutor_crew.get_llm_params().get("crew_timeout_sec"),
+            on_complete=_save_chat_vocab)
 
     # ------------------------------------------------------------------
     # Lesson Plans
@@ -277,7 +389,8 @@ def register_tutor_routes(app):
         if not session:
             raise HTTPException(status_code=404, detail="Tutor session not found")
 
-        tutor_crew = request.app.state.tutor_crew
+        uid = user["id"]
+        tutor_crew = _get_tutor_crew(request, uid)
 
         crew = tutor_crew.build_lesson_crew(
             topic=req.topic,
@@ -287,7 +400,8 @@ def register_tutor_routes(app):
             level=session["level"],
         )
 
-        return await _stream_tutor_crew(crew, request)
+        return await _stream_tutor_crew(crew, request, uid,
+            timeout_sec=tutor_crew.get_llm_params().get("crew_timeout_sec"))
 
     @app.post("/tutor/lessons/save")
     async def tutor_save_lesson(request: Request):
@@ -302,7 +416,7 @@ def register_tutor_routes(app):
         if not session:
             raise HTTPException(status_code=404, detail="Tutor session not found")
 
-        tutor_crew = request.app.state.tutor_crew
+        tutor_crew = _get_tutor_crew(request, user["id"])
 
         # Extract vocabulary from the lesson content and save it
         content_text = body.get("content", "")
@@ -346,6 +460,79 @@ def register_tutor_routes(app):
         if not lesson:
             raise HTTPException(status_code=404, detail="Lesson not found")
         return lesson
+
+    @app.get("/tutor/lessons/{lesson_id}/export")
+    async def tutor_export_lesson(
+        lesson_id: str, request: Request, format: str = "md"
+    ):
+        """Export a lesson plan as Markdown or DOCX."""
+        from fastapi.responses import Response
+
+        user = await get_current_user(request)
+        db = request.app.state.db
+        lesson = await get_lesson_plan(db, lesson_id, user["id"])
+        if not lesson:
+            raise HTTPException(status_code=404, detail="Lesson not found")
+
+        content = lesson.get("content", {})
+        title = lesson.get("title", "Lesson")
+        lang = lesson.get("target_lang", "")
+        level = lesson.get("level", "")
+
+        # Content is stored as {"markdown": text} — unwrap it
+        md_text = content.get("markdown", "") if isinstance(content, dict) else str(content)
+
+        safe = "".join(c if c.isalnum() or c in "-_ " else "_" for c in title).strip()
+
+        if format == "md":
+            return Response(
+                content=md_text.encode("utf-8"),
+                media_type="text/markdown",
+                headers={"Content-Disposition": f'attachment; filename="{safe}.md"'},
+            )
+
+        if format == "docx":
+            try:
+                from docx import Document
+                from docx.shared import Pt, RGBColor
+                import io as _io
+
+                doc = Document()
+                doc.add_heading(title, 0)
+                doc.add_paragraph(f"Language: {lang}  |  Level: {level}  |  Topic: {lesson.get('topic', '')}")
+
+                # Parse markdown line-by-line into DOCX
+                for line in md_text.splitlines():
+                    if line.startswith("### "):
+                        doc.add_heading(line[4:], level=3)
+                    elif line.startswith("## "):
+                        doc.add_heading(line[3:], level=2)
+                    elif line.startswith("# "):
+                        doc.add_heading(line[2:], level=1)
+                    elif line.startswith("- ") or line.startswith("* "):
+                        doc.add_paragraph(line[2:], style="List Bullet")
+                    elif line.startswith("|"):
+                        # Markdown table row — add as plain paragraph
+                        cells = [c.strip() for c in line.strip("|").split("|")]
+                        doc.add_paragraph("  |  ".join(cells))
+                    elif line.strip():
+                        doc.add_paragraph(line)
+
+                buf = _io.BytesIO()
+                doc.save(buf)
+                buf.seek(0)
+                return Response(
+                    content=buf.read(),
+                    media_type="application/vnd.openxmlformats-officedocument"
+                    ".wordprocessingml.document",
+                    headers={"Content-Disposition": f'attachment; filename="{safe}.docx"'},
+                )
+            except ImportError:
+                raise HTTPException(
+                    status_code=400, detail="DOCX export requires python-docx"
+                )
+
+        raise HTTPException(status_code=400, detail="format must be 'md' or 'docx'")
 
     # ------------------------------------------------------------------
     # Vocabulary
@@ -423,7 +610,8 @@ def register_tutor_routes(app):
         if not session:
             raise HTTPException(status_code=404, detail="Tutor session not found")
 
-        tutor_crew = request.app.state.tutor_crew
+        uid = user["id"]
+        tutor_crew = _get_tutor_crew(request, uid)
 
         # Build vocabulary context from the student's saved words
         vocab = await list_vocabulary(db, user["id"], req.session_id)
@@ -458,7 +646,8 @@ def register_tutor_routes(app):
             lesson_context=lesson_ctx,
         )
 
-        return await _stream_tutor_crew(crew, request)
+        return await _stream_tutor_crew(crew, request, uid,
+            timeout_sec=tutor_crew.get_llm_params().get("crew_timeout_sec"))
 
     @app.post("/tutor/quiz/save")
     async def tutor_save_quiz(request: Request):
@@ -470,7 +659,7 @@ def register_tutor_routes(app):
         session_id = body.get("session_id", "")
         _validate_sid(session_id)
 
-        tutor_crew = request.app.state.tutor_crew
+        tutor_crew = _get_tutor_crew(request, user["id"])
         response_text = body.get("response", "")
         questions = tutor_crew.extract_quiz_json(response_text)
         if not questions:
@@ -512,14 +701,62 @@ def register_tutor_routes(app):
         native_lang = session["native_lang"] if session else "English"
         level = session["level"] if session else "A1"
 
-        tutor_crew = request.app.state.tutor_crew
-        graded = await tutor_crew.grade_answers(
-            questions=questions,
-            student_answers=req.answers,
-            target_lang=target_lang,
-            native_lang=native_lang,
-            level=level,
-        )
+        # Split: pronunciation answers have pre-computed scores; the rest go to LLM
+        pre_graded: dict[int, dict] = {}
+        llm_questions = []
+        llm_answers = []
+        for q, ans in zip(questions, req.answers):
+            qid = q.get("id", questions.index(q))
+            # Blank answer — never correct, skip LLM entirely
+            if not (ans.get("answer") or "").strip():
+                pre_graded[qid] = {
+                    "question_id": qid,
+                    "score": 0.0,
+                    "is_correct": False,
+                    "feedback": "No answer provided.",
+                    "correct_answer": q.get("correct_answer", ""),
+                }
+                continue
+            if q.get("type") == "pronunciation":
+                try:
+                    score_val = float(ans.get("answer", "0") or "0")
+                except (ValueError, TypeError):
+                    score_val = 0.0
+                score_val = max(0.0, min(1.0, score_val))
+                pre_graded[qid] = {
+                    "question_id": qid,
+                    "score": score_val,
+                    "is_correct": score_val >= 0.5,
+                    "feedback": "Pronunciation scored automatically.",
+                    "correct_answer": q.get("correct_answer", ""),
+                }
+            else:
+                llm_questions.append(q)
+                llm_answers.append(ans)
+
+        tutor_crew = _get_tutor_crew(request, user["id"])
+        if llm_questions:
+            llm_graded = await tutor_crew.grade_answers(
+                questions=llm_questions,
+                student_answers=llm_answers,
+                target_lang=target_lang,
+                native_lang=native_lang,
+                level=level,
+            )
+        else:
+            llm_graded = []
+
+        # Merge: restore original question order
+        graded_map = {g["question_id"]: g for g in llm_graded}
+        graded_map.update(pre_graded)
+        graded = [graded_map[q.get("id", i)] for i, q in enumerate(questions) if q.get("id", i) in graded_map]
+        if len(graded) < len(questions):
+            # Fallback: fill any gaps
+            present = {g["question_id"] for g in graded}
+            for i, q in enumerate(questions):
+                qid = q.get("id", i)
+                if qid not in present:
+                    graded.append({"question_id": qid, "score": 0.0, "is_correct": False, "feedback": ""})
 
         # Compute integer score (questions with score >= 0.5) and float sum
         score = sum(1 for g in graded if g.get("is_correct"))
@@ -615,7 +852,8 @@ def register_tutor_routes(app):
         # Get recent messages for context
         recent = _build_tutor_context(session["messages"], max_messages=20)
 
-        tutor_crew = request.app.state.tutor_crew
+        uid = user["id"]
+        tutor_crew = _get_tutor_crew(request, uid)
 
         crew = tutor_crew.build_appraisal_crew(
             target_lang=session["target_lang"],
@@ -625,7 +863,8 @@ def register_tutor_routes(app):
             recent_messages=recent,
         )
 
-        return await _stream_tutor_crew(crew, request)
+        return await _stream_tutor_crew(crew, request, uid,
+            timeout_sec=tutor_crew.get_llm_params().get("crew_timeout_sec"))
 
     # ------------------------------------------------------------------
     # Student Stats
@@ -645,6 +884,40 @@ def register_tutor_routes(app):
             "native_lang": session["native_lang"],
             "level": session["level"],
         }
+
+        # Mastery distribution for histogram (levels 0-5)
+        cursor = await db.execute(
+            "SELECT mastery_level, COUNT(*) FROM vocabulary "
+            "WHERE user_id = ? AND session_id = ? GROUP BY mastery_level ORDER BY mastery_level",
+            (user["id"], session_id),
+        )
+        mastery_rows = await cursor.fetchall()
+        mastery_dist = {str(i): 0 for i in range(6)}
+        for row in mastery_rows:
+            mastery_dist[str(row[0])] = row[1]
+        stats["mastery_distribution"] = mastery_dist
+
+        # Recent quiz scores (last 10) for trend chart
+        cursor = await db.execute(
+            "SELECT score_float, total, created_at FROM quiz_results "
+            "WHERE user_id = ? AND session_id = ? AND total > 0 "
+            "ORDER BY created_at DESC LIMIT 10",
+            (user["id"], session_id),
+        )
+        qrows = await cursor.fetchall()
+        stats["quiz_history"] = [
+            {
+                "pct": round(r[0] / r[1] * 100, 1) if r[1] else 0,
+                "date": r[2][:10],
+            }
+            for r in reversed(qrows)
+        ]
+
+        # SRS due count
+        from researcher.tutor.storage import list_vocabulary_due
+        due = await list_vocabulary_due(db, user["id"], session["target_lang"])
+        stats["srs_due_count"] = len(due)
+
         return stats
 
     # ------------------------------------------------------------------
@@ -654,7 +927,7 @@ def register_tutor_routes(app):
     @app.post("/tutor/translate")
     async def tutor_translate(request: Request):
         """Translate text between target and native language using the LLM."""
-        await get_current_user(request)
+        user = await get_current_user(request)
         body = await request.json()
         text = (body.get("text") or "").strip()
         source_lang = body.get("source_lang", "").strip()
@@ -667,7 +940,7 @@ def register_tutor_routes(app):
                 status_code=400, detail="source_lang and target_lang required"
             )
 
-        tutor_crew = request.app.state.tutor_crew
+        tutor_crew = _get_tutor_crew(request, user["id"])
 
         prompt = (
             f"Translate the following text from {source_lang} to {target_lang}.\n"
@@ -703,3 +976,94 @@ def register_tutor_routes(app):
         except Exception as e:
             logger.error("Translation failed: %s", e)
             raise HTTPException(status_code=500, detail=f"Translation failed: {e}")
+
+    # ------------------------------------------------------------------
+    # Curriculum (CEFR topic sequence)
+    # ------------------------------------------------------------------
+
+    import yaml as _yaml
+    from pathlib import Path as _Path
+
+    _CURRICULUM_PATH = _Path(__file__).parent.parent / "tutor" / "curriculum.yaml"
+    _curriculum_cache: dict = {}
+
+    def _load_curriculum() -> dict:
+        if not _curriculum_cache:
+            try:
+                with open(_CURRICULUM_PATH, "r", encoding="utf-8") as f:
+                    _curriculum_cache.update(_yaml.safe_load(f))
+            except Exception as exc:
+                logger.warning("Failed to load curriculum.yaml: %s", exc)
+        return _curriculum_cache
+
+    @app.get("/tutor/curriculum")
+    async def tutor_curriculum():
+        """Return the full CEFR curriculum structure."""
+        return {"curriculum": _load_curriculum()}
+
+    @app.get("/tutor/sessions/{session_id}/curriculum-progress")
+    async def tutor_curriculum_progress(session_id: str, request: Request):
+        """Return current topic and progress within the session's level."""
+        _validate_sid(session_id)
+        user = await get_current_user(request)
+        db = request.app.state.db
+        session = await get_tutor_session(db, session_id, user["id"])
+        if not session:
+            raise HTTPException(status_code=404, detail="Tutor session not found")
+        level = session.get("level", "A1")
+        topic_index = session.get("topic_index", 0)
+        curriculum = _load_curriculum()
+        topics = curriculum.get(level, [])
+        current_topic = topics[topic_index] if topic_index < len(topics) else None
+        return {
+            "level": level,
+            "topic_index": topic_index,
+            "total_topics": len(topics),
+            "current_topic": current_topic,
+            "topics": topics,
+            "pct": round(topic_index / len(topics) * 100) if topics else 0,
+        }
+
+    @app.post("/tutor/sessions/{session_id}/advance-topic")
+    async def tutor_advance_topic(session_id: str, request: Request):
+        """Mark the current topic complete and advance to the next one."""
+        _validate_sid(session_id)
+        user = await get_current_user(request)
+        db = request.app.state.db
+        session = await get_tutor_session(db, session_id, user["id"])
+        if not session:
+            raise HTTPException(status_code=404, detail="Tutor session not found")
+        level = session.get("level", "A1")
+        curriculum = _load_curriculum()
+        topics = curriculum.get(level, [])
+        new_index = min(session.get("topic_index", 0) + 1, max(0, len(topics) - 1))
+        await set_topic_index(db, session_id, new_index)
+        current_topic = topics[new_index] if new_index < len(topics) else None
+        return {
+            "topic_index": new_index,
+            "total_topics": len(topics),
+            "current_topic": current_topic,
+            "pct": round(new_index / len(topics) * 100) if topics else 0,
+        }
+
+    @app.post("/tutor/sessions/{session_id}/prev-topic")
+    async def tutor_prev_topic(session_id: str, request: Request):
+        """Go back to the previous curriculum topic."""
+        _validate_sid(session_id)
+        user = await get_current_user(request)
+        db = request.app.state.db
+        session = await get_tutor_session(db, session_id, user["id"])
+        if not session:
+            raise HTTPException(status_code=404, detail="Tutor session not found")
+        level = session.get("level", "A1")
+        curriculum = _load_curriculum()
+        topics = curriculum.get(level, [])
+        new_index = max(0, session.get("topic_index", 0) - 1)
+        await set_topic_index(db, session_id, new_index)
+        current_topic = topics[new_index] if new_index < len(topics) else None
+        return {
+            "topic_index": new_index,
+            "total_topics": len(topics),
+            "current_topic": current_topic,
+            "pct": round(new_index / len(topics) * 100) if topics else 0,
+        }

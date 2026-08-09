@@ -4,12 +4,15 @@ Manages tutor sessions (separate from regular chat sessions),
 vocabulary entries, lesson plans, and quiz results in SQLite.
 """
 
+import os
 import json
 import uuid
 import logging
 from datetime import datetime, timezone, timedelta
 
 import aiosqlite
+
+SRS_INITIAL_EASE = float(os.environ.get("SRS_INITIAL_EASE", "2.5"))
 
 logger = logging.getLogger(__name__)
 
@@ -70,17 +73,55 @@ async def init_tutor_tables(db: aiosqlite.Connection):
     except Exception:
         pass  # column already exists
 
-    # Migration: add SM-2 SRS columns if missing
+    # Migration: add example and conjugation columns if missing
     for col_sql in (
-        "ALTER TABLE vocabulary ADD COLUMN next_review  TEXT NOT NULL DEFAULT ''",
-        "ALTER TABLE vocabulary ADD COLUMN interval_days INTEGER NOT NULL DEFAULT 1",
-        "ALTER TABLE vocabulary ADD COLUMN ease_factor   REAL    NOT NULL DEFAULT 2.5",
+        "ALTER TABLE vocabulary ADD COLUMN example     TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE vocabulary ADD COLUMN conjugation TEXT NOT NULL DEFAULT ''",
     ):
         try:
             await db.execute(col_sql)
             await db.commit()
         except Exception:
             pass  # column already exists
+
+    # Migration: add SM-2 SRS columns if missing
+    for col_sql in (
+        "ALTER TABLE vocabulary ADD COLUMN next_review  TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE vocabulary ADD COLUMN interval_days INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE vocabulary ADD COLUMN ease_factor   REAL    NOT NULL DEFAULT 2.5",
+        "ALTER TABLE vocabulary ADD COLUMN lapses        INTEGER NOT NULL DEFAULT 0",
+    ):
+        try:
+            await db.execute(col_sql)
+            await db.commit()
+        except Exception:
+            pass  # column already exists
+
+    # Migration: deduplicate vocabulary and add unique constraint
+    # Keep only the row with highest mastery_level per (user_id, target_lang, word)
+    try:
+        await db.execute("""
+            DELETE FROM vocabulary WHERE id NOT IN (
+                SELECT id FROM vocabulary v1
+                WHERE v1.rowid = (
+                    SELECT MAX(v2.rowid) FROM vocabulary v2
+                    WHERE v2.user_id = v1.user_id
+                      AND v2.target_lang = v1.target_lang
+                      AND LOWER(v2.word) = LOWER(v1.word)
+                )
+            )
+        """)
+        await db.commit()
+    except Exception:
+        pass
+    try:
+        await db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_vocab_user_lang_word "
+            "ON vocabulary (user_id, target_lang, LOWER(word))"
+        )
+        await db.commit()
+    except Exception:
+        pass
 
     # Backfill next_review for existing rows that have no value
     try:
@@ -131,6 +172,15 @@ async def init_tutor_tables(db: aiosqlite.Connection):
     try:
         await db.execute(
             "ALTER TABLE quiz_results ADD COLUMN score_float REAL NOT NULL DEFAULT 0.0"
+        )
+        await db.commit()
+    except Exception:
+        pass  # column already exists
+
+    # Migration: add topic_index column for curriculum tracking
+    try:
+        await db.execute(
+            "ALTER TABLE tutor_sessions ADD COLUMN topic_index INTEGER NOT NULL DEFAULT 0"
         )
         await db.commit()
     except Exception:
@@ -207,7 +257,7 @@ async def get_tutor_session(
 ) -> dict | None:
     cursor = await db.execute(
         "SELECT id, user_id, name, target_lang, native_lang, level, "
-        "created_at, updated_at, messages FROM tutor_sessions WHERE id = ?",
+        "created_at, updated_at, messages, topic_index FROM tutor_sessions WHERE id = ?",
         (session_id,),
     )
     row = await cursor.fetchone()
@@ -230,6 +280,7 @@ async def get_tutor_session(
         "created_at": row[6],
         "updated_at": row[7],
         "messages": msgs,
+        "topic_index": row[9] or 0,
     }
 
 
@@ -240,6 +291,16 @@ async def update_tutor_session_messages(
     await db.execute(
         "UPDATE tutor_sessions SET messages = ?, updated_at = ? WHERE id = ?",
         (json.dumps(messages), now, session_id),
+    )
+    await db.commit()
+
+
+async def set_topic_index(
+    db: aiosqlite.Connection, session_id: str, index: int
+):
+    await db.execute(
+        "UPDATE tutor_sessions SET topic_index = ? WHERE id = ?",
+        (max(0, index), session_id),
     )
     await db.commit()
 
@@ -279,6 +340,8 @@ async def add_vocabulary(
     phonetic: str = "",
     part_of_speech: str = "",
     target_lang: str = "",
+    example: str = "",
+    conjugation: str = "",
 ) -> dict:
     vid = uuid.uuid4().hex[:12]
     now = datetime.now(timezone.utc).isoformat()
@@ -286,21 +349,14 @@ async def add_vocabulary(
     await db.execute(
         "INSERT INTO vocabulary "
         "(id, user_id, session_id, target_lang, word, translation, context, phonetic, "
-        "part_of_speech, mastery_level, times_reviewed, times_correct, "
-        "next_review, interval_days, ease_factor, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, 1, 2.5, ?)",
+        "part_of_speech, example, conjugation, mastery_level, times_reviewed, times_correct, "
+        "next_review, interval_days, ease_factor, lapses, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, 1, ?, 0, ?) "
+        "ON CONFLICT (user_id, target_lang, LOWER(word)) DO NOTHING",
         (
-            vid,
-            user_id,
-            session_id,
-            target_lang,
-            word,
-            translation,
-            context,
-            phonetic,
-            part_of_speech,
-            tomorrow,
-            now,
+            vid, user_id, session_id, target_lang, word, translation,
+            context, phonetic, part_of_speech, example, conjugation,
+            tomorrow, SRS_INITIAL_EASE, now,
         ),
     )
     await db.commit()
@@ -311,10 +367,13 @@ async def add_vocabulary(
         "context": context,
         "phonetic": phonetic,
         "part_of_speech": part_of_speech,
+        "example": example,
+        "conjugation": conjugation,
         "mastery_level": 0,
         "next_review": tomorrow,
         "interval_days": 1,
-        "ease_factor": 2.5,
+        "ease_factor": SRS_INITIAL_EASE,
+        "lapses": 0,
         "created_at": now,
     }
 
@@ -335,21 +394,21 @@ async def add_vocabulary_batch(
         await db.execute(
             "INSERT INTO vocabulary "
             "(id, user_id, session_id, target_lang, word, translation, context, phonetic, "
-            "part_of_speech, mastery_level, times_reviewed, times_correct, "
-            "next_review, interval_days, ease_factor, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, 1, 2.5, ?)",
+            "part_of_speech, example, conjugation, mastery_level, times_reviewed, times_correct, "
+            "next_review, interval_days, ease_factor, lapses, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, 1, ?, 0, ?) "
+            "ON CONFLICT (user_id, target_lang, LOWER(word)) DO UPDATE SET "
+            "translation = excluded.translation, "
+            "part_of_speech = CASE WHEN excluded.part_of_speech != '' THEN excluded.part_of_speech ELSE part_of_speech END, "
+            "example = CASE WHEN excluded.example != '' THEN excluded.example ELSE example END, "
+            "conjugation = CASE WHEN excluded.conjugation != '' THEN excluded.conjugation ELSE conjugation END",
             (
-                vid,
-                user_id,
-                session_id,
-                target_lang,
-                e.get("word", ""),
-                e.get("translation", ""),
-                e.get("context", ""),
-                e.get("phonetic", ""),
-                e.get("part_of_speech", ""),
-                tomorrow,
-                now,
+                vid, user_id, session_id, target_lang,
+                e.get("word", ""), e.get("translation", ""),
+                e.get("context", ""), e.get("phonetic", ""),
+                e.get("part_of_speech", ""), e.get("example", ""),
+                e.get("conjugation", ""),
+                tomorrow, SRS_INITIAL_EASE, now,
             ),
         )
         results.append(
@@ -363,35 +422,45 @@ async def add_vocabulary_batch(
     return results
 
 
+def _vocab_row_to_dict(r) -> dict:
+    return {
+        "id": r[0],
+        "word": r[1],
+        "translation": r[2],
+        "context": r[3],
+        "phonetic": r[4],
+        "part_of_speech": r[5],
+        "example": r[6],
+        "conjugation": r[7],
+        "mastery_level": r[8],
+        "times_reviewed": r[9],
+        "times_correct": r[10],
+        "next_review": r[11] or "",
+        "interval_days": r[12] or 1,
+        "ease_factor": r[13] or SRS_INITIAL_EASE,
+        "lapses": r[14] or 0,
+        "created_at": r[15],
+        "difficult": (r[14] or 0) >= 3,
+    }
+
+
+_VOCAB_SELECT = (
+    "SELECT id, word, translation, context, phonetic, part_of_speech, "
+    "example, conjugation, mastery_level, times_reviewed, times_correct, "
+    "next_review, interval_days, ease_factor, lapses, created_at "
+)
+
+
 async def list_vocabulary(
     db: aiosqlite.Connection, user_id: str, session_id: str
 ) -> list[dict]:
     cursor = await db.execute(
-        "SELECT id, word, translation, context, phonetic, part_of_speech, "
-        "mastery_level, times_reviewed, times_correct, "
-        "next_review, interval_days, ease_factor, created_at "
-        "FROM vocabulary WHERE user_id = ? AND session_id = ? ORDER BY created_at DESC",
+        _VOCAB_SELECT
+        + "FROM vocabulary WHERE user_id = ? AND session_id = ? ORDER BY created_at DESC",
         (user_id, session_id),
     )
     rows = await cursor.fetchall()
-    return [
-        {
-            "id": r[0],
-            "word": r[1],
-            "translation": r[2],
-            "context": r[3],
-            "phonetic": r[4],
-            "part_of_speech": r[5],
-            "mastery_level": r[6],
-            "times_reviewed": r[7],
-            "times_correct": r[8],
-            "next_review": r[9] or "",
-            "interval_days": r[10] or 1,
-            "ease_factor": r[11] or 2.5,
-            "created_at": r[12],
-        }
-        for r in rows
-    ]
+    return [_vocab_row_to_dict(r) for r in rows]
 
 
 async def list_vocabulary_by_lang(
@@ -399,31 +468,12 @@ async def list_vocabulary_by_lang(
 ) -> list[dict]:
     """List all vocabulary for a user in a given target language (cross-session)."""
     cursor = await db.execute(
-        "SELECT id, word, translation, context, phonetic, part_of_speech, "
-        "mastery_level, times_reviewed, times_correct, "
-        "next_review, interval_days, ease_factor, created_at "
-        "FROM vocabulary WHERE user_id = ? AND target_lang = ? ORDER BY created_at DESC",
+        _VOCAB_SELECT
+        + "FROM vocabulary WHERE user_id = ? AND target_lang = ? ORDER BY created_at DESC",
         (user_id, target_lang),
     )
     rows = await cursor.fetchall()
-    return [
-        {
-            "id": r[0],
-            "word": r[1],
-            "translation": r[2],
-            "context": r[3],
-            "phonetic": r[4],
-            "part_of_speech": r[5],
-            "mastery_level": r[6],
-            "times_reviewed": r[7],
-            "times_correct": r[8],
-            "next_review": r[9] or "",
-            "interval_days": r[10] or 1,
-            "ease_factor": r[11] or 2.5,
-            "created_at": r[12],
-        }
-        for r in rows
-    ]
+    return [_vocab_row_to_dict(r) for r in rows]
 
 
 async def update_vocabulary_mastery(
@@ -447,18 +497,20 @@ async def update_vocabulary_mastery(
 
 def _sm2_compute(
     interval_days: int, ease_factor: float, times_correct: int, grade: int
-):
+) -> tuple[int, float]:
     """Compute next SM-2 interval and ease_factor.
 
     grade: 0-5  (0=total blackout, 2=incorrect but recalled, 3=correct with difficulty,
                  5=perfect recall)
     Returns (new_interval_days, new_ease_factor).
+    Grades 0-2 are lapses: interval resets to 1.
+    Grades 3-5 progress normally.
     """
-    if grade < 3:
-        # Failed: start over but don't reset ease_factor much
+    is_lapse = grade < 3
+    if is_lapse:
         new_interval = 1
     else:
-        if times_correct == 0:
+        if times_correct <= 0:
             new_interval = 1
         elif times_correct == 1:
             new_interval = 6
@@ -467,14 +519,14 @@ def _sm2_compute(
 
     new_ef = ease_factor + 0.1 - (5 - grade) * (0.08 + (5 - grade) * 0.02)
     new_ef = max(1.3, round(new_ef, 3))
-    return new_interval, new_ef
+    return new_interval, new_ef, is_lapse
 
 
 async def sm2_review(db: aiosqlite.Connection, vocab_id: str, grade: int):
     """Apply the SM-2 algorithm to schedule the next review for a vocabulary item.
 
     grade: 0=blackout, 1-2=fail, 3=pass with effort, 4=correct, 5=perfect.
-    Updates next_review, interval_days, ease_factor in the vocabulary row.
+    Updates next_review, interval_days, ease_factor, lapses in the vocabulary row.
     """
     cursor = await db.execute(
         "SELECT interval_days, ease_factor, times_correct FROM vocabulary WHERE id = ?",
@@ -484,19 +536,21 @@ async def sm2_review(db: aiosqlite.Connection, vocab_id: str, grade: int):
     if not row:
         return
     interval_days = row[0] or 1
-    ease_factor = row[1] or 2.5
+    ease_factor = row[1] or SRS_INITIAL_EASE
     times_correct = row[2] or 0
 
-    new_interval, new_ef = _sm2_compute(
+    new_interval, new_ef, is_lapse = _sm2_compute(
         interval_days, ease_factor, times_correct, grade
     )
     next_review = (
         (datetime.now(timezone.utc) + timedelta(days=new_interval)).date().isoformat()
     )
 
+    lapse_inc = 1 if is_lapse else 0
     await db.execute(
-        "UPDATE vocabulary SET next_review = ?, interval_days = ?, ease_factor = ? WHERE id = ?",
-        (next_review, new_interval, new_ef, vocab_id),
+        "UPDATE vocabulary SET next_review = ?, interval_days = ?, ease_factor = ?, "
+        "lapses = lapses + ? WHERE id = ?",
+        (next_review, new_interval, new_ef, lapse_inc, vocab_id),
     )
     await db.commit()
 
@@ -511,43 +565,22 @@ async def list_vocabulary_due(
     today = datetime.now(timezone.utc).date().isoformat()
     if target_lang:
         cursor = await db.execute(
-            "SELECT id, word, translation, context, phonetic, part_of_speech, "
-            "mastery_level, times_reviewed, times_correct, "
-            "next_review, interval_days, ease_factor, created_at "
-            "FROM vocabulary "
+            _VOCAB_SELECT
+            + "FROM vocabulary "
             "WHERE user_id = ? AND target_lang = ? AND next_review != '' AND next_review <= ? "
             "ORDER BY next_review ASC",
             (user_id, target_lang, today),
         )
     else:
         cursor = await db.execute(
-            "SELECT id, word, translation, context, phonetic, part_of_speech, "
-            "mastery_level, times_reviewed, times_correct, "
-            "next_review, interval_days, ease_factor, created_at "
-            "FROM vocabulary "
+            _VOCAB_SELECT
+            + "FROM vocabulary "
             "WHERE user_id = ? AND next_review != '' AND next_review <= ? "
             "ORDER BY next_review ASC",
             (user_id, today),
         )
     rows = await cursor.fetchall()
-    return [
-        {
-            "id": r[0],
-            "word": r[1],
-            "translation": r[2],
-            "context": r[3],
-            "phonetic": r[4],
-            "part_of_speech": r[5],
-            "mastery_level": r[6],
-            "times_reviewed": r[7],
-            "times_correct": r[8],
-            "next_review": r[9] or "",
-            "interval_days": r[10] or 1,
-            "ease_factor": r[11] or 2.5,
-            "created_at": r[12],
-        }
-        for r in rows
-    ]
+    return [_vocab_row_to_dict(r) for r in rows]
 
 
 async def delete_vocabulary(

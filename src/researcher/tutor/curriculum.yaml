@@ -1,0 +1,74 @@
+# CEFR Curriculum — ordered topic sequence per level
+# Each level has a list of topics; students advance through them in order.
+
+A1:
+  - Greetings and introductions
+  - Numbers and counting
+  - Colors and basic adjectives
+  - Days, months, and dates
+  - Family members
+  - Food and drink basics
+  - Common verbs (to be, to have, to want)
+  - Simple questions and answers
+  - Countries and nationalities
+  - Basic directions
+
+A2:
+  - Shopping and prices
+  - Daily routines
+  - Weather and seasons
+  - Hobbies and free time
+  - Travel and transportation
+  - Body parts and health
+  - At a restaurant
+  - Describing people and places
+  - Past events (simple past)
+  - Future plans
+
+B1:
+  - Work and professions
+  - Education and studies
+  - Expressing opinions
+  - Comparing things
+  - Hypothetical situations (conditional)
+  - News and current events
+  - Environment and nature
+  - Culture and traditions
+  - Telling stories (narrative past)
+  - Problem solving and advice
+
+B2:
+  - Abstract concepts
+  - Formal writing and emails
+  - Debate and argumentation
+  - Media and technology
+  - Literature and arts
+  - Economy and business basics
+  - Idioms and collocations
+  - Academic vocabulary
+  - Complex grammar (subjunctive, passive)
+  - Intercultural communication
+
+C1:
+  - Advanced idiomatic expressions
+  - Nuanced argumentation
+  - Register and style variation
+  - Academic and professional discourse
+  - Literary analysis
+  - Complex subordination and discourse markers
+  - Advanced pragmatics
+  - Specialist vocabulary (law, medicine, science)
+  - Translation and interpretation concepts
+  - Cross-cultural rhetoric
+
+C2:
+  - Mastery of all registers
+  - Near-native fluency refinement
+  - Subtle connotation and pragmatics
+  - Stylistic variation and creativity
+  - Advanced error correction
+  - Professional writing and editing
+  - Oratory and public speaking
+  - Language change and variation
+  - Second language acquisition awareness
+  - Lifelong learning strategies

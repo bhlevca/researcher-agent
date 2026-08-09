@@ -26,42 +26,51 @@ def register_ask_routes(app):
     async def ask(req: AskRequest, request: Request):
         """Programmatic API endpoint. POST JSON with {topic: "..."}. Returns structured response."""
         user = await get_current_user(request)
+        uid = user["id"]
 
         # Ensure runtime model matches the user's saved model.
         db = request.app.state.db
         cursor_model = await db.execute(
-            "SELECT model, llm_params FROM users WHERE id = ?", (user["id"],)
+            "SELECT model, llm_params FROM users WHERE id = ?", (uid,)
         )
         row_model = await cursor_model.fetchone()
         saved_model = row_model[0] if row_model and row_model[0] else None
         effective_model = saved_model or request.app.state.current_model
-        if effective_model != request.app.state.current_model:
+
+        existing_crew = request.app.state.research_crews.get(uid)
+        if existing_crew is None or effective_model != request.app.state.current_model:
             new_crew = ResearchCrew(model=effective_model)
             if row_model and row_model[1]:
                 try:
                     new_crew.update_llm_params(json.loads(row_model[1]))
                 except (json.JSONDecodeError, TypeError):
                     pass
-            request.app.state.research_crew = new_crew
+            request.app.state.research_crews[uid] = new_crew
             request.app.state.current_model = effective_model
+
+        if uid not in request.app.state.crew_semaphores:
+            request.app.state.crew_semaphores[uid] = asyncio.Semaphore(1)
 
         file_context = ""
         if req.file_ids:
-            db = request.app.state.db
-            file_context = await get_file_context(db, user["id"], req.file_ids)
+            file_context = await get_file_context(db, uid, req.file_ids)
 
         topic = file_context + req.topic
-        research_crew = request.app.state.research_crew
+        research_crew = request.app.state.research_crews[uid]
 
         # Ensure image params from DB are applied before generation
         cursor = await db.execute(
-            "SELECT image_params FROM users WHERE id = ?", (user["id"],)
+            "SELECT image_params FROM users WHERE id = ?", (uid,)
         )
         row = await cursor.fetchone()
-        load_image_params_from_json(row[0] if row and row[0] else None)
+        import sys as _sys, json as _json
+        _raw = row[0] if row and row[0] else None
+        _parsed = _json.loads(_raw) if _raw else {}
+        _sys.stderr.write(f"[ASKDBG] image_params from DB: realesrgan_enabled={_parsed.get('realesrgan_enabled', 'MISSING')}\n")
+        load_image_params_from_json(_raw)
 
         crew = research_crew.build_crew(topic)
-        semaphore = request.app.state.crew_semaphore
+        semaphore = request.app.state.crew_semaphores[uid]
 
         q: queue.Queue = queue.Queue()
 

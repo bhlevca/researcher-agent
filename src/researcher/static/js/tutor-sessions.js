@@ -12,6 +12,7 @@ function switchTutorTab(tabName) {
     if (tabName === 'lessons' && tutorSessionId) loadLessons();
     if (tabName === 'quiz' && tutorSessionId) loadQuizHistory();
     if (tabName === 'stats' && tutorSessionId) loadStats();
+    if (tabName === 'scenarios' && tutorSessionId) loadScenarios();
     if (tabName === 'translate' && typeof initTranslateSelects === 'function') initTranslateSelects();
 }
 
@@ -91,6 +92,7 @@ async function createTutorSession() {
             tutorChatHistory = [];
             tutorChat.innerHTML = '';
             updateTutorSessionUI();
+            loadCurriculumProgress();
             tutorShowToast('Session created: ' + name);
         } else {
             tutorShowToast('Failed to create session');
@@ -122,6 +124,9 @@ async function loadTutorSession(id) {
             }
         });
         updateTutorSessionUI();
+        loadCurriculumProgress();
+        loadLessons();
+        loadVocabulary();
         closeTutorSessionsPanel();
         tutorShowToast('Loaded: ' + data.name);
     } catch (e) { tutorShowToast('Error loading session'); }
@@ -129,7 +134,6 @@ async function loadTutorSession(id) {
 
 async function saveTutorSession() {
     if (!tutorSessionId) { tutorShowToast('Create a session first'); return; }
-    if (tutorChatHistory.length === 0) { tutorShowToast('Nothing to save'); return; }
     try {
         const resp = await fetch('/tutor/sessions/' + tutorSessionId, {
             method: 'PUT',

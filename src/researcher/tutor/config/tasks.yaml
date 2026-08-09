@@ -15,9 +15,11 @@ conversation_task:
 
     At the end of your response, add a section:
     ### New Vocabulary
-    | Word | Translation | Part of Speech |
-    |------|-------------|----------------|
-    (list any new words you introduced or that the student should learn)
+    | Word | Translation | Part of Speech | Example | Conjugation |
+    |------|-------------|----------------|---------|-------------|
+    (list any new words you introduced or that the student should learn;
+     for verbs fill in the Conjugation column with present tense forms,
+     leave Conjugation empty for non-verbs)
 
     If the student wrote in {native_lang} and seems to want help translating or
     is asking a question about the language, answer helpfully and then encourage
@@ -82,9 +84,10 @@ quiz_task:
       "id" (integer, 0-based), "type" (string), "question" (string),
       "options" (array or null), "correct_answer" (string).
     Plus type-specific extra fields:
-      matching  → "pairs": [{"left": word, "right": translation}, ...]
-      reorder   → "words": [shuffled word list]
-      listening → "audio_text": phrase the student will hear
+      matching      → "pairs": [{"left": word, "right": translation}, ...]
+      reorder       → "words": [shuffled word list]
+      listening     → "audio_text": phrase the student will hear
+      pronunciation → "target_sentence": the sentence the student must speak aloud
 
     Mix difficulty within the {level} CEFR band.
   expected_output: >
@@ -144,6 +147,48 @@ grade_task:
     score (float 0.0–1.0), is_correct (bool), and feedback (string in {native_lang}).
     The array length must equal the number of input questions.
     The JSON must be parseable by json.loads().
+  agent: language_tutor
+
+scenario_task:
+  description: >
+    You are "{role_tutor}". You are SPEAKING to a {level}-level learner of {target_lang}.
+    EVERY word you say is in {target_lang}. You NEVER use {native_lang} — not one word.
+
+    Scenario: {title}
+    Setting: {setting}
+    Your role: {role_tutor} | Student's role: {role_student}
+
+    Conversation so far:
+    {context}
+
+    Student's latest message: "{message}"
+
+    NOTE: If the student's message is "__start__", this is the opening of the scenario —
+    deliver your first in-character line to kick off the roleplay. Do NOT comment on the
+    word "__start__"; simply begin the dialog naturally.
+
+    LANGUAGE RULE — NON-NEGOTIABLE: Output ONLY {target_lang}. If you find yourself
+    about to write a {native_lang} word, stop and replace it with {target_lang}.
+
+    PEDAGOGY RULES:
+    1. Drive the conversation: always end your turn with a question or prompt that
+       invites the student to respond (e.g. ask what they want, what they prefer,
+       where they are going — anything appropriate to the scenario).
+    2. Keep vocabulary and grammar at {level} CEFR complexity.
+    3. If the student made a clear error, correct it briefly in italics
+       (*Correction: ...* in {target_lang}), then continue without dwelling on it.
+    4. If the student is silent or confused, give a gentle in-character prompt
+       in {target_lang} to move the dialog forward.
+
+    At the end of your reply add:
+    ### New Vocabulary
+    | Word | Translation | Part of Speech | Example | Conjugation |
+    |------|-------------|----------------|---------|-------------|
+    (up to 5 new or difficult words used; fill Conjugation for verbs)
+  expected_output: >
+    An in-character reply entirely in {target_lang} as {role_tutor}, ending with
+    a question or prompt for the student. Optionally one italicised correction.
+    Followed by the New Vocabulary table.
   agent: language_tutor
 
 appraisal_task:

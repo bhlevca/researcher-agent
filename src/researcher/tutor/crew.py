@@ -16,6 +16,7 @@ from crewai import Agent, Crew, Process, Task, LLM
 from crewai.agent.planning_config import PlanningConfig
 
 from researcher.config import probe_model_capabilities, TOOL_CAPABLE_MODEL
+import researcher.patches as _patches  # noqa: F401 — applies CrewAI compatibility patches
 from researcher.tutor.tools import TUTOR_TOOLS
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,7 @@ class TutorCrew:
         "presence_penalty": 0.0,
         "max_iter": 15,
         "planning_max_attempts": 3,
+        "crew_timeout_sec": 300,
     }
 
     def __init__(self, model: str | None = None):
@@ -125,9 +127,12 @@ class TutorCrew:
         target_lang: str,
         native_lang: str,
         level: str,
+        tools=None,
     ) -> Agent:
         """Build the language tutor agent with language-specific config."""
         agent_cfg = self._agents_config["language_tutor"]
+        if tools is None:
+            tools = TUTOR_TOOLS
 
         # Substitute template variables in the YAML config
         subs = {
@@ -195,13 +200,14 @@ class TutorCrew:
             role=_sub(agent_cfg["role"]),
             goal=_sub(agent_cfg["goal"]),
             backstory=backstory,
-            tools=TUTOR_TOOLS,
+            tools=tools,
             llm=self._llm,
             verbose=True,
             max_iter=int(self._llm_params.get("max_iter", 15)),
             max_retry_limit=2,
             respect_context_window=True,
             planning_config=planning,
+            **_patches.executor_kwargs(),
         )
 
     def _render_task(self, task_key: str, variables: dict) -> tuple[str, str]:
@@ -254,6 +260,40 @@ class TutorCrew:
             verbose=True,
         )
 
+    def build_scenario_crew(
+        self,
+        message: str,
+        context: str,
+        target_lang: str,
+        native_lang: str,
+        level: str,
+        scenario: dict,
+    ) -> Crew:
+        """Build a Crew for one turn of a situational dialog roleplay."""
+        agent = self._build_agent(target_lang, native_lang, level)
+        desc, exp = self._render_task(
+            "scenario_task",
+            {
+                "target_lang": target_lang,
+                "native_lang": native_lang,
+                "level": level,
+                "context": context,
+                "message": message,
+                "title": scenario.get("title", ""),
+                "setting": scenario.get("setting", ""),
+                "role_tutor": scenario.get("role_tutor", "Tutor"),
+                "role_student": scenario.get("role_student", "Student"),
+            },
+        )
+        task = Task(description=desc, expected_output=exp, agent=agent, context=[])
+        return Crew(
+            agents=[agent],
+            tasks=[task],
+            process=Process.sequential,
+            memory=False,
+            verbose=True,
+        )
+
     def build_lesson_crew(
         self,
         topic: str,
@@ -263,7 +303,7 @@ class TutorCrew:
         level: str,
     ) -> Crew:
         """Build a Crew for generating a lesson plan."""
-        agent = self._build_agent(target_lang, native_lang, level)
+        agent = self._build_agent(target_lang, native_lang, level, tools=[])
         desc, exp = self._render_task(
             "lesson_task",
             {
@@ -381,6 +421,18 @@ class TutorCrew:
             'The "correct_answer" MUST be ONLY the missing word — never the full sentence. '
             "Do NOT generate any other question type."
         ),
+        "pronunciation": (
+            'You MUST generate ONLY "pronunciation" type questions. '
+            'Each question asks the student to read a sentence aloud. '
+            'Fields REQUIRED for every pronunciation question:\n'
+            '  "question": A short instruction in {native_lang}, e.g. "Read aloud:".\n'
+            '  "target_sentence": the {target_lang} sentence the student must speak.\n'
+            '  "correct_answer": same as target_sentence.\n'
+            '  "options": null.\n'
+            'Choose sentences that contain sounds or words students at the {level} level '
+            'typically find challenging. Keep sentences short (5–10 words).\n'
+            "Do NOT generate any other question type."
+        ),
         "mixed": (
             "Mix question types freely using any combination of: "
             '"vocabulary", "grammar", "translation", "matching", "reorder", '
@@ -396,6 +448,7 @@ class TutorCrew:
         "matching": {"matching"},
         "reorder": {"reorder"},
         "listening": {"listening"},
+        "pronunciation": {"pronunciation"},
         "cloze": {"cloze"},
         "mixed": {
             "vocabulary",
@@ -632,7 +685,7 @@ class TutorCrew:
         recent_messages: str,
     ) -> Crew:
         """Build a Crew for student appraisal."""
-        agent = self._build_agent(target_lang, native_lang, level)
+        agent = self._build_agent(target_lang, native_lang, level, tools=[])
         desc, exp = self._render_task(
             "appraisal_task",
             {
@@ -661,31 +714,36 @@ class TutorCrew:
     def extract_vocabulary_from_response(response: str) -> list[dict]:
         """Parse vocabulary tables from a tutor response.
 
-        Looks for markdown tables with columns like Word | Translation | Part of Speech.
+        Handles 3-column (Word|Translation|POS) and 5-column
+        (Word|Translation|POS|Example|Conjugation) markdown tables.
         Returns a list of dicts suitable for batch vocabulary insertion.
         """
         entries = []
-        # Match markdown table rows (skip header and separator rows)
-        table_re = re.compile(
-            r"^\|([^|]+)\|([^|]+)\|([^|]+)\|",
-            re.MULTILINE,
-        )
+        table_re = re.compile(r"^\|(.+)\|$", re.MULTILINE)
         for m in table_re.finditer(response):
-            word = m.group(1).strip()
-            translation = m.group(2).strip()
-            pos = m.group(3).strip()
-            # Skip header rows and separator rows
+            cols = [c.strip() for c in m.group(1).split("|")]
+            if len(cols) < 2:
+                continue
+            word = cols[0]
+            # Skip header and separator rows
             if (
-                word.lower() in ("word", "word/phrase", "---", "")
+                not word
+                or word.lower() in ("word", "word/phrase")
                 or set(word) <= {"-", " ", ":"}
-                or set(translation) <= {"-", " ", ":"}
+                or (len(cols) > 1 and set(cols[1]) <= {"-", " ", ":"})
             ):
                 continue
+            translation = cols[1] if len(cols) > 1 else ""
+            pos = cols[2] if len(cols) > 2 else ""
+            example = cols[3] if len(cols) > 3 else ""
+            conjugation = cols[4] if len(cols) > 4 else ""
             entries.append(
                 {
                     "word": word,
                     "translation": translation,
                     "part_of_speech": pos,
+                    "example": example,
+                    "conjugation": conjugation,
                     "context": "",
                     "phonetic": "",
                 }

@@ -39,7 +39,9 @@ def _patch_external_services(tmp_path, monkeypatch):
 
     mock_rc = MagicMock()
     mock_rc.return_value.crew.return_value = mock_crew
-    monkeypatch.setattr("researcher.main.ResearchCrew", mock_rc)
+    monkeypatch.setattr("researcher.routes.chat.ResearchCrew", mock_rc)
+    monkeypatch.setattr("researcher.routes.ask.ResearchCrew", mock_rc)
+    monkeypatch.setattr("researcher.routes.models.ResearchCrew", mock_rc)
 
 
 @pytest.fixture

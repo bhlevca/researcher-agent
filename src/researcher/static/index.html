@@ -151,10 +151,30 @@
                 <div class="llm-param-hint">Maximum planning attempts before the agent proceeds. Higher = more retries if planning fails. 1-5 recommended.</div>
                 <input type="range" id="param-planning_max_attempts" min="1" max="5" step="1" value="3" oninput="updateParamDisplay('planning_max_attempts')">
             </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Max Agent Steps</span><span class="llm-param-value" id="val-max_iter">25</span></div>
+                <div class="llm-param-hint">Hard ceiling on reasoning steps per request. Each step is a full LLM call (~20s on a 24B model), so this caps worst-case wait time. Raise it only for genuinely multi-step research. 6–12 recommended.</div>
+                <input type="range" id="param-max_iter" min="3" max="25" step="1" value="25" oninput="updateParamDisplay('max_iter')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Request Timeout (sec)</span><span class="llm-param-value" id="val-crew_timeout_sec">300</span></div>
+                <div class="llm-param-hint">Maximum seconds the agent may run before timing out. Increase for complex or long research tasks. 60–900 recommended.</div>
+                <input type="range" id="param-crew_timeout_sec" min="60" max="900" step="30" value="300" oninput="updateParamDisplay('crew_timeout_sec')">
+            </div>
 
             <!-- Image Generation Parameters -->
             <div class="llm-param-section-header" style="margin-top:1.2rem;padding-top:0.8rem;border-top:1px solid #1e3a5f;">
                 <span style="color:#38bdf8;font-weight:600;font-size:0.85rem;">🖼️ Image Generation</span>
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Image Backend</span><span class="llm-param-value" id="val-img-image_backend">sd</span></div>
+                <div class="llm-param-hint">SD: Stable Diffusion 1.5 (classic). ZImage: Z-Image-Turbo FLUX (fast). ERNIE: ERNIE-Image-Abliterated GGUF (uncensored).</div>
+                <select id="param-img-image_backend" onchange="updateImgParamDisplay('image_backend')" style="margin-top:0.3rem;background:#0f2035;color:#e2e8f0;border:1px solid #1e3a5f;border-radius:4px;padding:0.3rem 0.5rem;font-size:0.85rem;width:100%;">
+                    <option value="sd">Stable Diffusion (SD)</option>
+                    <option value="zimage">Z-Image-Turbo (ZImage)</option>
+                    <option value="flux">FLUX.1-schnell (FLUX)</option>
+                    <option value="ernie">ERNIE-Image-Abliterated (ERNIE)</option>
+                </select>
             </div>
             <div class="llm-param-group">
                 <div class="llm-param-label">
@@ -186,6 +206,17 @@
                 <div class="llm-param-label"><span>Refinement Strength</span><span class="llm-param-value" id="val-img-hires_strength">0.35</span></div>
                 <div class="llm-param-hint">img2img denoising strength for tile refinement. Lower = more faithful to base image, higher = more detail/creativity. 0.2–0.45 recommended.</div>
                 <input type="range" id="param-img-hires_strength" min="0.05" max="1.0" step="0.05" value="0.35" oninput="updateImgParamDisplay('hires_strength')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label">
+                    <span>Sharpening Mode</span>
+                    <span class="llm-param-value" id="val-img-realesrgan_enabled">High-Pass</span>
+                </div>
+                <div class="llm-param-hint">High-Pass: 2 img2img passes + OpenCV sharpen (default). Real-ESRGAN: 1 img2img pass + AI upscaler — sharper output, faster.</div>
+                <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;margin-top:0.3rem;">
+                    <input type="checkbox" id="param-img-realesrgan_enabled" onchange="updateImgParamDisplay('realesrgan_enabled'); applyLlmParams()" style="width:1.1rem;height:1.1rem;">
+                    <span style="color:#94a3b8;font-size:0.8rem;">Use Real-ESRGAN (uncheck for High-Pass)</span>
+                </label>
             </div>
             <div class="llm-param-group" style="opacity:0.6;">
                 <div class="llm-param-label"><span>Tile Width</span><span class="llm-param-value" id="val-img-tile_width">512</span></div>

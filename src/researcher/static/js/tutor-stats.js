@@ -2,22 +2,93 @@
 // ── Stats & Appraisal ──
 // ══════════════════════════════════════════════
 
+let _chartMastery = null;
+let _chartQuiz = null;
+
+function _destroyCharts() {
+    if (_chartMastery) { _chartMastery.destroy(); _chartMastery = null; }
+    if (_chartQuiz) { _chartQuiz.destroy(); _chartQuiz = null; }
+}
+
+function _buildMasteryChart(dist) {
+    const labels = ['0 – New', '1', '2', '3', '4', '5 – Mastered'];
+    const values = labels.map((_, i) => dist[String(i)] || 0);
+    const colors = ['#64748b','#f59e0b','#f97316','#22c55e','#16a34a','#15803d'];
+    const ctx = document.getElementById('chart-mastery');
+    if (!ctx) return;
+    _chartMastery = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels,
+            datasets: [{ data: values, backgroundColor: colors, borderRadius: 4 }],
+        },
+        options: {
+            plugins: { legend: { display: false } },
+            scales: {
+                y: { beginAtZero: true, ticks: { stepSize: 1, color: '#94a3b8' }, grid: { color: '#1e293b' } },
+                x: { ticks: { color: '#94a3b8', font: { size: 10 } }, grid: { display: false } },
+            },
+        },
+    });
+}
+
+function _buildQuizChart(history) {
+    if (!history || !history.length) return;
+    const labels = history.map(h => h.date);
+    const values = history.map(h => h.pct);
+    const ctx = document.getElementById('chart-quiz');
+    if (!ctx) return;
+    _chartQuiz = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels,
+            datasets: [{
+                data: values,
+                borderColor: '#e94560',
+                backgroundColor: 'rgba(233,69,96,0.15)',
+                tension: 0.3,
+                fill: true,
+                pointRadius: 4,
+                pointBackgroundColor: '#e94560',
+            }],
+        },
+        options: {
+            plugins: { legend: { display: false } },
+            scales: {
+                y: {
+                    min: 0, max: 100,
+                    ticks: { color: '#94a3b8', callback: v => v + '%' },
+                    grid: { color: '#1e293b' },
+                },
+                x: { ticks: { color: '#94a3b8', font: { size: 10 } }, grid: { display: false } },
+            },
+        },
+    });
+}
+
 async function loadStats() {
     if (!tutorSessionId) return;
     const grid = document.getElementById('stats-grid');
+    _destroyCharts();
     try {
         const resp = await fetch('/tutor/sessions/' + tutorSessionId + '/stats', { headers: tutorAuthHeaders() });
         if (!resp.ok) { grid.innerHTML = ''; return; }
         const data = await resp.json();
         grid.innerHTML = '';
 
+        const vocab = data.vocabulary || {};
+        const quizzes = data.quizzes || {};
+        const srsCount = data.srs_due_count ?? '—';
+
         const stats = [
-            { label: 'Messages', value: data.message_count || 0 },
-            { label: 'Vocabulary', value: data.vocabulary_count || 0 },
-            { label: 'Vocab Accuracy', value: data.vocabulary_accuracy ? Math.round(data.vocabulary_accuracy * 100) + '%' : '—' },
-            { label: 'Lessons', value: data.lesson_count || 0 },
-            { label: 'Quizzes', value: data.quiz_count || 0 },
-            { label: 'Avg Quiz Score', value: data.avg_quiz_score ? Math.round(data.avg_quiz_score * 100) + '%' : '—' },
+            { label: 'Vocabulary', value: vocab.total_words || 0 },
+            { label: 'Avg Mastery', value: vocab.avg_mastery !== undefined ? vocab.avg_mastery.toFixed(1) + ' / 5' : '—' },
+            { label: 'Accuracy', value: vocab.accuracy !== undefined ? vocab.accuracy + '%' : '—' },
+            { label: 'Lessons', value: data.lessons_completed || 0 },
+            { label: 'Quizzes', value: quizzes.total_taken || 0 },
+            { label: 'Avg Quiz', value: quizzes.avg_score !== undefined ? quizzes.avg_score + '%' : '—' },
+            { label: 'SRS Due', value: srsCount },
+            { label: 'Messages', value: data.total_interactions || 0 },
         ];
         stats.forEach(s => {
             const card = document.createElement('div');
@@ -25,6 +96,9 @@ async function loadStats() {
             card.innerHTML = '<div class="stat-value">' + s.value + '</div><div class="stat-label">' + s.label + '</div>';
             grid.appendChild(card);
         });
+
+        if (data.mastery_distribution) _buildMasteryChart(data.mastery_distribution);
+        if (data.quiz_history) _buildQuizChart(data.quiz_history);
     } catch (e) { /* ignore */ }
 }
 
@@ -45,7 +119,6 @@ async function generateAppraisal() {
     liveWrapper.appendChild(liveBox);
     content.appendChild(liveWrapper);
 
-    let reasoningLines = [];
     try {
         const resp = await fetch('/tutor/appraisal', {
             method: 'POST',
@@ -64,7 +137,7 @@ async function generateAppraisal() {
             return;
         }
 
-        const result = await processTutorSSE(resp, liveBox, reasoningLines);
+        const result = await processTutorSSE(resp, liveBox, []);
         liveWrapper.remove();
 
         if (result && result.response) {

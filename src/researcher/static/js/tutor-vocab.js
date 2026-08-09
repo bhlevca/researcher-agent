@@ -3,6 +3,51 @@
 // ══════════════════════════════════════════════
 
 let _vocabFilterTimer = null;
+let _vocabSortKey = 'created_at';
+let _vocabSortAsc = false;
+
+function _sortVocab(items) {
+    return [...items].sort((a, b) => {
+        let va = a[_vocabSortKey] ?? '';
+        let vb = b[_vocabSortKey] ?? '';
+        if (_vocabSortKey === 'mastery_level') { va = Number(va); vb = Number(vb); }
+        const cmp = va < vb ? -1 : va > vb ? 1 : 0;
+        return _vocabSortAsc ? cmp : -cmp;
+    });
+}
+
+function _sortHeader(label, key) {
+    const active = _vocabSortKey === key;
+    const arrow = active ? (_vocabSortAsc ? ' ▲' : ' ▼') : '';
+    return `<th style="cursor:pointer;user-select:none;" onclick="setVocabSort('${key}')">${label}${arrow}</th>`;
+}
+
+function setVocabSort(key) {
+    if (_vocabSortKey === key) _vocabSortAsc = !_vocabSortAsc;
+    else { _vocabSortKey = key; _vocabSortAsc = true; }
+    loadVocabulary();
+}
+
+function exportVocabCSV() {
+    const lang = document.getElementById('tutor-target-lang')?.value || 'vocab';
+    fetch('/tutor/vocabulary?lang=' + encodeURIComponent(lang), { headers: tutorAuthHeaders() })
+        .then(r => r.json())
+        .then(data => {
+            const items = data.vocabulary || [];
+            const header = ['Word', 'Translation', 'Part of Speech', 'Example', 'Conjugation', 'Mastery', 'Next Review'];
+            const rows = items.map(v => [
+                v.word, v.translation, v.part_of_speech || '', v.example || '',
+                v.conjugation || '', v.mastery_level || 0, v.next_review || ''
+            ].map(c => '"' + String(c).replace(/"/g, '""') + '"').join(','));
+            const csv = [header.join(','), ...rows].join('\r\n');
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = lang + '_vocabulary.csv';
+            a.click();
+        })
+        .catch(() => tutorShowToast('Export failed'));
+}
 
 function _reviewDueLabel(nextReview) {
     if (!nextReview) return '';
@@ -40,6 +85,8 @@ async function loadVocabulary() {
         const data = await resp.json();
         const items = data.vocabulary || [];
         countEl.textContent = items.length + ' words';
+        const exportBtn = document.getElementById('vocab-export-btn');
+        if (exportBtn) exportBtn.style.display = items.length ? '' : 'none';
 
         if (items.length === 0) {
             container.innerHTML = '<div style="color:#64748b;text-align:center;padding:2rem;">No vocabulary saved yet. Chat with the tutor or generate lessons to build your vocabulary.</div>';
@@ -48,23 +95,36 @@ async function loadVocabulary() {
         }
 
         const filter = (document.getElementById('vocab-search')?.value || '').toLowerCase();
-        const filtered = filter ? items.filter(v =>
+        const filtered = _sortVocab(filter ? items.filter(v =>
             v.word.toLowerCase().includes(filter) ||
-            (v.translation || '').toLowerCase().includes(filter)
-        ) : items;
+            (v.translation || '').toLowerCase().includes(filter) ||
+            (v.part_of_speech || '').toLowerCase().includes(filter) ||
+            (v.example || '').toLowerCase().includes(filter) ||
+            (v.conjugation || '').toLowerCase().includes(filter)
+        ) : items);
 
         const today = new Date().toISOString().slice(0, 10);
         let html = '<table class="vocab-table"><thead><tr>' +
-            '<th>Word</th><th>Translation</th><th>Mastery</th><th>Reviewed</th><th>Next Review</th><th></th>' +
-            '</tr></thead><tbody>';
+            _sortHeader('Word', 'word') +
+            _sortHeader('Translation', 'translation') +
+            _sortHeader('POS', 'part_of_speech') +
+            '<th>Example</th><th>Conjugation</th>' +
+            _sortHeader('Mastery', 'mastery_level') +
+            _sortHeader('Next Review', 'next_review') +
+            '<th></th></tr></thead><tbody>';
         filtered.forEach(v => {
             const ml = Math.min(5, Math.max(0, v.mastery_level || 0));
             const due = (v.next_review && v.next_review <= today);
-            html += '<tr' + (due ? ' style="background:rgba(245,158,11,0.06);"' : '') + '>' +
-                '<td style="color:#e0e0e0;font-weight:500;">' + escapeHtml(v.word) + '</td>' +
+            const difficult = (v.lapses || 0) >= 3;
+            const rowStyle = difficult ? 'background:rgba(239,68,68,0.06);' : due ? 'background:rgba(245,158,11,0.06);' : '';
+            const difficultBadge = difficult ? ' <span style="color:#ef4444;font-size:0.62rem;vertical-align:middle;" title="Lapsed ' + v.lapses + ' times">⚠ hard</span>' : '';
+            html += '<tr' + (rowStyle ? ' style="' + rowStyle + '"' : '') + '>' +
+                '<td style="color:#e0e0e0;font-weight:500;">' + escapeHtml(v.word) + difficultBadge + '</td>' +
                 '<td>' + escapeHtml(v.translation || '') + '</td>' +
+                '<td style="color:#94a3b8;font-size:0.78rem;">' + escapeHtml(v.part_of_speech || '') + '</td>' +
+                '<td style="color:#cbd5e1;font-size:0.78rem;font-style:italic;">' + escapeHtml(v.example || '') + '</td>' +
+                '<td style="color:#7dd3fc;font-size:0.75rem;white-space:pre-wrap;">' + escapeHtml(v.conjugation || '') + '</td>' +
                 '<td><span class="mastery mastery-' + ml + '">' + ml + '/5</span></td>' +
-                '<td style="font-size:0.72rem;color:#64748b;">' + (v.times_reviewed || 0) + 'x</td>' +
                 '<td style="font-size:0.72rem;">' + _reviewDueLabel(v.next_review) + '</td>' +
                 '<td><button onclick="deleteVocab(\'' + v.id + '\')" style="background:none;border:none;color:#64748b;cursor:pointer;font-size:0.7rem;" title="Delete">✕</button></td>' +
                 '</tr>';

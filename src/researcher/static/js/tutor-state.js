@@ -24,8 +24,11 @@ function tutorJsonHeaders() {
 }
 
 function getTutorConfig() {
+    const sel = document.getElementById('tutor-target-lang');
+    const selectedOpt = sel ? sel.options[sel.selectedIndex] : null;
     return {
-        target_lang: document.getElementById('tutor-target-lang').value,
+        target_lang: sel ? sel.value : 'French',
+        target_lang_code: selectedOpt ? (selectedOpt.dataset.code || 'fr') : 'fr',
         native_lang: document.getElementById('tutor-native-lang').value,
         level: document.getElementById('tutor-level').value,
     };

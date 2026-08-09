@@ -155,6 +155,11 @@ async function submitAuth() {
         if (typeof loadModels === 'function') loadModels();
         if (typeof loadTutorModels === 'function') loadTutorModels();
         if (typeof loadVoices === 'function') loadVoices();
+        // Restore persisted image params (checkbox state etc.) for this user
+        fetch('/image-params', { headers: authHeaders() })
+            .then(r => r.ok ? r.json() : null)
+            .then(d => { if (d && d.params && typeof setImgParamUI === 'function') setImgParamUI(d.params); })
+            .catch(() => {});
     } catch (e) {
         errEl.textContent = 'Connection error';
         errEl.style.display = 'block';

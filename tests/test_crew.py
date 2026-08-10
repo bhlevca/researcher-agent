@@ -125,7 +125,7 @@ class TestBuildCrew:
         from researcher.crew import ResearchCrew
 
         rc = ResearchCrew()
-        rc._decompose = lambda topic: ["simple question"]
+        rc._decompose = lambda topic, request_text=None: ["simple question"]
         crew = rc.build_crew("simple question")
         assert len(crew.tasks) == 1
 
@@ -134,7 +134,7 @@ class TestBuildCrew:
         from researcher.crew import ResearchCrew
 
         rc = ResearchCrew()
-        rc._decompose = lambda topic: ["simple question"]
+        rc._decompose = lambda topic, request_text=None: ["simple question"]
         crew = rc.build_crew("simple question")
         assert crew.tasks[0].context == []
 
@@ -143,7 +143,7 @@ class TestBuildCrew:
         from researcher.crew import ResearchCrew
 
         rc = ResearchCrew()
-        rc._decompose = lambda topic: [
+        rc._decompose = lambda topic, request_text=None: [
             "Write essay in English (1500 words)",
             "Write essay in German (1500 words)",
             "Write essay in French (1500 words)",
@@ -158,7 +158,7 @@ class TestBuildCrew:
         from researcher.crew import ResearchCrew
 
         rc = ResearchCrew()
-        rc._decompose = lambda topic: [
+        rc._decompose = lambda topic, request_text=None: [
             "Write essay in English (1500 words)",
             "Write essay in German (1500 words)",
         ]
@@ -170,7 +170,7 @@ class TestBuildCrew:
         from researcher.crew import ResearchCrew
 
         rc = ResearchCrew()
-        rc._decompose = lambda topic: [
+        rc._decompose = lambda topic, request_text=None: [
             "Write essay in English (1500 words)",
             "Write essay in German (1500 words)",
         ]

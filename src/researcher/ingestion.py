@@ -11,9 +11,12 @@ Public API
 """
 
 import io
+import os
 import re
 import json
 import uuid
+import base64
+import asyncio
 import logging
 from pathlib import Path
 from datetime import datetime, timezone
@@ -31,9 +34,83 @@ logger = logging.getLogger(__name__)
 MAX_FILE_SIZE = 10 * 1024 * 1024        # 10 MB per file
 MAX_TEXT_CHARS = 50_000                  # truncate extracted text
 MAX_FILES_PER_USER = 50
-ALLOWED_EXTENSIONS = {'.txt', '.csv', '.pdf', '.docx', '.xlsx', '.md', '.json'}
+IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp', '.tif', '.tiff', '.bmp', '.gif'}
+ALLOWED_EXTENSIONS = {
+    '.txt', '.csv', '.pdf', '.docx', '.xlsx', '.md', '.json'
+} | IMAGE_EXTENSIONS
 
 UPLOAD_DIR = Path(__file__).parent / "data" / "uploads"
+
+# --- OCR for scanned PDFs -------------------------------------------------
+# Ollama vision models accept IMAGES, not documents: there is no way to hand
+# them a PDF. Pages with no text layer are therefore rendered to PNG, downscaled,
+# and sent as base64. Both steps matter — qwen3-vl returns an empty string when
+# the image is much over ~1024px on its long edge.
+OCR_ENABLED = os.getenv("OCR_ENABLED", "1") == "1"
+OCR_MODEL = os.getenv("OCR_MODEL", "deepseek-ocr:3b")
+OCR_DPI = int(os.getenv("OCR_DPI", "150"))
+OCR_MAX_DIM = int(os.getenv("OCR_MAX_DIM", "1024"))
+OCR_MAX_PAGES = int(os.getenv("OCR_MAX_PAGES", "20"))
+OCR_TIMEOUT = int(os.getenv("OCR_TIMEOUT", "180"))
+# Format offered for automatic download when a upload had to be OCR'd:
+# "docx", "odt", or "none" to disable and keep it click-to-download.
+OCR_AUTO_EXPORT = os.getenv("OCR_AUTO_EXPORT", "docx").lower().strip()
+OLLAMA_BASE = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+
+
+def _ocr_prompt(model: str) -> str:
+    """Return the prompt this OCR model expects.
+
+    deepseek-ocr is a specialist that wants its own sentinel format; given a
+    plain instruction it returns an empty string. General VLMs want prose.
+    """
+    if "deepseek-ocr" in model:
+        return "<image>\nFree OCR."
+    return (
+        "Transcribe all text in this image exactly as it appears. "
+        "Output only the transcribed text, no commentary."
+    )
+
+
+def _render_page_png(page) -> bytes | None:
+    """Render a PDF page to a downscaled PNG suitable for a vision encoder."""
+    try:
+        from PIL import Image
+
+        pix = page.get_pixmap(dpi=OCR_DPI)
+        img = Image.open(io.BytesIO(pix.tobytes("png")))
+        img.thumbnail((OCR_MAX_DIM, OCR_MAX_DIM), Image.LANCZOS)
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG", optimize=True)
+        return buf.getvalue()
+    except Exception as e:
+        logger.warning("[OCR] Failed to render page: %s", e)
+        return None
+
+
+def _ocr_image(png: bytes) -> str:
+    """OCR a PNG via an Ollama vision model. Returns '' on any failure."""
+    import requests
+
+    try:
+        resp = requests.post(
+            f"{OLLAMA_BASE}/api/generate",
+            json={
+                "model": OCR_MODEL,
+                "prompt": _ocr_prompt(OCR_MODEL),
+                "images": [base64.b64encode(png).decode()],
+                "stream": False,
+                "options": {"temperature": 0, "num_predict": 4096},
+            },
+            timeout=OCR_TIMEOUT,
+        )
+        resp.raise_for_status()
+        return (resp.json().get("response") or "").strip()
+    except Exception as e:
+        logger.warning("[OCR] %s failed: %s", OCR_MODEL, e)
+        return ""
 
 # ---------------------------------------------------------------------------
 # DB
@@ -61,11 +138,47 @@ async def init_files_table(db):
 # ---------------------------------------------------------------------------
 
 
+# A request to transcribe a document is a CONVERSION job, not a conversation.
+# The text already exists in the database, so routing it through the agent only
+# makes an LLM slowly retype what we can return instantly — and risks rewording.
+_EXTRACTION_INTENT_RE = re.compile(
+    r"\b("
+    r"ocr"
+    r"|transcribe|transcription"
+    r"|extract(?:ing)?\s+(?:the\s+|all\s+)?text"
+    r"|(?:give|get|show|send)\s+(?:me\s+)?(?:the\s+|its\s+)?(?:full\s+)?text"
+    r"|read\s+(?:this|the)\s+(?:document|file|scan|image|pdf|page)"
+    r"|convert\s+(?:this|it|the\s+\w+)?\s*(?:to|into)\s+(?:text|docx|word|odt|document)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def is_extraction_request(message: str) -> bool:
+    """True when the user wants the document's text, not a discussion of it."""
+    return bool(_EXTRACTION_INTENT_RE.search(message or ""))
+
+
+async def get_file_texts(db, user_id: str, file_ids: list[str]) -> list[dict]:
+    """Return ``[{id, filename, text}]`` for the user's files, in request order."""
+    out: list[dict] = []
+    for fid in file_ids:
+        cursor = await db.execute(
+            "SELECT id, filename, extracted_text FROM files WHERE id = ? AND user_id = ?",
+            (fid, user_id),
+        )
+        row = await cursor.fetchone()
+        if row:
+            out.append({"id": row[0], "filename": row[1], "text": (row[2] or "").strip()})
+    return out
+
+
 async def get_file_context(db, user_id: str, file_ids: list[str]) -> str:
     """Fetch extracted text for *file_ids* and return formatted context block."""
     if not file_ids:
         return ""
-    parts = []
+    parts: list[str] = []
+    empty: list[str] = []
     for fid in file_ids:
         cursor = await db.execute(
             "SELECT filename, extracted_text FROM files WHERE id = ? AND user_id = ?",
@@ -73,17 +186,40 @@ async def get_file_context(db, user_id: str, file_ids: list[str]) -> str:
         )
         row = await cursor.fetchone()
         if row:
-            parts.append(f"--- {row[0]} ---\n{row[1]}")
-    if not parts:
+            filename, text = row[0], (row[1] or "").strip()
+            if text:
+                parts.append(f"--- {filename} ---\n{text}")
+            else:
+                # Never emit an empty block under a "the text is RIGHT HERE"
+                # banner: the agent can then neither read the file nor say so,
+                # and burns every ReAct iteration trying to reconcile the two.
+                empty.append(filename)
+    if not parts and not empty:
         return ""
-    return (
-        "=== ATTACHED FILE CONTENT (already extracted — read it directly) ===\n"
-        "The following is the FULL TEXT extracted from the user's uploaded file(s).\n"
-        "You MUST use this text to answer the user's questions. Do NOT claim you\n"
-        "cannot read attachments — the content is RIGHT HERE.\n\n"
-        + "\n\n".join(parts)
-        + "\n\n=== END OF ATTACHED FILE CONTENT ===\n\n"
-    )
+
+    block = ""
+    if parts:
+        block += (
+            "=== ATTACHED FILE CONTENT (already extracted — read it directly) ===\n"
+            "The following is the FULL TEXT extracted from the user's uploaded file(s).\n"
+            "You MUST use this text to answer the user's questions. Do NOT claim you\n"
+            "cannot read attachments — the content is RIGHT HERE.\n\n"
+            + "\n\n".join(parts)
+            + "\n\n=== END OF ATTACHED FILE CONTENT ===\n\n"
+        )
+    if empty:
+        block += (
+            "=== UNREADABLE ATTACHMENT(S) ===\n"
+            "No text could be extracted from the following file(s): "
+            + ", ".join(empty)
+            + ".\nThis usually means a scanned PDF whose OCR produced nothing. "
+            "Do NOT retry, do NOT guess the contents, and do NOT call any tool "
+            "to open the file — you have no access to it. State plainly and "
+            "immediately that the file could not be read and ask the user to "
+            "supply a text-based version.\n"
+            "=== END OF UNREADABLE ATTACHMENT(S) ===\n\n"
+        )
+    return block
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +256,7 @@ def _extract_json(data: bytes) -> str:
         return text
 
 
-def _extract_pdf(data: bytes) -> str:
+def _extract_pdf(data: bytes) -> tuple[str, bool]:
     try:
         import fitz  # PyMuPDF
     except ImportError:
@@ -130,12 +266,30 @@ def _extract_pdf(data: bytes) -> str:
         )
     doc = fitz.open(stream=data, filetype="pdf")
     pages = []
+    ocr_used = 0
     for i, page in enumerate(doc):
         text = page.get_text()
         if text.strip():
             pages.append(f"[Page {i + 1}]\n{text}")
+            continue
+        # No text layer — a scanned page. PyMuPDF returns "" here, which used to
+        # produce an empty attachment block that the agent could neither read nor
+        # admit to. OCR it instead.
+        if not OCR_ENABLED or ocr_used >= OCR_MAX_PAGES:
+            continue
+        png = _render_page_png(page)
+        if png is None:
+            continue
+        ocr_text = _ocr_image(png)
+        if ocr_text:
+            ocr_used += 1
+            pages.append(f"[Page {i + 1} — OCR]\n{ocr_text}")
+            logger.info("[OCR] Page %d recovered %d chars via %s",
+                        i + 1, len(ocr_text), OCR_MODEL)
     doc.close()
-    return "\n\n".join(pages)
+    if ocr_used:
+        logger.info("[OCR] %d scanned page(s) transcribed", ocr_used)
+    return "\n\n".join(pages), ocr_used > 0
 
 
 def _extract_docx(data: bytes) -> str:
@@ -180,25 +334,61 @@ def _extract_xlsx(data: bytes) -> str:
     return "\n\n".join(parts)
 
 
+def _extract_image(data: bytes) -> tuple[str, bool]:
+    """OCR an uploaded image. An image never has a text layer, so this is the
+    only way to get anything out of it."""
+    if not OCR_ENABLED:
+        return "", False
+    try:
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(data))
+        img.thumbnail((OCR_MAX_DIM, OCR_MAX_DIM), Image.LANCZOS)
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG", optimize=True)
+    except Exception as e:
+        logger.warning("[OCR] Could not open uploaded image: %s", e)
+        return "", False
+
+    text = _ocr_image(buf.getvalue())
+    if text:
+        logger.info("[OCR] Image recovered %d chars via %s", len(text), OCR_MODEL)
+    return text, bool(text)
+
+
 _EXTRACTORS = {
     ".txt": _extract_txt,
     ".csv": _extract_csv,
     ".md": _extract_md,
     ".json": _extract_json,
-    ".pdf": _extract_pdf,
     ".docx": _extract_docx,
     ".xlsx": _extract_xlsx,
 }
 
 
-def _extract_text(data: bytes, ext: str) -> str:
-    func = _EXTRACTORS.get(ext)
-    if not func:
-        raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
-    text = func(data)
+def _extract_text(data: bytes, ext: str) -> tuple[str, bool]:
+    """Extract text from an upload.
+
+    Returns ``(text, ocr_used)``. ``ocr_used`` is True when the content came
+    from a vision model rather than an embedded text layer — that is the signal
+    the caller uses to offer an automatic document download, since a scan is
+    exactly the case where the user has no editable copy of their own.
+    """
+    if ext in IMAGE_EXTENSIONS:
+        text, ocr_used = _extract_image(data)
+    elif ext == ".pdf":
+        text, ocr_used = _extract_pdf(data)
+    else:
+        func = _EXTRACTORS.get(ext)
+        if not func:
+            raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
+        text, ocr_used = func(data), False
+
     if len(text) > MAX_TEXT_CHARS:
         text = text[:MAX_TEXT_CHARS] + f"\n\n[… truncated at {MAX_TEXT_CHARS:,} characters]"
-    return text
+    return text, ocr_used
 
 
 # ---------------------------------------------------------------------------
@@ -408,9 +598,78 @@ def _export_xlsx(content: str) -> bytes:
 # ---------------------------------------------------------------------------
 
 
+def _export_odt(content: str) -> bytes:
+    """Render markdown-ish text to an OpenDocument Text file.
+
+    Deliberately conservative: headings, bullets and paragraphs. OCR output is a
+    transcription, so fidelity to the words matters more than rich styling.
+    """
+    from odf.opendocument import OpenDocumentText
+    from odf.style import Style, TextProperties, ParagraphProperties
+    from odf.text import H, P, List, ListItem
+
+    doc = OpenDocumentText()
+
+    mono = Style(name="Mono", family="paragraph")
+    mono.addElement(TextProperties(fontfamily="monospace", fontsize="10pt"))
+    mono.addElement(ParagraphProperties(margintop="0.05in", marginbottom="0.05in"))
+    doc.styles.addElement(mono)
+
+    in_code = False
+    for raw in content.split("\n"):
+        line = raw.rstrip()
+        if line.strip().startswith("```"):
+            in_code = not in_code
+            continue
+        if in_code:
+            doc.text.addElement(P(stylename=mono, text=raw))
+            continue
+        if not line.strip():
+            doc.text.addElement(P(text=""))
+            continue
+        heading = re.match(r"^(#{1,6})\s+(.*)$", line)
+        if heading:
+            doc.text.addElement(H(outlinelevel=len(heading.group(1)),
+                                  text=_strip_inline_markdown(heading.group(2))))
+            continue
+        bullet = re.match(r"^\s*[-*+]\s+(.*)$", line)
+        if bullet:
+            lst = List()
+            item = ListItem()
+            item.addElement(P(text=_strip_inline_markdown(bullet.group(1))))
+            lst.addElement(item)
+            doc.text.addElement(lst)
+            continue
+        doc.text.addElement(P(text=_strip_inline_markdown(line)))
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
+def _strip_inline_markdown(text: str) -> str:
+    """Remove inline markdown emphasis markers, keeping the words."""
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+    text = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"\1", text)
+    text = re.sub(r"`(.+?)`", r"\1", text)
+    return text
+
+
+# Extension + MIME for each supported export format.
+_EXPORT_TYPES = {
+    "md":   (".md",   "text/markdown"),
+    "txt":  (".txt",  "text/plain"),
+    "docx": (".docx", "application/vnd.openxmlformats-officedocument."
+                      "wordprocessingml.document"),
+    "odt":  (".odt",  "application/vnd.oasis.opendocument.text"),
+    "xlsx": (".xlsx", "application/vnd.openxmlformats-officedocument."
+                      "spreadsheetml.sheet"),
+}
+
+
 class ExportRequest(BaseModel):
     content: str
-    format: str            # "md", "txt", "docx", "xlsx"
+    format: str            # "md", "txt", "docx", "odt", "xlsx"
     filename: str = "export"
 
 
@@ -457,7 +716,10 @@ def register_ingestion_routes(app):
                 continue
 
             try:
-                extracted = _extract_text(data, ext)
+                # OCR can take seconds per page, so keep it off the event loop.
+                extracted, ocr_used = await asyncio.get_running_loop().run_in_executor(
+                    None, _extract_text, data, ext
+                )
             except HTTPException as e:
                 results.append({"filename": name, "error": e.detail})
                 continue
@@ -478,11 +740,22 @@ def register_ingestion_routes(app):
             )
             await db.commit()
 
+            # A scan or photo is exactly the case where the user has no editable
+            # copy, so hand back a ready-to-download document rather than making
+            # them ask the agent to retype what we already transcribed.
+            auto_export = (
+                f"/files/{fid}/export?format={OCR_AUTO_EXPORT}"
+                if ocr_used and extracted and OCR_AUTO_EXPORT in ("docx", "odt")
+                else None
+            )
             results.append({
                 "id": fid,
                 "filename": name,
                 "size": len(data),
                 "chars": len(extracted),
+                "ocr": ocr_used,
+                "export_url": auto_export,
+                "export_format": OCR_AUTO_EXPORT if auto_export else None,
             })
 
         return {"files": results}
@@ -585,6 +858,14 @@ def register_ingestion_routes(app):
                 headers={"Content-Disposition": f'attachment; filename="{safe_name}.docx"'},
             )
 
+        if fmt == "odt":
+            data = _export_odt(req.content)
+            return Response(
+                content=data,
+                media_type="application/vnd.oasis.opendocument.text",
+                headers={"Content-Disposition": f'attachment; filename="{safe_name}.odt"'},
+            )
+
         if fmt == "xlsx":
             data = _export_xlsx(req.content)
             return Response(
@@ -594,3 +875,55 @@ def register_ingestion_routes(app):
             )
 
         raise HTTPException(status_code=400, detail=f"Unsupported format: {fmt}")
+
+    @app.get("/files/{file_id}/export")
+    async def export_file_text(file_id: str, request: Request, format: str = "docx"):
+        """Download a file's extracted text (including OCR output) as a document.
+
+        This is the *verbatim* transcription, straight from the files table — it
+        never goes near the LLM, so nothing is summarised or reworded. That is
+        the difference between this and exporting an agent reply.
+        """
+        user = await get_current_user(request)
+        fmt = (format or "docx").lower().strip()
+        if fmt not in _EXPORT_TYPES or fmt == "xlsx":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported format: {fmt}. Use md, txt, docx or odt.",
+            )
+
+        db = request.app.state.db
+        cursor = await db.execute(
+            "SELECT filename, extracted_text FROM files WHERE id = ? AND user_id = ?",
+            (file_id, user["id"]),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="File not found")
+
+        filename, text = row[0], (row[1] or "").strip()
+        if not text:
+            raise HTTPException(
+                status_code=422,
+                detail="No text was extracted from this file, so there is nothing "
+                       "to export. For a scanned PDF, check that OCR is enabled "
+                       "and the OCR model is pulled.",
+            )
+
+        stem = re.sub(r"[^a-zA-Z0-9_-]", "_", Path(filename).stem)[:50] or "extract"
+        ext, media_type = _EXPORT_TYPES[fmt]
+
+        if fmt == "md":
+            data = f"# {filename}\n\n{text}\n".encode()
+        elif fmt == "txt":
+            data = text.encode()
+        elif fmt == "docx":
+            data = _export_docx(f"# {filename}\n\n{text}")
+        else:  # odt
+            data = _export_odt(f"# {filename}\n\n{text}")
+
+        return Response(
+            content=data,
+            media_type=media_type,
+            headers={"Content-Disposition": f'attachment; filename="{stem}{ext}"'},
+        )

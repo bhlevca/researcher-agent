@@ -1,6 +1,6 @@
 [project]
 name = "researcher-agent"
-version = "2.4.0"
+version = "2.5.0"
 dependencies = [
     "crewai[tools]>=1.14.5",
     "litellm",
@@ -29,6 +29,7 @@ dependencies = [
     "PyJWT",
     "pymupdf",
     "python-docx",
+    "odfpy",
     "openpyxl",
     # Imported directly by src/ — declared explicitly so they are never dropped
     # as incidental transitive dependencies of another package.

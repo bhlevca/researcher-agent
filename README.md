@@ -233,9 +233,39 @@ Click the **📎** button (or drag files) to attach files to your message. Suppo
 | Format | Extensions | Extraction |
 |--------|-----------|------------|
 | Plain text | `.txt`, `.md`, `.csv`, `.json` | Direct read |
-| PDF | `.pdf` | Page-by-page text extraction (PyMuPDF) |
+| PDF | `.pdf` | Page-by-page text extraction (PyMuPDF), with OCR fallback for scanned pages |
+| Images | `.png`, `.jpg`, `.jpeg`, `.webp`, `.tif`, `.tiff`, `.bmp`, `.gif` | OCR via an Ollama vision model |
 | Word | `.docx` | Paragraphs + tables |
 | Excel | `.xlsx` | All sheets, rows as tab-separated values |
+
+#### Scanned PDFs and images (OCR)
+
+Upload a scanned PDF or a photo and the rest is automatic:
+
+```
+upload → OCR at ingest → transcription downloads as a DOCX
+```
+
+No agent, no chat turn, no LLM reasoning — the transcription is written straight
+to a document. Asking the agent to "OCR this document" instead makes it
+*re-generate* text that already exists, which is far slower and can reword the
+content. Set `OCR_AUTO_EXPORT=none` if you would rather download it manually from
+the Files panel, which also offers ODT.
+
+A PDF with no text layer extracts to nothing, so pages without text are rendered
+to PNG and transcribed by an Ollama **vision** model. Ollama models cannot read a
+PDF directly — they accept images only — so the app renders and downscales each
+page itself. A PDF that already has a text layer is never sent to OCR.
+
+```bash
+ollama pull deepseek-ocr:3b     # then, in .env:
+OCR_MODEL=deepseek-ocr:3b
+```
+
+Measured on a one-page scanned report: `deepseek-ocr:3b` returned a complete
+transcription in ~3 s; `qwen3-vl:8b` took ~16 s and truncated. Note that
+`OCR_MAX_DIM` defaults to 1024 because `qwen3-vl` returns an **empty** string on
+noticeably larger images — raise it only after testing your own model.
 
 - **Max file size**: 10 MB per file
 - **Max files per user**: 50

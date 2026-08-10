@@ -69,7 +69,7 @@ def register_ask_routes(app):
         _sys.stderr.write(f"[ASKDBG] image_params from DB: realesrgan_enabled={_parsed.get('realesrgan_enabled', 'MISSING')}\n")
         load_image_params_from_json(_raw)
 
-        crew = research_crew.build_crew(topic)
+        crew = research_crew.build_crew(topic, request_text=req.topic)
         semaphore = request.app.state.crew_semaphores[uid]
 
         q: queue.Queue = queue.Queue()

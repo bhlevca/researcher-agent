@@ -244,8 +244,8 @@
     </div>
 
     <div id="input-area">
-        <input type="file" id="file-input" multiple accept=".txt,.csv,.pdf,.docx,.xlsx,.md,.json" style="display:none" onchange="handleFileSelect(event)">
-        <button id="attach-btn" onclick="document.getElementById('file-input').click()" title="Attach files (TXT, CSV, PDF, DOCX, XLSX, MD, JSON)">📎</button>
+        <input type="file" id="file-input" multiple accept=".txt,.csv,.pdf,.docx,.xlsx,.md,.json,.png,.jpg,.jpeg,.webp,.tif,.tiff,.bmp,.gif" style="display:none" onchange="handleFileSelect(event)">
+        <button id="attach-btn" onclick="document.getElementById('file-input').click()" title="Attach files (TXT, CSV, PDF, DOCX, XLSX, MD, JSON, or a scan/photo to OCR)">📎</button>
         <textarea id="user-input" placeholder="Ask me anything..." rows="1" autofocus></textarea>
         <button id="mic-btn" onclick="toggleMic()" title="Voice input (click to record, click again to stop)">🎤</button>
         <button id="stop-speak-btn" onclick="stopSpeaking()" title="Stop speaking">⏹ Stop</button>

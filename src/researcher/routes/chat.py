@@ -25,7 +25,11 @@ from researcher.postprocess import (
     _build_conversation_context,
 )
 from researcher.auth import get_current_user
-from researcher.ingestion import get_file_context
+from researcher.ingestion import (
+    get_file_context,
+    get_file_texts,
+    is_extraction_request,
+)
 from researcher.image import load_image_params_from_json
 from researcher.crew import ResearchCrew
 
@@ -141,6 +145,56 @@ def register_chat_routes(app):
         uid = user["id"]
         db = request.app.state.db
 
+        # ── Fast path: transcription request + attachment ────────────────────
+        # "OCR this", "extract the text", "give me the text" over an attached
+        # scan is a conversion job, not a conversation. The text was already
+        # produced at upload, so return it directly. Routing it through the crew
+        # costs a decomposition call, a planning call and a full ReAct loop —
+        # minutes — just to have an LLM retype text we already hold, with the
+        # added risk that it paraphrases a document whose exact wording matters.
+        if req.file_ids and is_extraction_request(req.message):
+            files = await get_file_texts(db, uid, req.file_ids)
+            have_text = [f for f in files if f["text"]]
+
+            def _sse_direct(event: str, data) -> str:
+                return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+            async def direct_stream():
+                if not have_text:
+                    names = ", ".join(f["filename"] for f in files) or "the attachment"
+                    yield _sse_direct("done", {
+                        "response": (
+                            f"No text could be extracted from {names}. If it is a "
+                            "scanned PDF or photo, check that OCR is enabled and "
+                            "the OCR model is pulled, then re-upload."
+                        ),
+                        "reasoning": ["Direct extraction — no agent involved"],
+                        "token_usage": {},
+                        "incomplete": False,
+                    })
+                    return
+                chunks = []
+                for f in have_text:
+                    chunks.append(
+                        f"### {f['filename']}\n\n{f['text']}\n\n"
+                        f"[⬇ Download as DOCX](/files/{f['id']}/export?format=docx) · "
+                        f"[⬇ ODT](/files/{f['id']}/export?format=odt)"
+                    )
+                yield _sse_direct("done", {
+                    "response": "\n\n---\n\n".join(chunks),
+                    "reasoning": [
+                        f"Returned stored text for {len(have_text)} file(s) directly — "
+                        "no LLM call, no agent run."
+                    ],
+                    "token_usage": {},
+                    "incomplete": False,
+                })
+
+            logger.info(
+                "[chat] Extraction fast path: %d file(s), bypassing crew", len(files)
+            )
+            return StreamingResponse(direct_stream(), media_type="text/event-stream")
+
         # Lazy-init per-user semaphore and cancel event
         if uid not in request.app.state.crew_semaphores:
             request.app.state.crew_semaphores[uid] = asyncio.Semaphore(1)
@@ -190,7 +244,9 @@ def register_chat_routes(app):
         row = await cursor.fetchone()
         load_image_params_from_json(row[0] if row and row[0] else None)
 
-        crew = research_crew.build_crew(topic)
+        # Pass the raw message so the split heuristic sizes the *request*, not
+        # the attachments and history bolted onto it.
+        crew = research_crew.build_crew(topic, request_text=req.message)
         semaphore = request.app.state.crew_semaphores[uid]
 
         q: queue.Queue = queue.Queue()

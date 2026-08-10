@@ -240,14 +240,22 @@ class ResearchCrew:
     # Dynamic task splitting: decompose complex requests into sub-tasks
     # ------------------------------------------------------------------
 
-    def _decompose(self, topic: str) -> list[str]:
+    def _decompose(self, topic: str, request_text: str | None = None) -> list[str]:
         """Use LLM to decide if a request should be split into parts.
 
         Returns a list with either one entry (no split) or multiple
         self-contained part descriptions.
+
+        *request_text* is what the user actually typed. The size test MUST use
+        it rather than *topic*: topic also carries attached file content and
+        conversation history, so a 38-character question about a one-page scan
+        measured 1480 chars and triggered a ~30 s "should I split this?" LLM
+        call that always answered "no". Attachment size says nothing about
+        request complexity.
         """
+        gauge = request_text if request_text is not None else topic
         # Skip decomposition for short / simple requests
-        if len(topic) < 300:
+        if len(gauge) < 300:
             return [topic]
 
         prompt = (
@@ -262,7 +270,7 @@ class ResearchCrew:
             "- It is a simple question or short task\n"
             "- The parts are interdependent (each needs context from others)\n"
             "- Total output would be under ~3000 words\n\n"
-            f"Request:\n{topic[:2000]}\n\n"
+            f"Request:\n{gauge[:2000]}\n\n"
             "Respond with ONLY valid JSON, no markdown fences, no explanation:\n"
             'If no split: {"split": false}\n'
             'If split: {"split": true, "parts": ["full description of '
@@ -319,7 +327,7 @@ class ResearchCrew:
         },
     }
 
-    def build_crew(self, topic: str) -> "Crew":
+    def build_crew(self, topic: str, request_text: str | None = None) -> "Crew":
         """Build a Crew tailored for *topic*.
 
         Simple requests get a single task; complex ones are automatically
@@ -327,7 +335,7 @@ class ResearchCrew:
         ``context=[]`` so CrewAI does NOT forward previous task output
         into the next task — every task only sees its own description.
         """
-        parts = self._decompose(topic)
+        parts = self._decompose(topic, request_text)
         self._is_multi_part = len(parts) > 1
 
         agent_instance = self.researcher()

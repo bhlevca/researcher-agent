@@ -64,48 +64,162 @@ methods are on it. `patches._check_executor_reachability()` now logs this at sta
 
 ## COMPOSER — why the music is weak, and what would actually fix it
 
-The composer is *functional* but the output is musically naive. This is not a bug in
+*Revised 2026-08-09 after a literature scan. The headline finding below supersedes the
+music21-first plan I originally wrote: the **representation** is the primary problem, and
+fixing it is cheaper than anything else here.*
+
+The composer is *functional* but musically naive. This is not a bug in
 `musicxml_builder.py` (which is fine) and not a prompting problem that more instructions will
-solve. It is structural:
+solve. It is structural, and there are two compounding causes.
 
-**A general-purpose LLM emitting notes one at a time has no musical memory.** It cannot hear
-what it wrote four bars ago, so it produces locally-plausible, globally-incoherent note
-sequences — no motivic development, no phrase structure, no harmonic direction. That is
-exactly what "kindergarten level" sounds like. More prompt engineering will not fix it,
-because the model is being asked to do the one thing it is worst at.
+### Cause 1 — we picked the worst possible format for an LLM (fix this first)
 
-### The fix: move structure out of the LLM and into code
+We ask the model to emit **note-by-note JSON**. Research on symbolic music generation is
+blunt about this: LLMs are *inherently* more compatible with **ABC notation** than with
+MIDI-style event lists, because ABC is text that aligns with how language models actually
+work. Note-by-note JSON is arguably worse than MIDI — it is the most verbose option and
+carries no musical structure at all.
 
-Let the LLM make **high-level** decisions it is genuinely good at (form, mood, instrumentation,
-harmonic plan in Roman numerals, a short motif). Let deterministic code **realise** those
-decisions into notes, where the rules are well-defined and a computer never forgets bar 4.
+The measured consequences of ABC:
 
-1. **`music21`** (MIT, BSD-licensed) — the single highest-value addition.
-   - Validate generated scores: voice-leading, parallel fifths/octaves, instrument ranges.
-   - Realise a Roman-numeral progression into actual voiced chords (`roman.RomanNumeral`).
-   - Motivic development for free: transposition, inversion, retrograde, augmentation and
-     diminution are one-liners. Applying these to a single generated motif is what makes music
-     sound *composed* rather than sampled.
-   - MIDI export and round-trip MusicXML parsing, replacing hand-rolled work.
-2. **Constrain the LLM's output shape** with Ollama's `format` parameter (JSON schema /
-   grammar-constrained decoding). The model then *cannot* emit malformed JSON, which deletes
-   most of `musicxml_fix.py` (506 lines) and the repair layer in `composer/crew.py` rather
-   than testing them harder.
-3. **Two-stage generation.** Stage 1: LLM returns a *plan* — form (AABA, 12-bar blues…), key
-   plan with modulations, a 2-bar motif, harmonic rhythm. Stage 2: code expands the plan,
-   using music21 to voice chords and develop the motif. The LLM never emits a long note list.
-4. **In-browser playback (OSMD + Tone.js).** Currently the only output is a download, so every
-   iteration costs a round-trip through MuseScore. Until you can hear a change in two seconds,
-   tuning musical quality is impractical — this gates all the work above.
+- ~288 tokens per song, roughly **38% of the token count** of MIDI-style representations.
+  Shorter sequences mean the model can hold a whole piece in context instead of losing the
+  thread after four bars.
+- ABC **intrinsically encodes repetition and structure** (repeats, sections, phrase marks).
+  Structure is carried by the notation rather than something the model must remember.
+- MuPT, trained on ABC, produced music that listeners **preferred over GPT-4**, with high
+  intra-texture similarity and repetition scores.
 
-### Worth evaluating, but bigger commitments
+This explains the "kindergarten" quality directly: a general model emitting one JSON note at a
+time cannot hear bar 4 by the time it writes bar 12, so it produces locally plausible,
+globally incoherent sequences — no motivic development, no phrase structure, no harmonic
+direction.
 
-- **Symbolic music models** instead of a general LLM for the note-level work: the Anticipatory
-  Music Transformer, or MMM-style multi-track models. These are trained on symbolic music and
-  have real musical structure, unlike a chat model. Runs alongside Ollama on the same GPU.
-- **`abjad`** if engraving quality matters more than playback (LilyPond backend).
-- Missing MusicXML expression, once the above lands: dynamics, articulations, slurs and
-  mid-score key changes (`key_changes`) are all still unimplemented — see C1/C2 below.
+**Action:**
+- [ ] Switch the composer's output format from JSON to **ABC notation**.
+- [ ] Parse it with `music21` (`converter.parse(abc_string)`), which reads ABC natively and
+      converts to MusicXML — so `musicxml_builder.py` keeps working downstream.
+- [ ] This **deletes most of `musicxml_fix.py` (506 lines) and `_repair_json` in
+      `composer/crew.py`**. Those exist only because JSON from an LLM arrives broken; ABC is
+      far more forgiving and music21 validates it properly.
+- [ ] Keep grammar-constrained decoding as a backstop where useful, but the format change
+      does most of the work.
+
+### Cause 2 — a general chat model has no musical training
+
+Even in ABC, `mistral-small` has no idea what a good melody is. Two specialist models run
+locally and both speak ABC natively:
+
+| Model | Size | Notes |
+|---|---|---|
+| **ChatMusician** (`m-a-p/ChatMusician`) | LLaMA2-based | Continually pre-trained on ABC. Composes well-structured, full-length music conditioned on **text, chords, melodies, motifs and musical forms**. Pure text tokenizer — no multimodal stack, so it can run under Ollama/llama.cpp like any other model. |
+| **NotaGen** (`ElectricAlexis/NotaGen`) | **516M params** | Pre-trained on 1.6M ABC sheets. Conditioned on **period, composer and instrumentation**. Tiny — fits alongside Ollama and the image pipelines on the 16 GB card with room to spare. |
+
+Note the symmetry with what we just did for OCR: a small specialist model beat the big general
+one decisively. `deepseek-ocr:3b` was 5× faster and produced 4× more text than `qwen3-vl:8b`.
+The same pattern very likely holds here.
+
+**Action:**
+- [ ] Add `COMPOSER_MODEL`, independent of `MODEL`, exactly as `OCR_MODEL` is today.
+- [ ] Evaluate NotaGen first — 516M is cheap to try and it is purpose-built for notation.
+
+### Still worth doing, after the above
+
+1. **`music21`** for what code does better than any model: voice-leading and range validation,
+   realising Roman-numeral progressions into voiced chords, and motivic development
+   (transposition, inversion, retrograde, augmentation) — one-liners that are exactly what
+   makes music sound *composed* rather than sampled.
+2. **Two-stage generation.** LLM returns a plan (form, key plan, a 2-bar motif, harmonic
+   rhythm); code expands it. The model never emits a long note list.
+3. **In-browser playback (OSMD + Tone.js).** Still the gate on everything: until a change can
+   be heard in two seconds instead of a MuseScore round-trip, tuning musical quality is
+   impractical.
+4. Missing MusicXML expression: dynamics, articulations, slurs, and mid-score key changes
+   (`key_changes`) — see C1/C2 below.
+
+**Sources:** [MuPT](https://arxiv.org/abs/2404.06393) ·
+[ChatMusician](https://huggingface.co/papers/2402.16153) ·
+[NotaGen](https://www.ijcai.org/proceedings/2025/1134.pdf) ·
+[MMM](https://arxiv.org/pdf/2008.06048)
+
+---
+
+## TUTOR — competitive scan and what to steal
+
+*Added 2026-08-09. The tutor is feature-rich but built almost entirely around **output**
+(quizzes, vocabulary drills, scenarios). The research consensus is that this is the smaller
+half of language acquisition.*
+
+### T-A — Replace SM-2 with FSRS (HIGH, self-contained)
+
+`tutor/storage.py` implements SM-2, the 1987 algorithm with a single ease factor per card.
+Anki replaced it with **FSRS**, which models three variables per card — difficulty, stability
+and retrievability — fitted to **700M+ real reviews**.
+
+- **~20–30% fewer reviews for the same retention.**
+- More accurate recall prediction in **~99.6%** of collections.
+- Free, open-source, available as a Python library from the Open Spaced Repetition project.
+
+This is the highest value-per-effort item in the tutor: a drop-in scheduler swap behind the
+existing `vocabulary` table. The `lapses` column added in T6 is already one of the inputs FSRS
+wants.
+
+- [ ] Add the FSRS library, migrate `vocabulary` to store difficulty/stability/retrievability
+- [ ] Keep SM-2 behind a flag for one release so intervals can be compared
+
+### T-B — Add comprehensible input; the tutor has none (HIGH)
+
+Current design is ~100% output and review. The research points the other way:
+
+- Learners spending **80% of study time on comprehensible input** (real content at their level
+  plus ~10% unknown words — Krashen's *i+1*) and 20% on active review progress significantly
+  faster.
+- Authentic content + SRS gives **3.2× higher retention** than drill-based apps, and reaches
+  intermediate comprehension **40% faster**.
+- App study combined with authentic media improved **listening comprehension 47% faster** than
+  apps alone.
+
+We already have every piece needed to build this and have not connected them:
+
+- [ ] **Generate levelled reading passages** per CEFR level and curriculum topic — the lesson
+      generator already does something close.
+- [ ] **Seed them with the learner's due vocabulary** so review happens in context rather than
+      on isolated flashcards. This is the 80/20 split, and it is what makes SRS stick.
+- [ ] **Read passages aloud with edge-tts** — we already have multilingual TTS, so listening
+      practice is nearly free.
+- [ ] Track an *unknown-word ratio* per passage and target ~10% to keep material at i+1.
+
+### T-C — Tighten the conversation feedback loop (MEDIUM)
+
+Scenario roleplay (T1) is the right shape; the market leaders differ in the *feedback*, not
+the roleplay:
+
+- Praktika's core loop is explicitly **speak → get feedback → improve**, with user-selectable
+  strictness: **soft / balanced / strict**.
+- Leaders **diagnose pronunciation at phoneme level** and adapt to the learner's actual
+  errors rather than a preset script.
+- Persistent **contextual memory** across sessions, so the tutor remembers earlier mistakes.
+
+Against that, ours corrects errors inline but has no strictness control, no error history and
+only word-level scoring:
+
+- [ ] Add a **feedback strictness** setting to scenario and chat modes.
+- [ ] Upgrade pronunciation scoring from WER to **phoneme-level**. Current `_wer()` scores
+      *word recognition*, so a heavy accent Whisper still decodes scores 1.0 — see T3 note
+      above. Phoneme alignment gives genuinely actionable feedback ("your *u* is fronted").
+- [ ] Persist a **per-learner error profile** (recurring grammar and phoneme errors) and feed
+      it into scenario and quiz generation, so practice targets real weak spots.
+
+### T-D — Deferred bug (carried from the v2.4.0 notes)
+
+- [ ] TTS speaks the **first** reply of a session in the wrong language — see the deferred
+      item in the session notes above.
+
+**Sources:** [FSRS vs SM-2](https://www.antiagent.io/blog/fsrs-vs-sm-2) ·
+[Anki scheduler FAQ](https://faqs.ankiweb.net/what-spaced-repetition-algorithm) ·
+[Research-backed app comparison](https://www.sciencebasedlearning.com/blog/best-language-learning-apps-2026) ·
+[Praktika review](https://languatalk.com/blog/praktika-review/) ·
+[AI speaking apps compared](https://www.talkio.ai/blog/best-ai-language-speaking-practice-apps-in-2026)
 
 ---
 

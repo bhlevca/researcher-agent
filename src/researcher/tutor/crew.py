@@ -461,6 +461,53 @@ class TutorCrew:
         },
     }
 
+    def build_passage_crew(
+        self,
+        topic: str,
+        target_lang: str,
+        native_lang: str,
+        level: str,
+        due_words: list[dict] | None = None,
+        word_count: int = 180,
+    ) -> Crew:
+        """Build a Crew that writes a levelled reading passage.
+
+        This is the comprehensible-input half of the tutor: the learner meets
+        due vocabulary *in context* rather than as isolated flashcards, which is
+        what makes spaced repetition stick.
+        """
+        agent = self._build_agent(target_lang, native_lang, level, tools=[])
+
+        if due_words:
+            listed = "\n".join(
+                f"- {w['word']} ({w.get('translation', '')})" for w in due_words
+            )
+        else:
+            # No cards due: still comprehensible input, just unseeded.
+            listed = (
+                "(none due — choose vocabulary appropriate to the level and topic)"
+            )
+
+        desc, exp = self._render_task(
+            "passage_task",
+            {
+                "topic": topic,
+                "target_lang": target_lang,
+                "native_lang": native_lang,
+                "level": level,
+                "due_words": listed,
+                "word_count": str(word_count),
+            },
+        )
+        task = Task(description=desc, expected_output=exp, agent=agent, context=[])
+        return Crew(
+            agents=[agent],
+            tasks=[task],
+            process=Process.sequential,
+            memory=False,
+            verbose=True,
+        )
+
     def build_quiz_crew(
         self,
         quiz_type: str,

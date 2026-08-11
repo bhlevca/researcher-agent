@@ -36,6 +36,15 @@ class LessonPlanRequest(BaseModel):
     lesson_type: str = "mixed"  # grammar | vocabulary | situation | mixed
 
 
+class PassageRequest(BaseModel):
+    """Request a levelled reading passage (comprehensible input)."""
+    session_id: str
+    topic: str = ""             # blank = use the session's current curriculum topic
+    word_count: int = 180
+    seed_due_vocab: bool = True  # weave in words that are due for review
+    max_seed_words: int = 8
+
+
 class QuizRequest(BaseModel):
     """Request a quiz."""
     session_id: str

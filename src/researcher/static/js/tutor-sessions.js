@@ -10,6 +10,7 @@ function switchTutorTab(tabName) {
     // Refresh data when switching to certain tabs
     if (tabName === 'vocab') loadVocabulary();
     if (tabName === 'lessons' && tutorSessionId) loadLessons();
+    if (tabName === 'reading' && tutorSessionId) { loadPassages(); showDueCount(); }
     if (tabName === 'quiz' && tutorSessionId) loadQuizHistory();
     if (tabName === 'stats' && tutorSessionId) loadStats();
     if (tabName === 'scenarios' && tutorSessionId) loadScenarios();

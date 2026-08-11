@@ -13,6 +13,7 @@ import queue
 import asyncio
 import threading
 import logging
+from pathlib import Path
 
 from fastapi import HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -26,6 +27,7 @@ from researcher.tutor.models import (
     TutorSessionUpdate,
     TutorChatRequest,
     LessonPlanRequest,
+    PassageRequest,
     QuizRequest,
     QuizSubmitRequest,
     VocabularyAddRequest,
@@ -55,9 +57,43 @@ from researcher.tutor.storage import (
     update_vocabulary_mastery,
     get_student_stats,
     get_cross_session_stats,
+    save_passage,
+    list_passages,
+    get_passage,
+    delete_passage,
+    compute_unknown_ratio,
+    known_words_for,
 )
 
 logger = logging.getLogger(__name__)
+
+
+_CURRICULUM_FILE = Path(__file__).parent.parent / "tutor" / "curriculum.yaml"
+_curriculum: dict = {}
+
+
+def _curriculum_topics(level: str) -> list[str]:
+    """Ordered topic list for a CEFR level, loaded once and cached."""
+    global _curriculum
+    if not _curriculum:
+        try:
+            import yaml
+
+            with open(_CURRICULUM_FILE) as f:
+                _curriculum = yaml.safe_load(f) or {}
+        except Exception as exc:  # pragma: no cover - config problem
+            logger.warning("Failed to load curriculum.yaml: %s", exc)
+            _curriculum = {}
+    return _curriculum.get((level or "A1").upper(), []) or []
+
+
+def _current_curriculum_topic(session: dict) -> str:
+    """The topic the learner is currently on, or "" if the level has none."""
+    topics = _curriculum_topics(session.get("level", "A1"))
+    if not topics:
+        return ""
+    idx = int(session.get("topic_index") or 0)
+    return topics[min(idx, len(topics) - 1)]
 
 
 def _get_tutor_crew(request: Request, uid: str) -> TutorCrew:
@@ -443,6 +479,121 @@ def register_tutor_routes(app):
         )
         lesson["vocabulary_saved"] = len(vocab_entries)
         return lesson
+
+    # ── Reading passages (comprehensible input) ──
+
+    @app.post("/tutor/passages")
+    async def tutor_create_passage(req: PassageRequest, request: Request):
+        """Generate a levelled reading passage — SSE streaming.
+
+        Seeds the passage with vocabulary that is due for review, so the learner
+        meets those words in context instead of as isolated flashcards.
+        """
+        _validate_sid(req.session_id)
+        user = await get_current_user(request)
+        db = request.app.state.db
+
+        session = await get_tutor_session(db, req.session_id, user["id"])
+        if not session:
+            raise HTTPException(status_code=404, detail="Tutor session not found")
+
+        due: list[dict] = []
+        if req.seed_due_vocab:
+            due = await list_vocabulary_due(
+                db, user["id"], session["target_lang"]
+            )
+            due = due[: max(0, req.max_seed_words)]
+
+        topic = req.topic.strip()
+        if not topic:
+            topic = _current_curriculum_topic(session) or "everyday life"
+
+        uid = user["id"]
+        tutor_crew = _get_tutor_crew(request, uid)
+        crew = tutor_crew.build_passage_crew(
+            topic=topic,
+            target_lang=session["target_lang"],
+            native_lang=session["native_lang"],
+            level=session["level"],
+            due_words=due,
+            word_count=req.word_count,
+        )
+        return await _stream_tutor_crew(
+            crew, request, uid,
+            timeout_sec=tutor_crew.get_llm_params().get("crew_timeout_sec"),
+        )
+
+    @app.post("/tutor/passages/save")
+    async def tutor_save_passage(request: Request):
+        """Persist a generated passage, measuring how much of it is new.
+
+        The unknown-word ratio is what tells the learner whether the passage is
+        pitched at i+1 (~10% new). It is computed here rather than trusted from
+        the model, which has no idea what this particular learner knows.
+        """
+        user = await get_current_user(request)
+        body = await request.json()
+        session_id = (body.get("session_id") or "").strip()
+        _validate_sid(session_id)
+        content = (body.get("content") or "").strip()
+        if not content:
+            raise HTTPException(status_code=400, detail="content is required")
+
+        db = request.app.state.db
+        session = await get_tutor_session(db, session_id, user["id"])
+        if not session:
+            raise HTTPException(status_code=404, detail="Tutor session not found")
+
+        known = await known_words_for(db, user["id"], session["target_lang"])
+        ratio, word_count, unknown_sample = compute_unknown_ratio(
+            content, known, session["target_lang"]
+        )
+
+        title = (body.get("title") or "").strip()
+        if not title:
+            for line in content.splitlines():
+                if line.startswith("#"):
+                    title = line.lstrip("#").strip()
+                    break
+            title = title or "Reading passage"
+
+        saved = await save_passage(
+            db, user["id"], session_id, title,
+            body.get("topic", ""), session["target_lang"], session["level"],
+            content, body.get("seeded_words", []), word_count, ratio,
+        )
+        saved["unknown_sample"] = unknown_sample
+        # The ratio is only meaningful once the learner's saved vocabulary is
+        # large enough to represent what they actually know. Send the size so
+        # the UI can say "can't judge yet" instead of always reporting "hard".
+        saved["known_word_count"] = len(known)
+        return saved
+
+    @app.get("/tutor/sessions/{session_id}/passages")
+    async def tutor_list_passages(session_id: str, request: Request):
+        _validate_sid(session_id)
+        user = await get_current_user(request)
+        return {
+            "passages": await list_passages(
+                request.app.state.db, user["id"], session_id
+            )
+        }
+
+    @app.get("/tutor/passages/{passage_id}")
+    async def tutor_get_passage(passage_id: str, request: Request):
+        user = await get_current_user(request)
+        p = await get_passage(request.app.state.db, user["id"], passage_id)
+        if not p:
+            raise HTTPException(status_code=404, detail="Passage not found")
+        return p
+
+    @app.delete("/tutor/passages/{passage_id}")
+    async def tutor_delete_passage(passage_id: str, request: Request):
+        user = await get_current_user(request)
+        ok = await delete_passage(request.app.state.db, user["id"], passage_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Passage not found")
+        return {"deleted": passage_id}
 
     @app.get("/tutor/sessions/{session_id}/lessons")
     async def tutor_list_lessons(session_id: str, request: Request):

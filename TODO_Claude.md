@@ -1,7 +1,44 @@
 # TODO_Claude.md — Improvement Plan for Researcher, Tutor & Composer
 
 Generated: 2026-05-23 | Project: ai-agent v2.2.0 | Branch: developer
-Updated: 2026-08-09 for v2.4.0 — see "Session notes" below before trusting older sections.
+Updated: 2026-08-10 — statuses below re-verified against the code, not against the
+previous checkboxes. Several entries were stale in both directions.
+
+---
+
+## Status at a glance (verified 2026-08-10)
+
+| ID | Item | Status |
+|----|------|--------|
+| R1 | Monkey-patch isolation | ✅ done (v2.4.0) |
+| R2 | Multi-user crew isolation | ✅ done — except 409 Conflict |
+| R3 | Request timeouts & cancel | ⚠️ timeout works; **cancel does not actually cancel** |
+| R4 | Consistent error responses | ❌ not started |
+| R5 | Structured logging | ❌ not started — 94 `stderr.write` vs 82 logger calls |
+| R6 | VRAM spike after image gen | ❌ not started |
+| R7 | Input sanitization | ⚠️ attachments capped; prompts unvalidated |
+| R8 | Static file caching | ❌ not started |
+| T1–T6 | Tutor feature set | ✅ done (v2.3.0) |
+| T-A | FSRS replaces SM-2 | ✅ done (v2.6.0-dev) |
+| T-B | Comprehensible input | ✅ done (v2.6.0) |
+| T-C | Feedback loop / phoneme scoring | ❌ not started |
+| T-D | TTS first-reply language bug | ❌ open |
+| C1 | Modulation / key changes | ❌ not started |
+| C2 | Dynamics & articulation | ❌ not started |
+| C3 | Multi-instrument | ✅ done — entry was stale |
+| C4 | Browser score playback | ❌ not started — gates all composer work |
+| C5 | JSON repair hardening | ⚠️ partial — likely deleted by the ABC switch |
+| C6 | Harmonization feedback UI | ❌ endpoint exists, no comparison view |
+| C7 | Ear training | ❌ not started |
+| X1 | Shared LLM factory | ❌ not started — duplication has grown since |
+| X2 | Central settings | ❌ not started — `pydantic-settings` installed but unused |
+| X3 | Per-user concurrency | ✅ done — entry was stale |
+| X4 | DB migrations | ❌ hand-rolled `PRAGMA` checks |
+| X5 | Documentation / diagram | ❌ no architecture diagram |
+
+**Delivered since this file was written, and not in the list above:** faster-whisper STT,
+PDF/image OCR with automatic DOCX/ODT export, the extraction fast path, the CrewAI executor
+pin, and `max_iter` as a tunable parameter. See the session notes below.
 
 ---
 
@@ -150,7 +187,7 @@ The same pattern very likely holds here.
 (quizzes, vocabulary drills, scenarios). The research consensus is that this is the smaller
 half of language acquisition.*
 
-### T-A — Replace SM-2 with FSRS (HIGH, self-contained)
+### T-A — Replace SM-2 with FSRS — ✅ DONE (v2.6.0-dev)
 
 `tutor/storage.py` implements SM-2, the 1987 algorithm with a single ease factor per card.
 Anki replaced it with **FSRS**, which models three variables per card — difficulty, stability
@@ -164,10 +201,25 @@ This is the highest value-per-effort item in the tutor: a drop-in scheduler swap
 existing `vocabulary` table. The `lapses` column added in T6 is already one of the inputs FSRS
 wants.
 
-- [ ] Add the FSRS library, migrate `vocabulary` to store difficulty/stability/retrievability
-- [ ] Keep SM-2 behind a flag for one release so intervals can be compared
+- [x] Added `fsrs` 6.3.2 (MIT); `vocabulary` gained `fsrs_stability`, `fsrs_difficulty`,
+      `fsrs_state`, `fsrs_step`, `last_review`
+- [x] SM-2 kept behind `SRS_ALGO=sm2`; `schedule_review()` dispatches
+- [x] Existing cards are seeded from their SM-2 history rather than reset —
+      `stability ← interval_days`, `difficulty ←` inverted ease factor, nudged up by lapses
+- [x] Added `SRS_MAX_INTERVAL` (default 365). FSRS's own default is 36500 days, which is
+      meaningless for language study.
+- [x] 9 tests in `tests/test_tutor.py::TestFsrsScheduler`
 
-### T-B — Add comprehensible input; the tutor has none (HIGH)
+**Bug found and fixed during implementation** — worth remembering, because it is silent:
+seeding a migrated card with `last_review = NULL` makes FSRS compute zero elapsed time, so a
+long-interval card looks perfectly retained. A 90-day card rated *Easy* was scheduled
+**4994 days** out. Setting `last_review` to one interval ago (which is simply true) gives 447
+days. Pinned by `test_migration_does_not_explode_the_interval`.
+
+*Not yet verifiable:* the ~20–30% review reduction is a property of scheduling accuracy over
+weeks of real reviews. The tests prove correctness and continuity, not that benefit.
+
+### T-B — Add comprehensible input — ✅ DONE (v2.6.0)
 
 Current design is ~100% output and review. The research points the other way:
 
@@ -181,13 +233,30 @@ Current design is ~100% output and review. The research points the other way:
 
 We already have every piece needed to build this and have not connected them:
 
-- [ ] **Generate levelled reading passages** per CEFR level and curriculum topic — the lesson
-      generator already does something close.
-- [ ] **Seed them with the learner's due vocabulary** so review happens in context rather than
-      on isolated flashcards. This is the 80/20 split, and it is what makes SRS stick.
-- [ ] **Read passages aloud with edge-tts** — we already have multilingual TTS, so listening
-      practice is nearly free.
-- [ ] Track an *unknown-word ratio* per passage and target ~10% to keep material at i+1.
+- [x] **Levelled reading passages** — new 📚 Reading tab. `passage_task` in `tasks.yaml`
+      explicitly forbids grammar tables and exercises: this is prose to be read, not a lesson.
+      Defaults to the session's current curriculum topic when none is given.
+- [x] **Seeded with due vocabulary** — `list_vocabulary_due()` feeds the prompt, which
+      instructs the model to use each word naturally and *not* draw attention to it.
+- [x] **Read aloud** via the existing edge-tts. `_passageProseOnly()` strips the glossary and
+      comprehension questions first, so only the prose is spoken.
+- [x] **Unknown-word ratio** computed server-side per passage, with an i+1 verdict in the UI.
+- [x] Endpoints: `POST /tutor/passages` (SSE), `/tutor/passages/save`, list / get / delete;
+      new `passages` table.
+
+**Two corrections made during implementation — both worth remembering:**
+
+1. *The first ratio was useless.* It reported **95.7% unknown** on a clean A1 passage because
+   `le`, `la`, `il`, `est`, `de` counted as unknown vocabulary. Function-word stop lists for
+   French, Spanish, German, Italian, Portuguese, English and Romanian now exclude them.
+2. *The ratio is measured against **saved** vocabulary*, which is only a proxy for what the
+   learner knows. Below 50 saved words the UI now says "save more vocabulary to gauge
+   difficulty (n/50)" rather than always declaring a passage "hard". Expect the metric to look
+   unhelpful on day one and to become meaningful as the word list grows.
+
+**Known limitations:** proper nouns count as new words (*Léo*), and there is no lemmatisation,
+so *dort* and *dormir* are counted separately. Both would need a per-language NLP dependency
+for modest gain.
 
 ### T-C — Tighten the conversation feedback loop (MEDIUM)
 
@@ -238,16 +307,18 @@ The sections below are ordered by priority within each component.
 
 ## RESEARCHER
 
-### R1 — Monkey-Patch Isolation (HIGH)
-**Files**: `src/researcher/crew.py` lines 36–330
-
-The patches for CrewAI/litellm/Ollama compatibility are embedded directly at module import time with no version guards. A single `pip install --upgrade crewai` can break the whole app silently.
+### R1 — Monkey-Patch Isolation (HIGH) — ✅ DONE (v2.4.0)
 
 **Actions**:
-- [ ] Move all monkey-patches into `src/researcher/patches.py`
-- [ ] Add version guards: `assert crewai.__version__ == "1.14.5", "Patches untested on this version"`
-- [ ] Add a comment block at the top of each patch group explaining *what* it fixes and *which upstream issue* it works around
-- [ ] Create `tests/test_patches.py` that verifies each patch is still necessary (if the patched behavior is fixed upstream, the test fails and tells you to remove the patch)
+- [x] Move all monkey-patches into `src/researcher/patches.py`
+- [x] Add version guards — implemented as a *range* plus a structural check, not an
+      exact-equality assert. The original suggestion here was actively harmful: an exact
+      `==` assert turned a routine `uv lock --upgrade` into a hard startup crash. See the
+      v2.4.0 session notes.
+- [x] Comment block per patch group explaining what it fixes
+- [x] `tests/test_patches.py` verifies each patch is still necessary
+- [x] **Beyond the original plan**: `_check_executor_reachability()` also catches patches
+      that are still *present* but no longer *called* — which is exactly how P3 died silently.
 
 ### R2 — Multi-User Crew Isolation (HIGH)
 **Files**: `src/researcher/main.py` line 65, `src/researcher/routes/chat.py` lines 155, 173, 208
@@ -257,22 +328,37 @@ Authentication is correctly implemented — each request is tied to an authentic
 - `app.state.research_crew` — a single crew instance; user B's request at line 155 overwrites user A's in-flight crew
 - `app.state.cancel_event` — a single cancel flag; any user hitting `/chat/cancel` cancels every other user's active run
 
+**Status**: ✅ mostly DONE — one sub-item outstanding.
+
 **Actions**:
-- [ ] Replace `app.state.research_crew` with a `dict[user_id, ResearchCrew]` (lazy-init per user on first request)
-- [ ] Replace `app.state.crew_semaphore` with a `dict[user_id, asyncio.Semaphore]` so only the *same user* with two tabs blocks themselves, not other users
-- [ ] Replace `app.state.cancel_event` with a `dict[user_id, asyncio.Event]` so `/chat/cancel` only cancels the requesting user's run
-- [ ] Apply the same isolation pattern to tutor and composer (they share the same global-state anti-pattern)
-- [ ] Return HTTP 409 Conflict (not 429) if the same user already has an active crew run
+- [x] `app.state.research_crews` is a `dict[user_id, ResearchCrew]`
+- [x] `app.state.crew_semaphores` is a `dict[user_id, asyncio.Semaphore]`
+- [x] `app.state.cancel_events` is a `dict[user_id, threading.Event]`
+- [x] Tutor and composer use the same per-user semaphores (see X3)
+- [ ] Return HTTP 409 Conflict if the same user already has an active crew run —
+      currently the second request simply blocks on the semaphore instead of being rejected
 
 ### R3 — Request Timeouts & Circuit Breaker (HIGH)
 **Files**: `src/researcher/routes/chat.py`, `src/researcher/routes/ask.py`
 
 Long-running crew kickoffs can hang indefinitely. There is no timeout, no cancellation path surfaced to the client on errors, and no circuit breaker.
 
+**Status**: ⚠️ PARTIAL — the timeout fires, but nothing is actually cancelled.
+
 **Actions**:
-- [ ] Wrap `crew.kickoff()` in `asyncio.wait_for(…, timeout=180)` (configurable via `CREW_TIMEOUT_SEC` env var)
-- [ ] On timeout, cancel the task, yield a `data: [TIMEOUT]` SSE event, and clean up the cancel token
-- [ ] The `/chat/cancel` endpoint already exists — ensure it actually cancels the underlying asyncio task (verify with a test)
+- [x] Timeout implemented, configurable via `CREW_TIMEOUT_SEC` and the per-user
+      `crew_timeout_sec` LLM param
+- [x] On timeout the stream yields an `error` SSE event and stops relaying
+- [ ] **Cancel does not cancel.** `/chat/cancel` sets the event and the SSE loop checks it,
+      but `_run_crew` never reads it — the worker thread runs to completion, still holding
+      the GPU. The user sees the request stop; the machine does not.
+- [ ] **The semaphore is released early.** The early-exit `return` leaves the
+      `async with semaphore` block while the worker thread is still alive, so a second
+      request can start a concurrent crew on a single GPU.
+- [ ] Verify both with a test
+
+*Practical note:* `max_iter` (added v2.4.0, tunable from the params panel) is the real
+lever on worst-case latency — each iteration is a full LLM call.
 
 ### R4 — Consistent Error Responses (MEDIUM)
 **Files**: `src/researcher/routes/chat.py`, `routes/ask.py`, `routes/sessions.py`, `routes/models.py`
@@ -308,10 +394,14 @@ After image generation, Ollama is unloaded from VRAM to free space. This causes 
 
 User prompts are passed directly to the LLM and injected into the system prompt context without escaping.
 
+**Status**: ⚠️ PARTIAL.
+
 **Actions**:
 - [ ] Strip leading/trailing control characters and zero-width spaces from user input
-- [ ] Enforce a max prompt length (e.g., 8192 chars) with a clear error message
-- [ ] For file attachment context, truncate injected text at a configurable token budget (e.g., 6144 tokens)
+- [ ] Enforce a max prompt length with a clear error message
+- [x] Attachment text is capped — `MAX_TEXT_CHARS = 50_000` in `ingestion.py`, applied at
+      extraction time with a visible truncation marker. Still a character budget rather than
+      a token budget, and 50k chars is generous against a 32k-token context.
 
 ### R8 — Static File Caching (LOW)
 **Files**: `src/researcher/main.py` (StaticFiles mount)
@@ -416,12 +506,15 @@ The builder has partial dynamics support (mentioned in file comments) but articu
 
 Currently the builder supports piano (grand staff) and single-instrument scores. Orchestration for multiple instruments is not implemented.
 
+**Status**: ✅ largely DONE — this entry was stale.
+
 **Actions**:
-- [ ] Extend JSON schema: `parts: [{instrument: str, clef: str, notes: [...]}]`
-- [ ] Update `musicxml_builder.py` to emit `<part-list>` with multiple `<score-part>` elements
-- [ ] The existing `instrument_range` tool already has range data — link it to part validation
-- [ ] Add orchestration templates to `genres.yaml` (string quartet, jazz combo, brass quintet)
-- [ ] Update `agents.yaml` rules: "For multi-instrument scores, output a parts array"
+- [x] JSON schema has a `parts` array
+- [x] `musicxml_builder.py` emits `<part-list>` with per-part `<score-part>` and
+      `<midi-instrument>`; also handles grand staff vs single staff and merges split parts
+- [ ] Link the `instrument_range` tool to part validation (music21 would do this better)
+- [ ] Orchestration templates in `genres.yaml` (string quartet, jazz combo, brass quintet)
+- [x] `agents.yaml` documents the parts array
 
 ### C4 — Score Playback in Browser (MEDIUM)
 **Files**: `src/researcher/static/composer.html`
@@ -440,12 +533,17 @@ MusicXML is downloadable but can only be played in external apps (MuseScore, etc
 
 There are 19 regex + 8 structural repairs. This file is a patch on top of a patch — the LLM produces broken JSON and it gets repaired downstream. The correct fix is better prompting.
 
+**Status**: ⚠️ PARTIAL — and **likely to be deleted rather than finished**. Switching the
+composer's output format to ABC notation removes the reason this layer exists. Do not invest
+here before reading the revised COMPOSER section near the top of this file.
+
 **Actions**:
-- [ ] In `agents.yaml`, add explicit few-shot JSON output examples showing correct note format
-- [ ] Add a JSON schema validation step *before* calling `musicxml_fix.py` — if the LLM output is already valid JSON, skip the 19 regex passes entirely (speed improvement)
-- [ ] Log which repairs fire on each composition (helps identify which LLM failures are most common so prompting can target them)
-- [ ] If repair fails completely, return a structured error `{"error": "json_repair_failed", "raw": "..."}` instead of crashing
-- [ ] Add `test_musicxml_fix.py` cases for the top-5 most-fired repairs
+- [ ] Few-shot JSON examples in `agents.yaml`
+- [x] Valid JSON already short-circuits — `_extract_json_score` parses as-is first and only
+      falls back to repairs on `JSONDecodeError`
+- [ ] Log which repairs fire (would identify the most common LLM failures)
+- [x] Repair failure returns `None` and logs, rather than crashing
+- [x] `tests/test_musicxml_fix.py` exists (419 lines)
 
 ### C6 — Harmonization Feedback UI (MEDIUM)
 **Files**: `src/researcher/static/composer.html`, `src/researcher/routes/composer.py` (`/composer/harmonize`)
@@ -477,10 +575,13 @@ The TODO mentions "Music Tutor" as v3.0. Ear training is the natural bridge betw
 
 All three crew classes repeat the same LLM initialization, capability probing, and planning LLM creation code (~80 lines each).
 
+**Status**: ❌ NOT STARTED — still three near-identical copies. The duplication has since
+grown: `executor_kwargs()` and the `max_iter` param had to be added to all three by hand.
+
 **Actions**:
 - [ ] Create `src/researcher/llm_factory.py` with `make_llm(model, params) -> LLM` and `make_planning_llm(model) -> LLM`
 - [ ] Replace the three duplicated blocks with calls to this factory
-- [ ] Move `probe_model_capabilities()` from `config.py` into `llm_factory.py` (it belongs there)
+- [ ] Move `probe_model_capabilities()` from `config.py` into `llm_factory.py`
 
 ### X2 — Central Configuration (MEDIUM)
 **Files**: Many (magic numbers scattered throughout)
@@ -498,10 +599,15 @@ Context window (32768), predict tokens (4096), image size (512), SM-2 ease (2.5)
 
 Tutor and composer have no concurrency protection at all — two tabs can corrupt state. Researcher has a global semaphore.
 
+**Status**: ✅ mostly DONE — this entry was stale. Tutor and composer *do* acquire the
+per-user semaphore (`routes/tutor.py:125`, `routes/composer.py:105` with
+`async with semaphore`). An earlier audit of mine claimed otherwise; that was wrong.
+
 **Actions**:
-- [ ] Implement a shared `UserLockManager` in `main.py` (dict of `user_id → asyncio.Lock`)
-- [ ] Apply it to researcher, tutor, and composer crew kickoffs consistently
-- [ ] Return 409 Conflict if the same user tries to start two concurrent crew runs
+- [x] Per-user semaphores live on `app.state.crew_semaphores`, shared by all three components
+- [x] Applied to researcher, tutor and composer kickoffs
+- [ ] Return 409 Conflict instead of silently queueing behind the semaphore (same open
+      sub-item as R2)
 
 ### X4 — Database Migrations (LOW)
 **Files**: `main.py` (SQLite init), `tutor/storage.py`, `composer/storage.py`
@@ -527,6 +633,25 @@ The README is good but there is no architecture diagram and no per-component API
 ---
 
 ## Priority Order (Suggested Sequence)
+
+> **Superseded — kept for reference.** This ordering is from 2026-05-23 and several entries
+> are complete. Use the "Status at a glance" table at the top of this file for current state,
+> and the recommended order below for what to do next.
+
+### Recommended order now (2026-08-10)
+
+| # | Item | Why now |
+|---|------|---------|
+| 1 | **C4 — Browser score playback** | Gates all composer work. Until a change can be heard in seconds rather than via MuseScore, musical quality cannot be tuned. |
+| 2 | **Composer: ABC notation switch** | Cheapest large win available; also deletes most of C5. See the revised COMPOSER section. |
+| 3 | **T-C — Feedback loop, phoneme scoring** | The remaining tutor gap now that T-A and T-B have landed. |
+| 4 | **R3 — Make cancel actually cancel** | A "cancelled" run still holds the GPU on a single-GPU machine. |
+| 5 | **X1 + X2 — LLM factory, central settings** | Duplication keeps growing; every new param must be added in three places by hand. |
+| 6 | T-D — TTS first-reply language bug | Small, user-visible. |
+| 7 | C1/C2 — Dynamics, articulation, key changes | Worth doing once you can *hear* the difference (after 1). |
+| 8 | Tutor: lemmatisation / proper-noun handling | Would sharpen the i+1 metric; needs a per-language NLP dependency. |
+
+### Original 2026-05-23 ordering (historical)
 
 | # | Item | Component | Effort | Impact |
 |---|------|-----------|--------|--------|

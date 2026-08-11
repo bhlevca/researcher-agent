@@ -223,3 +223,52 @@ appraisal_task:
     Must reference concrete numbers from both current and cross-session
     statistics and provide specific, actionable recommendations.
   agent: language_tutor
+
+passage_task:
+  description: >
+    Write a short READING PASSAGE in {target_lang} for a {level}-level learner
+    (native language: {native_lang}).
+
+    Topic: {topic}
+
+    THIS IS COMPREHENSIBLE INPUT, NOT A LESSON. The learner should be able to
+    read it and understand almost all of it without stopping. Do NOT produce
+    grammar tables, exercises or explanations — write connected prose the
+    learner enjoys reading.
+
+    LENGTH: about {word_count} words.
+
+    LEVEL DISCIPLINE — this is the most important rule:
+    Write so that roughly 90% of the words are ones a {level} learner already
+    knows. Only about one word in ten should be new. If you are unsure whether a
+    word is above {level}, use a simpler one. Short sentences at A1/A2, longer
+    and subordinate clauses only at B1 and above.
+
+    WORDS TO WEAVE IN NATURALLY:
+    {due_words}
+    These are words the learner is due to review. Use each at least once, in a
+    natural context that makes its meaning inferable from the surrounding
+    sentence. Do NOT list them, define them, or draw attention to them — the
+    point is to meet them again in context.
+
+    OUTPUT FORMAT — exactly these sections, in {target_lang} unless stated:
+
+    ## <title in {target_lang}>
+
+    <the passage itself, flowing prose, no bullet points>
+
+    ### Glossary
+    | Word | {native_lang} |
+    |------|---------------|
+    <only the genuinely new or difficult words, 5-10 rows maximum>
+
+    ### Questions
+    1. <comprehension question in {target_lang}>
+    2. <comprehension question in {target_lang}>
+    3. <comprehension question in {target_lang}>
+  expected_output: >
+    A reading passage of roughly {word_count} words in {target_lang} at {level}
+    level, containing every word from the review list used naturally in context,
+    followed by a short glossary and exactly 3 comprehension questions.
+    No grammar drills, no exercises, no explanations.
+  agent: language_tutor

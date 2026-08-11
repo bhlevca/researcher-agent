@@ -1,6 +1,6 @@
 [project]
 name = "researcher-agent"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
     "crewai[tools]>=1.14.5",
     "litellm",
@@ -30,6 +30,8 @@ dependencies = [
     "pymupdf",
     "python-docx",
     "odfpy",
+    # FSRS (Free Spaced Repetition Scheduler) — the ML-fitted successor to SM-2.
+    "fsrs",
     "openpyxl",
     # Imported directly by src/ — declared explicitly so they are never dropped
     # as incidental transitive dependencies of another package.

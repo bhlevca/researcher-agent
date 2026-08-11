@@ -215,6 +215,7 @@
     <div class="tutor-tabs">
         <button class="tutor-tab active" data-tab="chat" onclick="switchTutorTab('chat')">💬 Chat</button>
         <button class="tutor-tab" data-tab="lessons" onclick="switchTutorTab('lessons')">📖 Lessons</button>
+        <button class="tutor-tab" data-tab="reading" onclick="switchTutorTab('reading')">📚 Reading</button>
         <button class="tutor-tab" data-tab="vocab" onclick="switchTutorTab('vocab')">📝 Vocabulary</button>
         <button class="tutor-tab" data-tab="quiz" onclick="switchTutorTab('quiz')">❓ Quiz</button>
         <button class="tutor-tab" data-tab="translate" onclick="switchTutorTab('translate')">🔄 Translate</button>
@@ -304,6 +305,27 @@
         <div class="lessons-content">
             <div id="lessons-content"></div>
             <div id="lessons-list" style="margin-top:1rem;"></div>
+        </div>
+    </div>
+
+    <!-- ═══════ READING panel — comprehensible input ═══════ -->
+    <div class="tutor-panel" id="panel-reading">
+        <div class="lesson-form">
+            <input type="text" id="passage-topic" placeholder="Topic (blank = your current curriculum topic)" style="flex:1;">
+            <select id="passage-length" title="Passage length">
+                <option value="120">Short (~120 words)</option>
+                <option value="180" selected>Medium (~180 words)</option>
+                <option value="300">Long (~300 words)</option>
+            </select>
+            <label style="display:flex;align-items:center;gap:0.3rem;color:#94a3b8;font-size:0.78rem;white-space:nowrap;" title="Weave words that are due for review into the passage, so you meet them in context">
+                <input type="checkbox" id="passage-seed" checked> seed due words
+            </label>
+            <button onclick="generatePassage()">📚 Generate</button>
+        </div>
+        <div id="passage-due-hint" style="color:#64748b;font-size:0.75rem;margin:0 0 0.5rem 0;"></div>
+        <div class="lessons-content">
+            <div id="passage-content"></div>
+            <div id="passage-list" style="margin-top:1rem;"></div>
         </div>
     </div>
 
@@ -422,6 +444,7 @@
     <script src="/static/js/tutor-sessions.js"></script>
     <script src="/static/js/tutor-chat.js"></script>
     <script src="/static/js/tutor-lessons.js"></script>
+    <script src="/static/js/tutor-reading.js"></script>
     <script src="/static/js/tutor-vocab.js"></script>
     <script src="/static/js/tutor-quiz.js"></script>
     <script src="/static/js/tutor-translate.js"></script>

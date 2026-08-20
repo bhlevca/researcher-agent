@@ -26,6 +26,34 @@ SRS_MAX_INTERVAL = int(os.environ.get("SRS_MAX_INTERVAL", "365"))
 logger = logging.getLogger(__name__)
 
 
+def get_srs_params() -> dict:
+    """Current spaced-repetition settings, for the Params panel."""
+    return {
+        "srs_algo": SRS_ALGO,
+        "srs_desired_retention": SRS_DESIRED_RETENTION,
+        "srs_max_interval": SRS_MAX_INTERVAL,
+        "srs_initial_ease": SRS_INITIAL_EASE,
+    }
+
+
+def update_srs_params(params: dict) -> dict:
+    """Update spaced-repetition settings at runtime."""
+    global SRS_ALGO, SRS_DESIRED_RETENTION, SRS_MAX_INTERVAL, SRS_INITIAL_EASE
+
+    if "srs_algo" in params:
+        val = str(params["srs_algo"]).lower().strip()
+        if val in ("fsrs", "sm2"):
+            SRS_ALGO = val
+    if "srs_desired_retention" in params:
+        # Below ~0.7 scheduling becomes erratic; above 0.97 reviews explode.
+        SRS_DESIRED_RETENTION = max(0.7, min(0.97, float(params["srs_desired_retention"])))
+    if "srs_max_interval" in params:
+        SRS_MAX_INTERVAL = max(1, min(36500, int(params["srs_max_interval"])))
+    if "srs_initial_ease" in params:
+        SRS_INITIAL_EASE = max(1.3, min(4.0, float(params["srs_initial_ease"])))
+    return get_srs_params()
+
+
 # ---------------------------------------------------------------------------
 # Table initialisation
 # ---------------------------------------------------------------------------

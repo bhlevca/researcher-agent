@@ -162,6 +162,144 @@
                 <input type="range" id="param-crew_timeout_sec" min="60" max="900" step="30" value="300" oninput="updateParamDisplay('crew_timeout_sec')">
             </div>
 
+            <div class="llm-param-section-header" style="margin-top:1.2rem;padding-top:0.8rem;border-top:1px solid #1e3a5f;">
+                <span style="color:#38bdf8;font-weight:600;font-size:0.85rem;">📄 OCR (scans &amp; images)</span>
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>OCR Enabled</span><span class="llm-param-value" id="val-sub-ocr_enabled">On</span></div>
+                <div class="llm-param-hint">Pages with no text layer are rendered and sent to a vision model. Off means scanned PDFs extract nothing.</div>
+                <input type="checkbox" id="param-sub-ocr_enabled" checked onchange="updateSubParamDisplay('ocr_enabled')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>OCR Model</span><span class="llm-param-value" id="val-sub-ocr_model">deepseek-ocr:3b</span></div>
+                <div class="llm-param-hint">Must be a vision model in Ollama. deepseek-ocr:3b is ~5x faster and more complete than qwen3-vl:8b on scans, and gets its own prompt format automatically.</div>
+                <input type="text" id="param-sub-ocr_model" value="deepseek-ocr:3b" oninput="updateSubParamDisplay('ocr_model')" style="width:100%;background:#0b1e3a;border:1px solid #1e3a5f;color:#e2e8f0;padding:0.35rem 0.5rem;border-radius:0.35rem;font-size:0.8rem;">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Render DPI</span><span class="llm-param-value" id="val-sub-ocr_dpi">150</span></div>
+                <div class="llm-param-hint">Resolution the PDF page is rasterised at before downscaling. Higher helps small print, costs time.</div>
+                <input type="range" id="param-sub-ocr_dpi" min="72" max="400" step="10" value="150" oninput="updateSubParamDisplay('ocr_dpi')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Max Image Edge</span><span class="llm-param-value" id="val-sub-ocr_max_dim">1024</span></div>
+                <div class="llm-param-hint">Longest edge sent to the model. Do NOT raise casually — qwen3-vl returns an EMPTY string well above 1024px, which looks like OCR failing silently.</div>
+                <input type="range" id="param-sub-ocr_max_dim" min="512" max="2048" step="64" value="1024" oninput="updateSubParamDisplay('ocr_max_dim')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Max Pages</span><span class="llm-param-value" id="val-sub-ocr_max_pages">20</span></div>
+                <div class="llm-param-hint">Safety cap on how many pages of one PDF get OCR'd.</div>
+                <input type="range" id="param-sub-ocr_max_pages" min="1" max="200" step="1" value="20" oninput="updateSubParamDisplay('ocr_max_pages')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>OCR Timeout (s)</span><span class="llm-param-value" id="val-sub-ocr_timeout">180</span></div>
+                <div class="llm-param-hint">Per-page limit on the vision model call.</div>
+                <input type="range" id="param-sub-ocr_timeout" min="30" max="900" step="10" value="180" oninput="updateSubParamDisplay('ocr_timeout')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Auto-Export Format</span><span class="llm-param-value" id="val-sub-ocr_auto_export">docx</span></div>
+                <div class="llm-param-hint">An OCR'd upload downloads as a document automatically. 'none' keeps it click-to-download from the Files panel.</div>
+                <select id="param-sub-ocr_auto_export" onchange="updateSubParamDisplay('ocr_auto_export')" style="width:100%;background:#0b1e3a;border:1px solid #1e3a5f;color:#e2e8f0;padding:0.35rem;border-radius:0.35rem;font-size:0.8rem;"><option value="docx" selected>docx</option><option value="odt">odt</option><option value="none">none</option></select>
+            </div>
+            <div class="llm-param-section-header" style="margin-top:1.2rem;padding-top:0.8rem;border-top:1px solid #1e3a5f;">
+                <span style="color:#38bdf8;font-weight:600;font-size:0.85rem;">🎤 Speech-to-Text (faster-whisper)</span>
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Whisper Model</span><span class="llm-param-value" id="val-sub-whisper_model">small</span></div>
+                <div class="llm-param-hint">Larger = more accurate, slower. 'small' is the sweet spot for short mic clips.</div>
+                <select id="param-sub-whisper_model" onchange="updateSubParamDisplay('whisper_model')" style="width:100%;background:#0b1e3a;border:1px solid #1e3a5f;color:#e2e8f0;padding:0.35rem;border-radius:0.35rem;font-size:0.8rem;"><option value="tiny">tiny</option><option value="base">base</option><option value="small" selected>small</option><option value="medium">medium</option><option value="large-v2">large-v2</option><option value="large-v3">large-v3</option></select>
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Device</span><span class="llm-param-value" id="val-sub-whisper_device">cpu</span></div>
+                <div class="llm-param-hint">cpu keeps speech off the GPU, which Ollama and the image pipelines already contend for.</div>
+                <select id="param-sub-whisper_device" onchange="updateSubParamDisplay('whisper_device')" style="width:100%;background:#0b1e3a;border:1px solid #1e3a5f;color:#e2e8f0;padding:0.35rem;border-radius:0.35rem;font-size:0.8rem;"><option value="cpu" selected>cpu</option><option value="cuda">cuda</option></select>
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Compute Type</span><span class="llm-param-value" id="val-sub-whisper_compute_type">int8</span></div>
+                <div class="llm-param-hint">int8 on cpu, float16 on cuda. Changing the device resets this to match.</div>
+                <select id="param-sub-whisper_compute_type" onchange="updateSubParamDisplay('whisper_compute_type')" style="width:100%;background:#0b1e3a;border:1px solid #1e3a5f;color:#e2e8f0;padding:0.35rem;border-radius:0.35rem;font-size:0.8rem;"><option value="int8" selected>int8</option><option value="int8_float16">int8_float16</option><option value="float16">float16</option><option value="float32">float32</option></select>
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Voice Activity Detection</span><span class="llm-param-value" id="val-sub-whisper_vad">On</span></div>
+                <div class="llm-param-hint">Silero VAD strips silence before decoding. This is what stops Whisper inventing 'Thank you for watching.' on near-silent clips.</div>
+                <input type="checkbox" id="param-sub-whisper_vad" checked onchange="updateSubParamDisplay('whisper_vad')">
+            </div>
+            <div class="llm-param-section-header" style="margin-top:1.2rem;padding-top:0.8rem;border-top:1px solid #1e3a5f;">
+                <span style="color:#38bdf8;font-weight:600;font-size:0.85rem;">🎓 Tutor — Spaced Repetition</span>
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Scheduler</span><span class="llm-param-value" id="val-sub-srs_algo">fsrs</span></div>
+                <div class="llm-param-hint">FSRS models difficulty, stability and retrievability per card and needs ~20-30% fewer reviews than SM-2 for the same retention. sm2 is the pre-2.6 fallback.</div>
+                <select id="param-sub-srs_algo" onchange="updateSubParamDisplay('srs_algo')" style="width:100%;background:#0b1e3a;border:1px solid #1e3a5f;color:#e2e8f0;padding:0.35rem;border-radius:0.35rem;font-size:0.8rem;"><option value="fsrs" selected>fsrs</option><option value="sm2">sm2</option></select>
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Desired Retention</span><span class="llm-param-value" id="val-sub-srs_desired_retention">0.9</span></div>
+                <div class="llm-param-hint">Target probability you still recall a card when it comes up. Lower = fewer, longer-spaced reviews.</div>
+                <input type="range" id="param-sub-srs_desired_retention" min="0.7" max="0.97" step="0.01" value="0.9" oninput="updateSubParamDisplay('srs_desired_retention')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Max Interval (days)</span><span class="llm-param-value" id="val-sub-srs_max_interval">365</span></div>
+                <div class="llm-param-hint">Ceiling on any review gap. FSRS's own default is 36500 days, meaningless for language study.</div>
+                <input type="range" id="param-sub-srs_max_interval" min="1" max="3650" step="1" value="365" oninput="updateSubParamDisplay('srs_max_interval')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Initial Ease (SM-2 only)</span><span class="llm-param-value" id="val-sub-srs_initial_ease">2.5</span></div>
+                <div class="llm-param-hint">Starting ease factor. Ignored when the scheduler is FSRS.</div>
+                <input type="range" id="param-sub-srs_initial_ease" min="1.3" max="4.0" step="0.1" value="2.5" oninput="updateSubParamDisplay('srs_initial_ease')">
+            </div>
+            <div class="llm-param-section-header" style="margin-top:1.2rem;padding-top:0.8rem;border-top:1px solid #1e3a5f;">
+                <span style="color:#38bdf8;font-weight:600;font-size:0.85rem;">🎬 Video Generation</span>
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Video Backend</span><span class="llm-param-value" id="val-sub-video_backend">ltx</span></div>
+                <div class="llm-param-hint">ltx = LTX-Video, wan = Wan 2.1 (Apache-2.0, smaller). Weights are ~27GB and are never downloaded during a chat request.</div>
+                <select id="param-sub-video_backend" onchange="updateSubParamDisplay('video_backend')" style="width:100%;background:#0b1e3a;border:1px solid #1e3a5f;color:#e2e8f0;padding:0.35rem;border-radius:0.35rem;font-size:0.8rem;"><option value="ltx" selected>ltx</option><option value="wan">wan</option><option value="none">none</option></select>
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Width</span><span class="llm-param-value" id="val-sub-width">704</span></div>
+                <div class="llm-param-hint">Video is far more memory-hungry than images: every frame is generated jointly.</div>
+                <input type="range" id="param-sub-width" min="256" max="1280" step="64" value="704" oninput="updateSubParamDisplay('width')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Height</span><span class="llm-param-value" id="val-sub-height">512</span></div>
+                <div class="llm-param-hint">Keep modest on a 16GB card.</div>
+                <input type="range" id="param-sub-height" min="256" max="1280" step="64" value="512" oninput="updateSubParamDisplay('height')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Frames Per Second</span><span class="llm-param-value" id="val-sub-fps">25</span></div>
+                <div class="llm-param-hint">LTX conditions on this: it tells the model how much movement belongs between frames. Generating at one rate and playing at another stretches the motion — 25 is LTX's native rate.</div>
+                <input type="range" id="param-sub-fps" min="4" max="30" step="1" value="25" oninput="updateSubParamDisplay('fps')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Duration (s)</span><span class="llm-param-value" id="val-sub-seconds">2.5</span></div>
+                <div class="llm-param-hint">Clip length. Cost scales with duration.</div>
+                <input type="range" id="param-sub-seconds" min="1" max="15" step="0.5" value="2.5" oninput="updateSubParamDisplay('seconds')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Inference Steps</span><span class="llm-param-value" id="val-sub-steps">50</span></div>
+                <div class="llm-param-hint">More steps = better quality, linearly slower.</div>
+                <input type="range" id="param-sub-steps" min="4" max="100" step="1" value="50" oninput="updateSubParamDisplay('steps')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Guidance Scale</span><span class="llm-param-value" id="val-sub-guidance">3.0</span></div>
+                <div class="llm-param-hint">How strictly the model follows the prompt.</div>
+                <input type="range" id="param-sub-guidance" min="0" max="15" step="0.5" value="3.0" oninput="updateSubParamDisplay('guidance')">
+            </div>
+
+            <!-- Image self-refinement -->
+            <div class="llm-param-section-header" style="margin-top:1.2rem;padding-top:0.8rem;border-top:1px solid #1e3a5f;">
+                <span style="color:#38bdf8;font-weight:600;font-size:0.85rem;">🔍 Image Self-Refinement</span>
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Refine Rounds</span><span class="llm-param-value" id="val-img-refine_rounds">2</span></div>
+                <div class="llm-param-hint">After rendering, a vision model checks the image against your request and re-renders if it is wrong. Each round costs another generation plus a model swap, so images take roughly 2-3x longer. 0 = off (single shot, fastest).</div>
+                <input type="range" id="param-img-refine_rounds" min="0" max="5" step="1" value="2" oninput="updateImgParamDisplay('refine_rounds')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Critic Model</span><span class="llm-param-value" id="val-img-critic_model">qwen3-vl:8b</span></div>
+                <div class="llm-param-hint">Must be a VISION model pulled in Ollama, and is independent of both the chat model and the image backend. If it is missing, refinement silently does nothing.</div>
+                <input type="text" id="param-img-critic_model" value="qwen3-vl:8b" oninput="updateImgParamDisplay('critic_model')" style="width:100%;background:#0b1e3a;border:1px solid #1e3a5f;color:#e2e8f0;padding:0.35rem 0.5rem;border-radius:0.35rem;font-size:0.8rem;">
+            </div>
+
             <!-- Image Generation Parameters -->
             <div class="llm-param-section-header" style="margin-top:1.2rem;padding-top:0.8rem;border-top:1px solid #1e3a5f;">
                 <span style="color:#38bdf8;font-weight:600;font-size:0.85rem;">🖼️ Image Generation</span>
@@ -246,7 +384,7 @@
     <div id="input-area">
         <input type="file" id="file-input" multiple accept=".txt,.csv,.pdf,.docx,.xlsx,.md,.json,.png,.jpg,.jpeg,.webp,.tif,.tiff,.bmp,.gif" style="display:none" onchange="handleFileSelect(event)">
         <button id="attach-btn" onclick="document.getElementById('file-input').click()" title="Attach files (TXT, CSV, PDF, DOCX, XLSX, MD, JSON, or a scan/photo to OCR)">📎</button>
-        <textarea id="user-input" placeholder="Ask me anything..." rows="1" autofocus></textarea>
+        <textarea id="user-input" placeholder="Ask me anything…  (tip: start with  image:  or  video:  to generate directly and skip the agent)" rows="1" autofocus></textarea>
         <button id="mic-btn" onclick="toggleMic()" title="Voice input (click to record, click again to stop)">🎤</button>
         <button id="stop-speak-btn" onclick="stopSpeaking()" title="Stop speaking">⏹ Stop</button>
         <button id="cancel-btn" onclick="cancelRequest()" title="Cancel current request">✕ Cancel</button>

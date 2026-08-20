@@ -58,6 +58,47 @@ OCR_AUTO_EXPORT = os.getenv("OCR_AUTO_EXPORT", "docx").lower().strip()
 OLLAMA_BASE = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
 
+def get_ocr_params() -> dict:
+    """Current runtime OCR settings, for the Params panel."""
+    return {
+        "ocr_enabled": OCR_ENABLED,
+        "ocr_model": OCR_MODEL,
+        "ocr_dpi": OCR_DPI,
+        "ocr_max_dim": OCR_MAX_DIM,
+        "ocr_max_pages": OCR_MAX_PAGES,
+        "ocr_timeout": OCR_TIMEOUT,
+        "ocr_auto_export": OCR_AUTO_EXPORT,
+    }
+
+
+def update_ocr_params(params: dict) -> dict:
+    """Update OCR settings at runtime. Only known keys are accepted."""
+    global OCR_ENABLED, OCR_MODEL, OCR_DPI, OCR_MAX_DIM
+    global OCR_MAX_PAGES, OCR_TIMEOUT, OCR_AUTO_EXPORT
+
+    if "ocr_enabled" in params:
+        OCR_ENABLED = bool(params["ocr_enabled"])
+    if "ocr_model" in params:
+        val = str(params["ocr_model"]).strip()
+        if val:
+            OCR_MODEL = val
+    if "ocr_dpi" in params:
+        OCR_DPI = max(72, min(400, int(params["ocr_dpi"])))
+    if "ocr_max_dim" in params:
+        # Deliberately capped: qwen3-vl returns an EMPTY string well above
+        # ~1500px, which looks like OCR silently failing.
+        OCR_MAX_DIM = max(512, min(2048, int(params["ocr_max_dim"])))
+    if "ocr_max_pages" in params:
+        OCR_MAX_PAGES = max(1, min(200, int(params["ocr_max_pages"])))
+    if "ocr_timeout" in params:
+        OCR_TIMEOUT = max(30, min(900, int(params["ocr_timeout"])))
+    if "ocr_auto_export" in params:
+        val = str(params["ocr_auto_export"]).lower().strip()
+        if val in ("docx", "odt", "none"):
+            OCR_AUTO_EXPORT = val
+    return get_ocr_params()
+
+
 def _ocr_prompt(model: str) -> str:
     """Return the prompt this OCR model expects.
 

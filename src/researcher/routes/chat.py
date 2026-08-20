@@ -135,6 +135,26 @@ def _make_event_handlers(q_ref):
     ]
 
 
+# Explicit media prefixes. Deliberately narrow — an accidental match would send
+# a real question to a diffusion model instead of the agent.
+_MEDIA_PREFIX_RE = re.compile(
+    r"^\s*(video|clip|animation|image|img|picture|photo|draw)\s*:\s*(.+)$",
+    re.IGNORECASE | re.DOTALL,
+)
+_VIDEO_WORDS = {"video", "clip", "animation"}
+
+
+def _match_media_prefix(message: str) -> tuple[str, str] | None:
+    """Return ("video"|"image", prompt) when the message opens with a prefix."""
+    m = _MEDIA_PREFIX_RE.match(message or "")
+    if not m:
+        return None
+    word, prompt = m.group(1).lower(), m.group(2).strip()
+    if not prompt:
+        return None
+    return ("video" if word in _VIDEO_WORDS else "image"), prompt
+
+
 def register_chat_routes(app):
     """Attach /chat, /chat/cancel, /chat/continue to the FastAPI app."""
 
@@ -194,6 +214,56 @@ def register_chat_routes(app):
                 "[chat] Extraction fast path: %d file(s), bypassing crew", len(files)
             )
             return StreamingResponse(direct_stream(), media_type="text/event-stream")
+
+        # ── Fast path: explicit media prefix ─────────────────────────────────
+        # "video: <prompt>" or "image: <prompt>" sends the text STRAIGHT to the
+        # generator, skipping planning and the agent's prompt rewriting. Opt-in
+        # by design: without a prefix the normal agent path is untouched, so
+        # nothing that works today changes.
+        #
+        # This buys two things — no ~30s planning round trip, and the prompt
+        # reaches the model verbatim, which matters when iterating on wording.
+        # Note the image path still self-critiques: the refine loop lives inside
+        # the tool, not in the agent.
+        media = _match_media_prefix(req.message)
+        if media:
+            kind, direct_prompt = media
+
+            def _sse_media(event: str, data) -> str:
+                return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+            if uid not in request.app.state.crew_semaphores:
+                request.app.state.crew_semaphores[uid] = asyncio.Semaphore(1)
+            semaphore = request.app.state.crew_semaphores[uid]
+
+            async def media_stream():
+                # Hold the per-user semaphore: this is GPU work, and letting it
+                # run alongside a crew would put two models on one card.
+                async with semaphore:
+                    yield _sse_media(
+                        "reasoning",
+                        f"🎬 Direct {kind} generation (agent bypassed): {direct_prompt[:80]}",
+                    )
+                    loop = asyncio.get_running_loop()
+                    if kind == "video":
+                        from researcher.video import _generate_video_once as _gen
+                    else:
+                        from researcher.image import generate_ai_image as _tool
+                        _gen = getattr(_tool, "func", _tool)
+                    try:
+                        out = await loop.run_in_executor(None, _gen, direct_prompt)
+                    except Exception as e:
+                        yield _sse_media("error", f"{kind} generation failed: {e}")
+                        return
+                    yield _sse_media("done", {
+                        "response": out,
+                        "reasoning": [f"Direct {kind} generation — no agent, no planning"],
+                        "token_usage": {},
+                        "incomplete": False,
+                    })
+
+            logger.info("[chat] Media fast path: kind=%s", kind)
+            return StreamingResponse(media_stream(), media_type="text/event-stream")
 
         # Lazy-init per-user semaphore and cancel event
         if uid not in request.app.state.crew_semaphores:

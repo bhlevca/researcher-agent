@@ -2,7 +2,7 @@
 
 A CrewAI-powered research agent with a browser-based chat UI, voice dialog, image generation, and session management. Runs locally using Ollama — the **client only needs a web browser**.
 
-**Version 1.0.0**
+**Version 2.7.0**
 
 ## Architecture
 
@@ -14,6 +14,8 @@ A CrewAI-powered research agent with a browser-based chat UI, voice dialog, imag
 | **edge-tts** | Server | Text-to-speech (audio streamed back to browser) |
 | **Stable Diffusion** | Server | AI image generation (optional, needs NVIDIA GPU) |
 | **ZImage (Z-Image-Turbo)** | Server | Fast AI image generation via diffusers (optional, needs NVIDIA GPU) |
+| **Vision critic** | Server | Inspects each generated image and triggers a re-render if it does not match the request |
+| **LTX-Video / Wan** | Server | Text-to-video generation (optional, needs NVIDIA GPU) |
 | **Browser UI** | Client | Just a modern web browser — no plugins, no installs |
 
 > **The client computer needs nothing except a web browser with microphone access** (for voice features). All AI processing, TTS, and STT happen on the server.
@@ -50,6 +52,10 @@ All managed automatically via `pip install -e .`:
 | safetensors | Fast model weight loading |
 | aiosqlite | Async SQLite for session storage |
 | faster-whisper | Speech-to-text (CTranslate2; int8 on CPU by default) |
+| sentencepiece | T5 tokenizer for LTX/Wan — without it transformers misroutes `spiece.model` |
+| imageio-ffmpeg | H.264 MP4 export (OpenCV's mp4v is not browser-playable) |
+| fsrs | Spaced-repetition scheduler for the tutor |
+| odfpy | ODT export |
 | edge-tts | Text-to-speech via Microsoft Edge voices (server-side, streams audio to browser) |
 | PyJWT | JWT token generation and validation |
 | bcrypt | Secure password hashing |
@@ -104,6 +110,16 @@ cp .env.example .env
 | `HUGGINGFACE_TOKEN` | HuggingFace token for gated model downloads | *(optional)* |
 | `TRANSFORMERS_OFFLINE` | Set to `1` after first model download for offline use | `0` |
 | `PROXY_API_KEY` | Bearer token required for `/v1/*` proxy endpoints (empty = open) | *(optional)* |
+| `IMAGE_REFINE_ROUNDS` | Image critique-and-retry rounds; 0 disables | `2` |
+| `IMAGE_CRITIC_MODEL` | Vision model that inspects generated images | `qwen3-vl:8b` |
+| `VIDEO_BACKEND` | Video generator: `ltx`, `wan`, or `none` | `ltx` |
+| `OCR_MODEL` | Vision model used to read scans | `deepseek-ocr:3b` |
+| `WHISPER_MODEL` | faster-whisper size | `small` |
+| `SRS_ALGO` | Tutor scheduler: `fsrs` or `sm2` | `fsrs` |
+
+> This table lists the settings people change most often. **`.env.example` documents
+> all 64**, commented out and showing each actual default — it is generated against
+> the `os.getenv()` calls in `src/`, so it cannot drift out of date silently.
 
 ### Authentication Setup
 
@@ -195,6 +211,75 @@ uvicorn researcher.main:app --host 0.0.0.0 --port 8000
 4. After the response is spoken, the mic auto-activates for the next turn
 
 All voice processing happens server-side: Whisper (STT) and edge-tts (TTS). The browser just records audio and plays it back.
+
+### Generating Images and Video
+
+Just ask — the agent picks the right tool. For direct control, prefix the message
+and the agent is bypassed entirely:
+
+| Prefix | Effect |
+|--------|--------|
+| `image:` `img:` `picture:` `photo:` `draw:` | Prompt goes straight to the image model, verbatim |
+| `video:` `clip:` `animation:` | Prompt goes straight to the video model, verbatim |
+| *(no prefix)* | Normal agent path — it plans, writes the prompt, and calls the tool |
+
+The prefix skips planning (~30 s) and stops the agent rewording your prompt, which
+matters when you are iterating on exact phrasing. It is opt-in: without a prefix
+nothing changes.
+
+#### Image self-refinement
+
+A diffusion model renders once and never looks at the result. Here, a vision model
+inspects each image against the request and re-renders if it is wrong:
+
+```
+prompt → render → critic inspects → wrong? rewrite prompt → render again (max N)
+```
+
+This runs for **every** image, whether the agent or a prefix triggered it — the loop
+lives in the tool, not the agent. It costs roughly 2–3x the time of a single shot;
+set `IMAGE_REFINE_ROUNDS=0` to disable.
+
+The critic (`IMAGE_CRITIC_MODEL`, default `qwen3-vl:8b`) must be a **vision** model
+pulled in Ollama. If it is missing, refinement silently does nothing — the server
+logs `[IMAGE] WARNING: …` at startup to make that visible. It catches gross errors
+(wrong subject, missing elements) reliably; fine-grained counting is less reliable.
+
+#### Video
+
+```bash
+# .env
+VIDEO_BACKEND=ltx            # ltx | wan | none
+```
+
+Weights are ~27 GiB and are **never** downloaded during a chat request — fetch them
+once, taking only the diffusers components (the LTX repo also hosts 208 GiB of
+standalone checkpoints for other tools):
+
+```bash
+hf download Lightricks/LTX-Video \
+  --include 'text_encoder/*' --include 'transformer/*' --include 'vae/*' \
+  --include 'tokenizer/*' --include 'scheduler/*' --include '*.json'
+```
+
+Measured on a 16 GB RTX 5070 Ti: **~100 s** for 704x512, 57 frames at 25 fps.
+Peak VRAM is the largest single component (~9.5 GiB for the T5 text encoder), not
+the sum, because components load one at a time.
+
+`VIDEO_FPS` is **conditioning, not playback speed** — LTX uses it to decide how much
+movement belongs between frames. Generating at one rate and exporting at another
+stretches the motion. 25 is LTX's native rate. Memory scales with the *frame count*,
+so raising fps shortens the clip that fits.
+
+### Tuning at runtime
+
+**⚙️ Params** in the header exposes every runtime-tunable setting, grouped:
+LLM generation, crew limits, image generation, image self-refinement, OCR,
+speech-to-text, tutor spaced repetition, and video. LLM and image settings persist
+per user; the rest are process-wide and reset to `.env` on restart.
+
+Every setting the code reads is documented in `.env.example`, commented out and
+showing its actual default.
 
 ## API Endpoints
 

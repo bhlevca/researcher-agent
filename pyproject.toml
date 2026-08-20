@@ -1,6 +1,6 @@
 [project]
 name = "researcher-agent"
-version = "2.6.0"
+version = "2.7.0"
 dependencies = [
     "crewai[tools]>=1.14.5",
     "litellm",
@@ -30,6 +30,14 @@ dependencies = [
     "pymupdf",
     "python-docx",
     "odfpy",
+    # T5-family tokenizers (LTX-Video, Wan) ship a SentencePiece spiece.model.
+    # Without this, transformers 5.x misroutes it through the tiktoken loader
+    # and dies with "Error parsing line b'\\x0e'".
+    "sentencepiece",
+    # Video export: imageio-ffmpeg writes H.264 MP4 that browsers can play.
+    # OpenCV's VideoWriter defaults to mp4v, which most browsers refuse.
+    "imageio",
+    "imageio-ffmpeg",
     # FSRS (Free Spaced Repetition Scheduler) — the ML-fitted successor to SM-2.
     "fsrs",
     "openpyxl",

@@ -6,6 +6,46 @@ previous checkboxes. Several entries were stale in both directions.
 
 ---
 
+## Media generation — Muse research outcome (2026-08-11)
+
+**Muse Image and Muse Video are real** (Meta Superintelligence Labs, 7 July 2026) but
+**there is no developer API for either**. Meta's announcement lists consumer surfaces only:
+the Meta AI app, meta.ai, Instagram Stories (US), WhatsApp (limited countries). Muse Video is
+"coming soon" even there. They cannot be called from this app at any price today.
+
+Two claims in the brief that prompted this work were **fabricated** — do not act on them:
+
+- `pip install "museq[server,images]"` / `muse pull` / `muse serve` — **no such package**.
+- `https://api.meta.ai/v1` — not a documented base URL. There *is* a Meta Model API in
+  public preview and it *is* OpenAI-compatible, but it serves **Muse Spark 1.1**, a
+  text/multimodal LLM. Image and video are separate products, not on that API.
+
+What we did instead — **copy Muse's method rather than call it**. Muse's advantage is not
+better weights, it is that it inspects and improves its own output. That loop is reproducible
+locally, and now is:
+
+- [x] **Critique-and-retry image loop** (`image.py`). Generate → a vision model inspects the
+      result against the request → rewrite the prompt → re-render, up to
+      `IMAGE_REFINE_ROUNDS` (default 2). `IMAGE_CRITIC_MODEL` defaults to `qwen3-vl:8b`.
+      Verified: the critic accepted a matching prompt and correctly diagnosed a mismatch
+      ("three red circles instead of a blue sailboat").
+      Guards: a broken or missing critic degrades to plain generation, a failed retry keeps
+      the earlier image, and a critic that faults the image without offering a better prompt
+      stops rather than re-rendering an identical prompt.
+- [x] **Video generation** (`video.py`) — LTX-Video or Wan 2.1 T2V 1.3B behind
+      `VIDEO_BACKEND`, reusing the existing `_gpu_inference_ctx` VRAM choreography, new
+      `GenerateAIVideo` tool, `<video>` rendering in the chat UI. Weights are **not**
+      downloaded during a chat request: an uncached model returns `hf download <model>`
+      instructions instead of hanging for several GB.
+- [ ] **Remote/OpenAI-compatible media backend** — deliberately deferred. It delivers nothing
+      until a Muse API exists, and is about an hour's work once one does.
+
+**Not yet verified on hardware.** The NVIDIA driver was down when this landed (no kernel
+modules, `/dev/nvidia*` absent), so neither the refine loop nor video generation has run
+end-to-end on a GPU. All logic is covered by mocked tests; the pixels are not.
+
+---
+
 ## Status at a glance (verified 2026-08-10)
 
 | ID | Item | Status |

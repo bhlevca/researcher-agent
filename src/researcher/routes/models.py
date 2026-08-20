@@ -153,6 +153,65 @@ def register_model_routes(app):
 
     # --- LLM parameters ---
 
+    # ── Subsystem parameters ──
+    #
+    # OCR, speech, spaced repetition, video and crew wiring are all process-wide
+    # rather than per-user, so they live behind one endpoint instead of five.
+    # Grouped so the Params panel can render a labelled section per subsystem.
+
+    @app.get("/subsystem-params")
+    async def get_subsystem_params(request: Request):
+        """Return every runtime-tunable subsystem setting, grouped."""
+        await get_current_user(request)
+        from researcher.ingestion import get_ocr_params
+        from researcher.routes.speech import get_whisper_params
+        from researcher.tutor.storage import get_srs_params
+        from researcher.video import get_video_params
+        import researcher.patches as _patches
+
+        return {
+            "params": {
+                "ocr": get_ocr_params(),
+                "whisper": get_whisper_params(),
+                "srs": get_srs_params(),
+                "video": get_video_params(),
+                "crew": {
+                    "executor": _patches.get_executor_class().__name__
+                    if _patches.get_executor_class() else "AgentExecutor (experimental)",
+                    "crew_timeout_default": request.app.state.crew_timeout,
+                    "current_model": request.app.state.current_model,
+                },
+            }
+        }
+
+    @app.post("/subsystem-params")
+    async def set_subsystem_params(request: Request):
+        """Update subsystem settings. Accepts any subset of the groups."""
+        await get_current_user(request)
+        body = await request.json()
+        params = body.get("params", {})
+        if not isinstance(params, dict):
+            raise HTTPException(status_code=400, detail="params must be a dict")
+
+        from researcher.ingestion import update_ocr_params, get_ocr_params
+        from researcher.routes.speech import update_whisper_params, get_whisper_params
+        from researcher.tutor.storage import update_srs_params, get_srs_params
+        from researcher.video import update_video_params, get_video_params
+
+        out = {}
+        out["ocr"] = (update_ocr_params(params["ocr"]) if "ocr" in params
+                      else get_ocr_params())
+        out["whisper"] = (update_whisper_params(params["whisper"]) if "whisper" in params
+                          else get_whisper_params())
+        out["srs"] = (update_srs_params(params["srs"]) if "srs" in params
+                      else get_srs_params())
+        out["video"] = (update_video_params(params["video"]) if "video" in params
+                        else get_video_params())
+        # Crew settings are read-only here: the executor is chosen at import time
+        # (patches bind to it) and the model has its own switcher.
+        logger.info("Subsystem params updated: %s", list(params))
+        return {"params": out}
+
     @app.get("/llm-params")
     async def get_llm_params(request: Request):
         """Return current LLM generation parameters (loads from DB if available)."""

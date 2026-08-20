@@ -30,6 +30,7 @@ from researcher.image import (
     IMAGE_BACKEND,
     OLLAMA_IMAGE_URL,
 )
+from researcher.video import generate_ai_video
 from researcher.config import probe_model_capabilities, TOOL_CAPABLE_MODEL
 import researcher.patches as _patches  # noqa: F401 — applies all CrewAI compatibility patches
 
@@ -210,6 +211,7 @@ class ResearchCrew:
                 ddg_search_wrapped,
                 generate_image,
                 generate_ai_image,
+                generate_ai_video,
             ],
             llm=self.ollama_llm,
             verbose=True,

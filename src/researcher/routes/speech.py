@@ -110,6 +110,57 @@ def _has_script_mismatch(text: str, lang: str) -> bool:
     return dominant not in expected
 
 
+def get_whisper_params() -> dict:
+    """Current speech-to-text settings, for the Params panel."""
+    device = os.getenv("WHISPER_DEVICE", "cpu")
+    return {
+        "whisper_model": os.getenv("WHISPER_MODEL", "small"),
+        "whisper_device": device,
+        "whisper_compute_type": os.getenv(
+            "WHISPER_COMPUTE_TYPE", "int8" if device == "cpu" else "float16"
+        ),
+        "whisper_vad": _WHISPER_VAD,
+    }
+
+
+def update_whisper_params(params: dict) -> dict:
+    """Update speech-to-text settings at runtime.
+
+    Model, device and compute type are baked into the loaded WhisperModel, so
+    changing any of them drops the cached instance; the next transcription
+    reloads it. VAD is applied per call and needs no reload.
+    """
+    global _whisper_model, _WHISPER_VAD
+
+    reload_needed = False
+    if "whisper_model" in params:
+        val = str(params["whisper_model"]).strip()
+        if val in {"tiny", "base", "small", "medium", "large-v2", "large-v3"}:
+            os.environ["WHISPER_MODEL"] = val
+            reload_needed = True
+    if "whisper_device" in params:
+        val = str(params["whisper_device"]).strip().lower()
+        if val in {"cpu", "cuda"}:
+            os.environ["WHISPER_DEVICE"] = val
+            # int8 is meaningless on cuda and float16 is wrong on cpu, so keep
+            # the pair consistent unless the caller overrides it below.
+            os.environ["WHISPER_COMPUTE_TYPE"] = "int8" if val == "cpu" else "float16"
+            reload_needed = True
+    if "whisper_compute_type" in params:
+        val = str(params["whisper_compute_type"]).strip().lower()
+        if val in {"int8", "int8_float16", "float16", "float32"}:
+            os.environ["WHISPER_COMPUTE_TYPE"] = val
+            reload_needed = True
+    if "whisper_vad" in params:
+        _WHISPER_VAD = bool(params["whisper_vad"])
+
+    if reload_needed:
+        with _whisper_lock:
+            _whisper_model = None
+        logger.info("[STT] Settings changed — model will reload on next request")
+    return get_whisper_params()
+
+
 class _FasterWhisperAdapter:
     """Presents faster-whisper's ``(segments, info)`` API as an openai-whisper dict.
 

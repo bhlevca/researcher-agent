@@ -138,6 +138,20 @@ async def lifespan(app: FastAPI):
     # Disable with IMAGE_WARMUP=0.
     # Prefer the backend stored in the DB (per-user setting) over the env var,
     # so that switching via the UI is respected on next restart.
+    # A misconfigured image critic degrades silently to "no refinement", so
+    # surface it once at startup instead of leaving it to be noticed never.
+    try:
+        from researcher.image import check_critic_available
+
+        ok, msg = check_critic_available()
+        # Written to stderr, not logger.info: uvicorn leaves the app logger at
+        # WARNING, so an INFO confirmation is invisible — which would defeat a
+        # check whose only job is to be seen. Matches the [ZIMG]/[OCR] convention.
+        sys.stderr.write(f"[IMAGE] {'OK' if ok else 'WARNING'}: {msg}\n")
+        sys.stderr.flush()
+    except Exception as e:
+        logger.warning("[IMAGE] Critic check failed: %s", e)
+
     image_warmup = os.getenv("IMAGE_WARMUP", "1") == "1"
     if image_warmup:
         image_backend = os.getenv("IMAGE_BACKEND", "sd").lower()

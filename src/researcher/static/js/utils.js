@@ -37,6 +37,10 @@ function renderContent(text) {
         '$1<img src="$2" loading="lazy">$3');
     text = text.replace(/(^|[\s>])(\/static\/\S+\.(?:png|jpg|jpeg|gif|webp|svg))([\s<]|$)/gi,
         '$1<img src="$2" loading="lazy">$3');
+    // Bare video paths — the tool returns a full <video> tag, but the model
+    // sometimes echoes just the path.
+    text = text.replace(/(^|[\s>])(\/static\/\S+\.(?:mp4|webm))([\s<]|$)/gi,
+        '$1<video src="$2" controls loop muted playsinline style="max-width:100%;border-radius:0.5rem;"></video>$3');
     text = text.replace(/\n{2,}/g, '</p><p>');
     text = text.replace(/\n/g, '<br>');
     return '<p>' + text + '</p>';

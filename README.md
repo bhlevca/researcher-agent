@@ -2,7 +2,7 @@
 
 A CrewAI-powered research agent with a browser-based chat UI, voice dialog, image generation, and session management. Runs locally using Ollama — the **client only needs a web browser**.
 
-**Version 2.7.0**
+**Version 2.8.0**
 
 ## Architecture
 
@@ -15,7 +15,7 @@ A CrewAI-powered research agent with a browser-based chat UI, voice dialog, imag
 | **Stable Diffusion** | Server | AI image generation (optional, needs NVIDIA GPU) |
 | **ZImage (Z-Image-Turbo)** | Server | Fast AI image generation via diffusers (optional, needs NVIDIA GPU) |
 | **Vision critic** | Server | Inspects each generated image and triggers a re-render if it does not match the request |
-| **LTX-Video / Wan** | Server | Text-to-video generation (optional, needs NVIDIA GPU) |
+| **Wan 2.2 / LTX-Video** | Server | Text-to-video generation (optional, needs NVIDIA GPU) |
 | **Browser UI** | Client | Just a modern web browser — no plugins, no installs |
 
 > **The client computer needs nothing except a web browser with microphone access** (for voice features). All AI processing, TTS, and STT happen on the server.
@@ -102,7 +102,7 @@ cp .env.example .env
 | `SERPER_API_KEY` | Google Serper API key for web search | *(required)* |
 | `JWT_SECRET` | Secret key for signing JWT tokens | *(required)* |
 | `INVITE_CODE` | Invite code required to register | *(required)* |
-| `IMAGE_BACKEND` | Image generation backend: `sd`, `zimage`, or `none` | `sd` |
+| `IMAGE_BACKEND` | Image generation backend: `zimage`, `sd`, `ernie`, `flux`, or `none` | `sd` |
 | `ZIMAGE_MODEL` | HuggingFace repo for ZImage pipeline | `mrfakename/Z-Image-Turbo` |
 | `ZIMAGE_WIDTH` | Generated image width (ZImage) | `512` |
 | `ZIMAGE_HEIGHT` | Generated image height (ZImage) | `512` |
@@ -112,7 +112,7 @@ cp .env.example .env
 | `PROXY_API_KEY` | Bearer token required for `/v1/*` proxy endpoints (empty = open) | *(optional)* |
 | `IMAGE_REFINE_ROUNDS` | Image critique-and-retry rounds; 0 disables | `2` |
 | `IMAGE_CRITIC_MODEL` | Vision model that inspects generated images | `qwen3-vl:8b` |
-| `VIDEO_BACKEND` | Video generator: `ltx`, `wan`, or `none` | `ltx` |
+| `VIDEO_BACKEND` | Video generator: `wan`, `ltx`, or `none` | `wan` |
 | `OCR_MODEL` | Vision model used to read scans | `deepseek-ocr:3b` |
 | `WHISPER_MODEL` | faster-whisper size | `small` |
 | `SRS_ALGO` | Tutor scheduler: `fsrs` or `sm2` | `fsrs` |
@@ -249,27 +249,63 @@ logs `[IMAGE] WARNING: …` at startup to make that visible. It catches gross er
 
 ```bash
 # .env
-VIDEO_BACKEND=ltx            # ltx | wan | none
+VIDEO_BACKEND=wan            # wan | ltx | none
 ```
 
-Weights are ~27 GiB and are **never** downloaded during a chat request — fetch them
-once, taking only the diffusers components (the LTX repo also hosts 208 GiB of
-standalone checkpoints for other tools):
+**Wan 2.2 TI2V-5B** is the default. Weights are ~32 GiB and are **never** fetched
+during a chat request — download once:
 
 ```bash
-hf download Lightricks/LTX-Video \
+hf download Wan-AI/Wan2.2-TI2V-5B-Diffusers \
   --include 'text_encoder/*' --include 'transformer/*' --include 'vae/*' \
   --include 'tokenizer/*' --include 'scheduler/*' --include '*.json'
 ```
 
-Measured on a 16 GB RTX 5070 Ti: **~100 s** for 704x512, 57 frames at 25 fps.
-Peak VRAM is the largest single component (~9.5 GiB for the T5 text encoder), not
-the sum, because components load one at a time.
+Measured on a 16 GB RTX 5070 Ti, same prompt through both models:
 
-`VIDEO_FPS` is **conditioning, not playback speed** — LTX uses it to decide how much
-movement belongs between frames. Generating at one rate and exporting at another
-stretches the motion. 25 is LTX's native rate. Memory scales with the *frame count*,
-so raising fps shortens the clip that fits.
+| | LTX-Video 2B | Wan 2.2 TI2V-5B |
+|---|---|---|
+| Output | 704x512, 2.3 s | 832x480, 2.7 s |
+| Motion (mean inter-frame change) | 8.0 | 12.2 |
+| Detail (Laplacian variance) | 27.7 | **424.1** |
+| Time per clip | ~99 s | ~208 s |
+
+Roughly 2x the time for ~15x the detail. LTX is kept as a faster fallback.
+
+**Why not something bigger?** Evaluated and rejected for a 16 GB / 64 GB machine:
+
+| Model | Why not |
+|---|---|
+| Wan 2.2 A14B | Mixture-of-experts: **two** 26.6 GiB transformers, ~58.5 GiB of weights. Exceeds 64 GB RAM once CUDA and the app are resident. |
+| LTX-2 | 19B transformer (25 GiB even in fp8) plus a ~55 GiB Gemma3 text encoder. "Runs on 16 GB" refers to ComfyUI with GGUF quantisation, not diffusers. |
+| HunyuanVideo 1.5 | No `model_index.json` — not a diffusers pipeline at all. |
+| lightx2v 4-step LoRAs | Exist only for A14B; no TI2V-5B variant. |
+
+CPU offload raises the ceiling but not indefinitely: diffusers keeps weights in
+system RAM and **streams** them to the GPU each step — unlike llama.cpp, it never
+computes on the CPU. So the limit becomes RAM, and the cost is PCIe traffic
+repeated every denoising step. Wan 5B avoids that entirely: at ~9.3 GiB in bf16
+the transformer sits wholly in VRAM.
+
+##### Settings are per backend
+
+Each model has its own trained resolution and frame rate, and using one model's
+numbers on the other visibly degrades motion — generating LTX clips at 16 fps
+while it conditions on 25 made walking animals appear to limp.
+
+| | Wan | LTX |
+|---|---|---|
+| Resolution | 832x480 | 704x512 |
+| Frame rate | 24 | 25 (conditioning, not just playback) |
+| Guidance | 5.0 | 3.0 |
+
+Switching backend re-derives anything you have not pinned in `.env`. Setting
+`VIDEO_WIDTH` and friends pins them across **both** backends, so leave them
+commented unless you mean it.
+
+Memory scales with the **frame count** — frames are denoised jointly — so raising
+fps shortens the clip that fits. On OOM the generator retries with fewer frames,
+then smaller ones, rather than failing outright.
 
 ### Tuning at runtime
 

@@ -152,6 +152,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("[IMAGE] Critic check failed: %s", e)
 
+    # Video warm-up is opt-in (VIDEO_WARMUP=1): it reserves ~16 GiB of system RAM
+    # to save the one-time pipeline load on the first request.
+    try:
+        from researcher.video import preload_video
+
+        preload_video()
+    except Exception as e:
+        logger.warning("[VIDEO] Preload failed: %s", e)
+
     image_warmup = os.getenv("IMAGE_WARMUP", "1") == "1"
     if image_warmup:
         image_backend = os.getenv("IMAGE_BACKEND", "sd").lower()

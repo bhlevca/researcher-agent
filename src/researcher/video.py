@@ -35,23 +35,56 @@ _logger = logging.getLogger(__name__)
 VIDEO_BACKEND = os.getenv("VIDEO_BACKEND", "ltx").lower()
 _VALID_VIDEO_BACKENDS = {"ltx", "wan", "none"}
 
-# LTX-Video: fast, and NVIDIA's own guidance names a 16 GB card for it.
+# LTX-Video 2B: fast, but visibly weak on anatomy under motion. Kept as a
+# lightweight fallback rather than the default.
 _LTX_MODEL = os.getenv("LTX_MODEL", "Lightricks/LTX-Video")
-# Wan 2.1 T2V 1.3B is the small, Apache-2.0 option that fits comfortably.
-_WAN_MODEL = os.getenv("WAN_MODEL", "Wan-AI/Wan2.1-T2V-1.3B-Diffusers")
+# Wan 2.2 TI2V-5B is the quality default. ~4.66B params against LTX 2B, stored
+# fp32 so it halves to ~9.3 GiB in bf16 — small enough that the transformer sits
+# entirely in VRAM and runs without per-step PCIe streaming.
+#
+# Bigger Wan variants were evaluated and rejected for this machine: the A14B
+# mixture-of-experts carries TWO 26.6 GiB transformers, ~58.5 GiB of weights,
+# which does not fit in 64 GB of system RAM once CUDA and the app are resident.
+_WAN_MODEL = os.getenv("WAN_MODEL", "Wan-AI/Wan2.2-TI2V-5B-Diffusers")
 
-_VIDEO_WIDTH = int(os.getenv("VIDEO_WIDTH", "704"))
-_VIDEO_HEIGHT = int(os.getenv("VIDEO_HEIGHT", "512"))
-# LTX conditions on frame_rate and was trained at 25. Generating at one
-# rate and exporting at another stretches the motion — a walk becomes a
-# limp — so this value is passed to the pipeline AND used for export.
-_VIDEO_FPS = int(os.getenv("VIDEO_FPS", "25"))
-# 2.5s x 25fps = 57 frames, the count measured to fit in 15.5 GiB at 704x512.
-# Memory scales with FRAMES (they are denoised jointly), not with playback
-# length, so raising fps shortens the clip that fits.
-_VIDEO_SECONDS = float(os.getenv("VIDEO_SECONDS", "2.5"))
-_VIDEO_STEPS = int(os.getenv("VIDEO_STEPS", "50"))
-_VIDEO_GUIDANCE = float(os.getenv("VIDEO_GUIDANCE", "3.0"))
+# Each model has its own trained resolution, rate and step count. Using one
+# model's numbers on the other is what made the first LTX clips limp, so the
+# defaults are per-backend and only overridden when the env var is set explicitly.
+_BACKEND_DEFAULTS = {
+    # LTX conditions on frame_rate and was trained at 25fps; VAE compresses 32x
+    # spatially, so dimensions want to be multiples of 32.
+    "ltx": {"width": 704, "height": 512, "fps": 25, "seconds": 2.5,
+            "steps": 50, "guidance": 3.0},
+    # Wan 2.2 VAE compresses 16x spatially and 4x temporally. The pipeline's own
+    # defaults are 832x480 / 81 frames / 50 steps / guidance 5.0, and it takes no
+    # frame_rate argument — motion is implied by the training distribution.
+    "wan": {"width": 832, "height": 480, "fps": 24, "seconds": 3.0,
+            "steps": 50, "guidance": 5.0},
+}
+
+
+def _backend_default(key: str, backend: str | None = None):
+    return _BACKEND_DEFAULTS.get(backend or VIDEO_BACKEND, _BACKEND_DEFAULTS["wan"])[key]
+
+
+# An env var that is set explicitly always wins; anything unset follows the
+# active backend. _PINNED records which the user pinned, so switching backend
+# re-derives the rest instead of carrying one model's numbers onto another.
+_PINNED = {k for k in ("width", "height", "fps", "seconds", "steps", "guidance")
+           if os.getenv(f"VIDEO_{k.upper()}")}
+
+_VIDEO_WIDTH = int(os.getenv("VIDEO_WIDTH", _backend_default("width")))
+_VIDEO_HEIGHT = int(os.getenv("VIDEO_HEIGHT", _backend_default("height")))
+# For LTX this is conditioning, not just playback speed: it tells the model how
+# much movement belongs between frames, and is passed to the pipeline as well as
+# used for export. Wan takes no frame_rate argument and infers motion from its
+# training distribution, so there it only sets the export rate.
+_VIDEO_FPS = int(os.getenv("VIDEO_FPS", _backend_default("fps")))
+# Memory scales with the FRAME COUNT — frames are denoised jointly — so raising
+# fps shortens the clip that fits, rather than costing nothing.
+_VIDEO_SECONDS = float(os.getenv("VIDEO_SECONDS", _backend_default("seconds")))
+_VIDEO_STEPS = int(os.getenv("VIDEO_STEPS", _backend_default("steps")))
+_VIDEO_GUIDANCE = float(os.getenv("VIDEO_GUIDANCE", _backend_default("guidance")))
 
 # Most video pipelines require frame counts of the form 8k+1.
 def _frame_count(seconds: float, fps: int) -> int:
@@ -91,6 +124,22 @@ def update_video_params(params: dict) -> dict:
                 _video_pipe = None
                 _video_pipe_kind = None
                 gc.collect()
+                VIDEO_BACKEND = val
+                # Carry over only what the user pinned; everything else moves to
+                # the new model's native settings.
+                if val in _BACKEND_DEFAULTS:
+                    if "width" not in _PINNED:
+                        _VIDEO_WIDTH = _backend_default("width", val)
+                    if "height" not in _PINNED:
+                        _VIDEO_HEIGHT = _backend_default("height", val)
+                    if "fps" not in _PINNED:
+                        _VIDEO_FPS = _backend_default("fps", val)
+                    if "seconds" not in _PINNED:
+                        _VIDEO_SECONDS = _backend_default("seconds", val)
+                    if "steps" not in _PINNED:
+                        _VIDEO_STEPS = _backend_default("steps", val)
+                    if "guidance" not in _PINNED:
+                        _VIDEO_GUIDANCE = _backend_default("guidance", val)
             VIDEO_BACKEND = val
     if "width" in params:
         _VIDEO_WIDTH = max(256, int(params["width"]))
@@ -155,11 +204,35 @@ def _load_pipe(kind: str):
             _sys.stderr.write("[VIDEO] Sequential CPU offload enabled (slower)\n")
         except Exception:
             pipe.to("cuda")
-    for opt in ("enable_vae_tiling", "enable_vae_slicing", "enable_attention_slicing"):
-        try:
-            getattr(pipe, opt)()
-        except Exception:
-            pass
+    # VAE tiling is what keeps the DECODE from OOMing: without it the VAE
+    # reconstructs every frame at full resolution in one allocation, which blows
+    # 15.5 GiB even when the denoise itself fit comfortably.
+    #
+    # These helpers are NOT on WanPipeline — they live on the VAE object. The
+    # previous loop called them on the pipeline and swallowed the AttributeError,
+    # so tiling was silently never enabled. Try both, and say which worked.
+    for name, target in (("vae", getattr(pipe, "vae", None)), ("pipe", pipe)):
+        if target is None:
+            continue
+        for meth in ("enable_tiling", "enable_slicing",
+                     "enable_vae_tiling", "enable_vae_slicing"):
+            fn = getattr(target, meth, None)
+            if callable(fn):
+                try:
+                    fn()
+                    _sys.stderr.write(f"[VIDEO] {name}.{meth}() enabled\n")
+                except Exception as e:
+                    _sys.stderr.write(f"[VIDEO] {name}.{meth}() failed: {e}\n")
+    try:
+        pipe.enable_attention_slicing()
+    except Exception:
+        pass
+    vae = getattr(pipe, "vae", None)
+    if vae is not None:
+        _sys.stderr.write(
+            f"[VIDEO] vae tiling={getattr(vae, 'use_tiling', '?')} "
+            f"slicing={getattr(vae, 'use_slicing', '?')}\n"
+        )
 
     _video_pipe, _video_pipe_kind = pipe, kind
     _sys.stderr.write("[VIDEO] Pipeline ready.\n")
@@ -167,11 +240,21 @@ def _load_pipe(kind: str):
     return pipe
 
 
+# Off by default. Unlike the image pipelines, warming this costs ~16 GiB of
+# SYSTEM RAM (model CPU offload keeps weights in RAM and moves modules to the GPU
+# only during inference, so it is not VRAM that is held). That is a real slice of
+# 64 GB to reserve for a one-time saving on the first request, so it is opt-in.
+VIDEO_WARMUP = os.getenv("VIDEO_WARMUP", "0") == "1"
+
+
 def preload_video():
     """Warm the video pipeline in the background (mirrors preload_zimage)."""
     import threading
 
-    if VIDEO_BACKEND not in ("ltx", "wan"):
+    if not VIDEO_WARMUP or VIDEO_BACKEND not in ("ltx", "wan"):
+        return
+    if not _hf_model_cache_present(_LTX_MODEL if VIDEO_BACKEND == "ltx" else _WAN_MODEL):
+        _logger.info("[VIDEO] Warm-up skipped: weights not downloaded yet")
         return
 
     def _work():
@@ -231,7 +314,7 @@ def _generate_video_once(prompt: str) -> str:
     )
     _sys.stderr.flush()
 
-    with _gpu_inference_ctx("VIDEO"):
+    with _gpu_inference_ctx("VIDEO", efficient_attention=True):
         try:
             pipe = _load_pipe(backend)
             # frame_rate is conditioning, not metadata: the model uses it to decide
@@ -263,6 +346,23 @@ def _generate_video_once(prompt: str) -> str:
             # Rather than dead-ending, walk down a cascade: fewer frames first
             # (the dominant term), then smaller frames. Mirrors the OOM retry the
             # ZImage path already does.
+            # An OOM mid-forward leaves activations and offload hooks holding
+            # VRAM: the first retry saw only 6.9 MB free and could not allocate
+            # even 33 MB. Dropping the cached pipeline and collecting twice
+            # actually returns the memory, at the cost of reloading weights.
+            global _video_pipe, _video_pipe_kind
+            _video_pipe = None
+            _video_pipe_kind = None
+            del pipe
+            for _ in range(2):
+                gc.collect()
+                torch.cuda.empty_cache()
+            _sys.stderr.write(
+                f"[VIDEO] Released pipeline after OOM; "
+                f"{torch.cuda.mem_get_info()[0]/2**30:.2f} GiB free\n"
+            )
+            pipe = _load_pipe(backend)
+
             for scale_frames, scale_dim in ((0.6, 1.0), (0.6, 0.75), (0.4, 0.75)):
                 torch.cuda.empty_cache()
                 gc.collect()

@@ -278,7 +278,8 @@ from contextlib import contextmanager as _contextmanager
 
 
 @_contextmanager
-def _gpu_inference_ctx(tag: str = "IMG", min_vram_gib: float = 4.0):
+def _gpu_inference_ctx(tag: str = "IMG", min_vram_gib: float = 4.0,
+                       efficient_attention: bool = False):
     """Unified context manager for GPU image inference.
 
     1. Unloads all Ollama models via /api/ps to free VRAM.
@@ -336,11 +337,33 @@ def _gpu_inference_ctx(tag: str = "IMG", min_vram_gib: float = 4.0):
     # -- 3. Disable cuDNN / Flash SDP --
     # System has cuDNN 9 (PyTorch) + cuDNN 8 (DaVinci Resolve in /opt/resolve/libs).
     # Flash/MemEfficient SDP triggers the mismatch; math SDP avoids cuDNN entirely.
+    #
+    # efficient_attention=True opts OUT of that workaround, and video MUST use it.
+    # Math attention materialises the full NxN score matrix, and a 3-second clip
+    # is ~26,500 latent tokens — 1.3 GiB per head-group before any weights. Flash
+    # and mem-efficient attention never build that matrix, so the difference is
+    # not a slowdown but the difference between running and an instant OOM.
     _cudnn_was = torch.backends.cudnn.enabled
-    torch.backends.cudnn.enabled = False
-    torch.backends.cuda.enable_flash_sdp(False)
-    torch.backends.cuda.enable_mem_efficient_sdp(False)
-    torch.backends.cuda.enable_math_sdp(True)
+    if efficient_attention:
+        # Two separate concerns, previously conflated. cuDNN stays OFF — that is
+        # what the Resolve conflict is about. Flash and mem-efficient attention
+        # are plain CUDA kernels and do NOT go through cuDNN, so they can stay on
+        # and keep the NxN score matrix from ever being materialised. Only the
+        # cuDNN *SDP backend* has to go, since that one does use cuDNN.
+        torch.backends.cudnn.enabled = False
+        torch.backends.cuda.enable_flash_sdp(True)
+        torch.backends.cuda.enable_mem_efficient_sdp(True)
+        torch.backends.cuda.enable_math_sdp(True)
+        if hasattr(torch.backends.cuda, "enable_cudnn_sdp"):
+            torch.backends.cuda.enable_cudnn_sdp(False)
+        _sys.stderr.write(
+            f"[{tag}] cuDNN off, flash/mem-efficient attention ON (required for video)\n"
+        )
+    else:
+        torch.backends.cudnn.enabled = False
+        torch.backends.cuda.enable_flash_sdp(False)
+        torch.backends.cuda.enable_mem_efficient_sdp(False)
+        torch.backends.cuda.enable_math_sdp(True)
 
     try:
         yield _unloaded
@@ -349,6 +372,8 @@ def _gpu_inference_ctx(tag: str = "IMG", min_vram_gib: float = 4.0):
         torch.backends.cudnn.enabled = _cudnn_was
         torch.backends.cuda.enable_flash_sdp(True)
         torch.backends.cuda.enable_mem_efficient_sdp(True)
+        if hasattr(torch.backends.cuda, "enable_cudnn_sdp"):
+            torch.backends.cuda.enable_cudnn_sdp(True)
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -413,6 +438,12 @@ def _hf_model_cache_present(repo_id: str) -> bool:
             return False
         for name, val in spec.items():
             if name.startswith("_") or not isinstance(val, (list, tuple)):
+                continue
+            # A component declared as [None, None] is deliberately absent, not
+            # missing: Wan 2.2 TI2V-5B lists transformer_2 that way because it is
+            # the mixture-of-experts second expert, which the 5B model does not
+            # have. Requiring it would reject a complete download.
+            if all(v is None for v in val):
                 continue
             comp = snap / name
             if not comp.is_dir():

@@ -278,3 +278,77 @@ class TestMediaPrefix:
         kind, prompt = self._match("image: a sign reading: OPEN")
         assert kind == "image"
         assert prompt == "a sign reading: OPEN"
+
+
+# ---------------------------------------------------------------------------
+# Per-backend video defaults
+# ---------------------------------------------------------------------------
+
+
+class TestBackendDefaults:
+    """Each video model has its own trained resolution and frame rate.
+
+    Carrying one model's numbers onto the other is what made LTX clips limp, so
+    switching backend must re-derive anything the user has not pinned.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _restore(self):
+        v = video_mod
+        saved = (v.VIDEO_BACKEND, v._VIDEO_WIDTH, v._VIDEO_HEIGHT, v._VIDEO_FPS,
+                 v._VIDEO_SECONDS, v._VIDEO_STEPS, v._VIDEO_GUIDANCE, set(v._PINNED))
+        yield
+        (v.VIDEO_BACKEND, v._VIDEO_WIDTH, v._VIDEO_HEIGHT, v._VIDEO_FPS,
+         v._VIDEO_SECONDS, v._VIDEO_STEPS, v._VIDEO_GUIDANCE) = saved[:7]
+        v._PINNED = saved[7]
+
+    def test_each_backend_has_its_own_native_settings(self):
+        wan = video_mod._BACKEND_DEFAULTS["wan"]
+        ltx = video_mod._BACKEND_DEFAULTS["ltx"]
+        assert wan != ltx
+        # Wan takes no frame_rate argument and trains at 24; LTX conditions on 25.
+        assert wan["fps"] == 24 and ltx["fps"] == 25
+        assert wan["guidance"] == 5.0 and ltx["guidance"] == 3.0
+
+    def test_switching_backend_rederives_unpinned_settings(self):
+        v = video_mod
+        v._PINNED = set()
+        # Force a real transition: re-selecting the current backend is a no-op
+        # by design, so start from the other one.
+        v.update_video_params({"video_backend": "ltx"})
+        v.update_video_params({"video_backend": "wan"})
+        assert (v._VIDEO_WIDTH, v._VIDEO_FPS) == (832, 24)
+        v.update_video_params({"video_backend": "ltx"})
+        assert (v._VIDEO_WIDTH, v._VIDEO_FPS) == (704, 25)
+
+    def test_reselecting_the_same_backend_changes_nothing(self):
+        v = video_mod
+        v._PINNED = set()
+        v.update_video_params({"video_backend": "wan"})
+        v._VIDEO_WIDTH = 640
+        v.update_video_params({"video_backend": "wan"})
+        assert v._VIDEO_WIDTH == 640, "a no-op switch clobbered a runtime value"
+
+    def test_pinned_settings_survive_a_backend_switch(self):
+        """An explicit env var must not be silently overwritten."""
+        v = video_mod
+        v._PINNED = {"width", "fps"}
+        v.update_video_params({"video_backend": "wan"})
+        v._VIDEO_WIDTH, v._VIDEO_FPS = 640, 12
+        v.update_video_params({"video_backend": "ltx"})
+        assert v._VIDEO_WIDTH == 640, "pinned width was overwritten"
+        assert v._VIDEO_FPS == 12, "pinned fps was overwritten"
+        # unpinned values should still follow the backend
+        assert v._VIDEO_GUIDANCE == 3.0
+
+    def test_frame_count_is_legal_for_both_vaes(self):
+        """LTX needs 8k+1; Wan's VAE compresses 4x temporally, needing 4k+1."""
+        for seconds, fps in ((2.5, 25), (3.0, 24), (1.0, 24), (5.0, 25)):
+            n = video_mod._frame_count(seconds, fps)
+            assert (n - 1) % 8 == 0, f"{n} frames is not 8k+1"
+            assert (n - 1) % 4 == 0, f"{n} frames is not 4k+1"
+            assert n >= 9
+
+    def test_wan_is_the_default_backend(self):
+        assert video_mod._BACKEND_DEFAULTS.get("wan") is not None
+        assert "Wan2.2" in video_mod._WAN_MODEL

@@ -250,29 +250,29 @@
                 <span style="color:#38bdf8;font-weight:600;font-size:0.85rem;">🎬 Video Generation</span>
             </div>
             <div class="llm-param-group">
-                <div class="llm-param-label"><span>Video Backend</span><span class="llm-param-value" id="val-sub-video_backend">ltx</span></div>
-                <div class="llm-param-hint">ltx = LTX-Video, wan = Wan 2.1 (Apache-2.0, smaller). Weights are ~27GB and are never downloaded during a chat request.</div>
-                <select id="param-sub-video_backend" onchange="updateSubParamDisplay('video_backend')" style="width:100%;background:#0b1e3a;border:1px solid #1e3a5f;color:#e2e8f0;padding:0.35rem;border-radius:0.35rem;font-size:0.8rem;"><option value="ltx" selected>ltx</option><option value="wan">wan</option><option value="none">none</option></select>
+                <div class="llm-param-label"><span>Video Backend</span><span class="llm-param-value" id="val-sub-video_backend">wan</span></div>
+                <div class="llm-param-hint">wan = Wan 2.2 TI2V-5B (default, best quality here — ~4.66B params, fits in VRAM at bf16 so there is no streaming penalty). ltx = LTX-Video 2B, faster but visibly weaker on anatomy under motion. Weights are 27-32GB and are never downloaded during a chat request. Switching backend also resets size/rate below to that model's native values, unless you pinned them in .env.</div>
+                <select id="param-sub-video_backend" onchange="updateSubParamDisplay('video_backend')" style="width:100%;background:#0b1e3a;border:1px solid #1e3a5f;color:#e2e8f0;padding:0.35rem;border-radius:0.35rem;font-size:0.8rem;"><option value="wan" selected>wan</option><option value="ltx">ltx</option><option value="none">none</option></select>
             </div>
             <div class="llm-param-group">
-                <div class="llm-param-label"><span>Width</span><span class="llm-param-value" id="val-sub-width">704</span></div>
+                <div class="llm-param-label"><span>Width</span><span class="llm-param-value" id="val-sub-width">832</span></div>
                 <div class="llm-param-hint">Video is far more memory-hungry than images: every frame is generated jointly.</div>
-                <input type="range" id="param-sub-width" min="256" max="1280" step="64" value="704" oninput="updateSubParamDisplay('width')">
+                <input type="range" id="param-sub-width" min="256" max="1280" step="64" value="832" oninput="updateSubParamDisplay('width')">
             </div>
             <div class="llm-param-group">
-                <div class="llm-param-label"><span>Height</span><span class="llm-param-value" id="val-sub-height">512</span></div>
+                <div class="llm-param-label"><span>Height</span><span class="llm-param-value" id="val-sub-height">480</span></div>
                 <div class="llm-param-hint">Keep modest on a 16GB card.</div>
-                <input type="range" id="param-sub-height" min="256" max="1280" step="64" value="512" oninput="updateSubParamDisplay('height')">
+                <input type="range" id="param-sub-height" min="256" max="1280" step="64" value="480" oninput="updateSubParamDisplay('height')">
             </div>
             <div class="llm-param-group">
-                <div class="llm-param-label"><span>Frames Per Second</span><span class="llm-param-value" id="val-sub-fps">25</span></div>
+                <div class="llm-param-label"><span>Frames Per Second</span><span class="llm-param-value" id="val-sub-fps">24</span></div>
                 <div class="llm-param-hint">LTX conditions on this: it tells the model how much movement belongs between frames. Generating at one rate and playing at another stretches the motion — 25 is LTX's native rate.</div>
-                <input type="range" id="param-sub-fps" min="4" max="30" step="1" value="25" oninput="updateSubParamDisplay('fps')">
+                <input type="range" id="param-sub-fps" min="4" max="30" step="1" value="24" oninput="updateSubParamDisplay('fps')">
             </div>
             <div class="llm-param-group">
-                <div class="llm-param-label"><span>Duration (s)</span><span class="llm-param-value" id="val-sub-seconds">2.5</span></div>
+                <div class="llm-param-label"><span>Duration (s)</span><span class="llm-param-value" id="val-sub-seconds">3</span></div>
                 <div class="llm-param-hint">Clip length. Cost scales with duration.</div>
-                <input type="range" id="param-sub-seconds" min="1" max="15" step="0.5" value="2.5" oninput="updateSubParamDisplay('seconds')">
+                <input type="range" id="param-sub-seconds" min="1" max="15" step="0.5" value="3" oninput="updateSubParamDisplay('seconds')">
             </div>
             <div class="llm-param-group">
                 <div class="llm-param-label"><span>Inference Steps</span><span class="llm-param-value" id="val-sub-steps">50</span></div>
@@ -280,9 +280,9 @@
                 <input type="range" id="param-sub-steps" min="4" max="100" step="1" value="50" oninput="updateSubParamDisplay('steps')">
             </div>
             <div class="llm-param-group">
-                <div class="llm-param-label"><span>Guidance Scale</span><span class="llm-param-value" id="val-sub-guidance">3.0</span></div>
+                <div class="llm-param-label"><span>Guidance Scale</span><span class="llm-param-value" id="val-sub-guidance">5.0</span></div>
                 <div class="llm-param-hint">How strictly the model follows the prompt.</div>
-                <input type="range" id="param-sub-guidance" min="0" max="15" step="0.5" value="3.0" oninput="updateSubParamDisplay('guidance')">
+                <input type="range" id="param-sub-guidance" min="0" max="15" step="0.5" value="5.0" oninput="updateSubParamDisplay('guidance')">
             </div>
 
             <!-- Image self-refinement -->

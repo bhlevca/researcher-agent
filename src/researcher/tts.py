@@ -245,9 +245,34 @@ def _pick_voice_for_lang(lang: str, base_voice: str, voices: list[dict]) -> str:
 # Route registration
 # ---------------------------------------------------------------------------
 
+# Language names the tutor uses, mapped to the ISO codes edge-tts locales use.
+_LANG_NAME_TO_CODE = {
+    "english": "en", "french": "fr", "german": "de", "spanish": "es",
+    "italian": "it", "portuguese": "pt", "romanian": "ro", "dutch": "nl",
+    "russian": "ru", "polish": "pl", "swedish": "sv", "greek": "el",
+    "turkish": "tr", "czech": "cs", "hungarian": "hu", "ukrainian": "uk",
+    "japanese": "ja", "korean": "ko", "chinese": "zh", "arabic": "ar",
+    "hindi": "hi",
+}
+
+
+def _lang_code(value: str) -> str:
+    """Normalise "French" / "fr" / "fr-FR" to a two-letter code."""
+    v = (value or "").strip().lower()
+    if not v:
+        return ""
+    if v in _LANG_NAME_TO_CODE:
+        return _LANG_NAME_TO_CODE[v]
+    return v[:2] if len(v) >= 2 else ""
+
+
 class TTSRequest(BaseModel):
     text: str
     voice: str = "en-US-AriaNeural"
+    # Target language, when the caller already knows it. The tutor does: the
+    # session has a target language, so guessing is unnecessary and unreliable.
+    # Accepts a code ("fr") or a name ("French"); blank falls back to detection.
+    lang: str = ""
 
 
 def register_tts_routes(app):
@@ -274,24 +299,43 @@ def register_tts_routes(app):
 
         voices = await _ensure_tts_voices()
 
-        # Determine the base language from the user's selected voice
-        base_lang = "en"
-        for v in voices:
-            if v["name"] == req.voice:
-                base_lang = v["locale"][:2].lower()
-                break
+        # Prefer an explicitly declared language over guessing.
+        #
+        # Deriving base_lang from the selected VOICE is wrong whenever the two
+        # disagree — the tutor replies in French while the voice dropdown still
+        # says English, so a short French greeting gets scored against English
+        # and the biasing rules resolve it back to English. That is why only the
+        # FIRST tutor line was mispronounced: later replies are long enough for
+        # detection to win on its own.
+        base_lang = _lang_code(req.lang) if req.lang else ""
+        if not base_lang:
+            base_lang = "en"
+            for v in voices:
+                if v["name"] == req.voice:
+                    base_lang = v["locale"][:2].lower()
+                    break
+
+        # If the caller declared a language, honour it for voice choice too:
+        # an English voice reading French is the bug, not a preference.
+        effective_voice = req.voice
+        if req.lang:
+            declared = _lang_code(req.lang)
+            sel_locale = next((v["locale"][:2].lower() for v in voices
+                               if v["name"] == req.voice), "")
+            if declared and declared != sel_locale:
+                effective_voice = _pick_voice_for_lang(declared, req.voice, voices)
 
         segments = _split_multilingual(clean, base_lang)
-        logger.warning("[TTS] req.voice=%s base_lang=%s segments=%d text=%.80s",
-                       req.voice, base_lang, len(segments), clean)
+        logger.info("[TTS] voice=%s declared_lang=%r base_lang=%s segments=%d",
+                    effective_voice, req.lang, base_lang, len(segments))
 
         buf = io.BytesIO()
         for lang, text in segments:
             # Skip segments that have no speakable content (only punctuation/symbols)
             if not _re.search(r'[a-zA-Z\u00C0-\u024F\u0400-\u04FF\u4E00-\u9FFF\u3040-\u309F\u30A0-\u30FF\uAC00-\uD7AF\u0600-\u06FF\u0900-\u097F]', text):
                 continue
-            voice = _pick_voice_for_lang(lang, req.voice, voices)
-            logger.warning("[TTS] segment lang=%s voice=%s text=%.60s", lang, voice, text)
+            voice = _pick_voice_for_lang(lang, effective_voice, voices)
+            logger.debug("[TTS] segment lang=%s voice=%s", lang, voice)
             communicate = edge_tts.Communicate(text, voice)
             try:
                 async for chunk in communicate.stream():

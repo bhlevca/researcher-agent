@@ -167,7 +167,7 @@ const SUB_PARAM_GROUPS = {
     ocr:     ['ocr_enabled','ocr_model','ocr_dpi','ocr_max_dim','ocr_max_pages','ocr_timeout','ocr_auto_export'],
     whisper: ['whisper_model','whisper_device','whisper_compute_type','whisper_vad'],
     srs:     ['srs_algo','srs_desired_retention','srs_max_interval','srs_initial_ease'],
-    video:   ['video_backend','width','height','fps','seconds','steps','guidance'],
+    video:   ['video_backend','width','height','fps','seconds','steps','guidance', 'clips'],
 };
 const SUB_FLOAT_KEYS = new Set(['srs_desired_retention','srs_initial_ease','guidance']);
 const SUB_STRING_KEYS = new Set(['ocr_model','ocr_auto_export','whisper_model',

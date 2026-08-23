@@ -245,13 +245,41 @@ def register_chat_routes(app):
                         f"🎬 Direct {kind} generation (agent bypassed): {direct_prompt[:80]}",
                     )
                     loop = asyncio.get_running_loop()
+                    # Video runs for many minutes — an hour-plus for a stitched
+                    # clip — so stream progress rather than leaving the request
+                    # silent, which is indistinguishable from a hang.
+                    pq: queue.Queue = queue.Queue()
                     if kind == "video":
-                        from researcher.video import _generate_video_once as _gen
+                        from researcher.video import _generate_video_once as _vgen
+
+                        def _gen(p):
+                            return _vgen(p, progress=pq.put)
                     else:
                         from researcher.image import generate_ai_image as _tool
-                        _gen = getattr(_tool, "func", _tool)
+                        _inner = getattr(_tool, "func", _tool)
+
+                        def _gen(p):
+                            return _inner(p)
+
+                    future = loop.run_in_executor(None, _gen, direct_prompt)
+                    last = None
+                    while not future.done():
+                        await asyncio.sleep(0.25)
+                        while not pq.empty():
+                            try:
+                                line = pq.get_nowait()
+                            except queue.Empty:
+                                break
+                            if line != last:      # collapse repeats
+                                last = line
+                                yield _sse_media("reasoning", line)
+                    while not pq.empty():
+                        try:
+                            yield _sse_media("reasoning", pq.get_nowait())
+                        except queue.Empty:
+                            break
                     try:
-                        out = await loop.run_in_executor(None, _gen, direct_prompt)
+                        out = future.result()
                     except Exception as e:
                         yield _sse_media("error", f"{kind} generation failed: {e}")
                         return

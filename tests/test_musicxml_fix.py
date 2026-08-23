@@ -417,3 +417,88 @@ def test_garbage_closing_tag():
     assert '</ major>' not in result
     root = _parse_fixed(xml)
     assert root.tag == 'score-partwise'
+
+
+# ---------------------------------------------------------------------------
+# ABC composition path (replaces the JSON note-list format)
+# ---------------------------------------------------------------------------
+
+import pytest
+from researcher.composer.crew import ComposerCrew
+
+
+class TestAbcExtraction:
+    def test_pulls_abc_from_a_fenced_block(self):
+        raw = "Here you go:\n```abc\nX:1\nT:T\nM:4/4\nL:1/8\nK:C\n|C4 E4|\n```"
+        abc = ComposerCrew.extract_abc(raw)
+        assert abc and abc.startswith("X:1")
+
+    def test_accepts_bare_abc_without_a_fence(self):
+        assert ComposerCrew.extract_abc("X:1\nT:T\nM:4/4\nL:1/8\nK:C\n|C4 E4|")
+
+    @pytest.mark.parametrize("text", [
+        "Sorry, I cannot compose that.", "", "```json\n{\"parts\": []}\n```",
+        "X:1\nT:no key line\n|C4|",
+    ])
+    def test_rejects_anything_without_the_required_headers(self, text):
+        assert ComposerCrew.extract_abc(text) is None
+
+
+class TestAbcValidation:
+    """These catch the faults music21 parses without complaint."""
+
+    THREE_FOUR_SHORT = ("X:1\nT:T\nM:3/4\nL:1/8\nK:G\n"
+                        "| D>E F>G | A B c d | e f g a | b c d B |"
+                        " D>E F>G | A B c d | e f g a | b a g f |")
+
+    def test_detects_bars_that_are_the_wrong_length(self):
+        r = ComposerCrew.validate_abc(self.THREE_FOUR_SHORT, "3/4")
+        assert r["short_bars"] > 0 and not r["ok"]
+        assert any("beats" in i for i in r["issues"])
+
+    def test_detects_a_scale_masquerading_as_a_melody(self):
+        r = ComposerCrew.validate_abc(self.THREE_FOUR_SHORT, "3/4")
+        assert r["longest_run"] >= 8
+        assert any("scale" in i for i in r["issues"])
+
+    def test_accepts_a_well_formed_tune(self):
+        good = ("X:1\nT:T\nM:4/4\nL:1/8\nK:C\n"
+                "| C2 E2 G2 E2 | F2 A2 c2 A2 | G2 E2 C2 E2 | D2 F2 A2 F2 |"
+                " C2 E2 G2 E2 | A2 F2 D2 F2 | G2 B2 d2 B2 | C8 |")
+        r = ComposerCrew.validate_abc(good, "4/4")
+        assert r["short_bars"] == 0
+        assert r["longest_run"] < 8
+
+    def test_unparseable_input_reports_rather_than_raises(self):
+        r = ComposerCrew.validate_abc("this is not music", "4/4")
+        assert r["ok"] is False and r["issues"]
+
+
+class TestBarRepair:
+    """The model could not count bar durations in any attempt, so code does it."""
+
+    def test_rebarring_makes_every_interior_bar_correct(self):
+        from music21 import converter
+        abc = ("X:1\nT:T\nM:3/4\nL:1/8\nK:G\n"
+               "|\"G\" G>E D2 C4 | \"C\" B>A G4 | \"D\" E>C D2 E2 |"
+               " \"G\" F>D E2 F4 | \"Bm\" D>A G4 |")
+        assert ComposerCrew.validate_abc(abc, "3/4")["short_bars"] > 0
+        xml, bars = ComposerCrew.repair_bar_lengths(abc, "3/4")
+        assert xml and bars > 0
+        ms = list(converter.parse(xml).recurse().getElementsByClass("Measure"))
+        wrong = [i for i, m in enumerate(ms)
+                 if i < len(ms) - 1 and abs(float(m.duration.quarterLength) - 3.0) > 0.01]
+        assert not wrong, f"bars still wrong after re-barring: {wrong}"
+
+    def test_repair_returns_empty_rather_than_raising_on_junk(self):
+        xml, bars = ComposerCrew.repair_bar_lengths("not abc at all", "4/4")
+        assert xml == "" and bars == 0
+
+
+class TestAbcKeyMapping:
+    @pytest.mark.parametrize("ui,abc", [
+        ("C major", "C"), ("Bb major", "Bb"), ("A minor", "Am"),
+        ("F# minor", "F#m"), ("D dorian", "DDor"),
+    ])
+    def test_ui_key_names_become_abc_key_fields(self, ui, abc):
+        assert ComposerCrew._abc_key(ui) == abc

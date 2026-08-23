@@ -18,7 +18,7 @@ function addTutorMsg(role, text) {
         const speakBtn = document.createElement('button');
         speakBtn.textContent = '🔊 Speak';
         speakBtn.onclick = () => {
-            if (typeof speakText === 'function') speakText(text, w);
+            if (typeof speakText === 'function') speakText(text, w, getTutorConfig().target_lang);
             else tutorShowToast('TTS not available');
         };
         acts.appendChild(speakBtn);
@@ -92,7 +92,7 @@ async function sendTutorMessage() {
             // Dialog mode: auto-speak response then auto-record
             if (dialogMode && typeof speakText === 'function') {
                 const lastWrapper = tutorChat.querySelector('.msg-wrapper.assistant:last-child');
-                await speakText(result.response, lastWrapper);
+                await speakText(result.response, lastWrapper, getTutorConfig().target_lang);
                 if (dialogMode && typeof toggleMic === 'function') toggleMic();
             }
         }

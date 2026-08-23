@@ -32,7 +32,7 @@ _logger = logging.getLogger(__name__)
 # Configuration
 # --------------------------------------------------------------------------
 
-VIDEO_BACKEND = os.getenv("VIDEO_BACKEND", "ltx").lower()
+VIDEO_BACKEND = os.getenv("VIDEO_BACKEND", "wan").lower()
 _VALID_VIDEO_BACKENDS = {"ltx", "wan", "none"}
 
 # LTX-Video 2B: fast, but visibly weak on anatomy under motion. Kept as a
@@ -58,7 +58,11 @@ _BACKEND_DEFAULTS = {
     # Wan 2.2 VAE compresses 16x spatially and 4x temporally. The pipeline's own
     # defaults are 832x480 / 81 frames / 50 steps / guidance 5.0, and it takes no
     # frame_rate argument — motion is implied by the training distribution.
-    "wan": {"width": 832, "height": 480, "fps": 24, "seconds": 3.0,
+    # 1280x704 is Wan 2.2 TI2V-5B's native training resolution and looks clearly
+    # better than 832x480 — measured side by side. It costs ~7 min/clip instead
+    # of ~3.5. Duration is deliberately NOT raised: at 5s the model runs out of
+    # coherent movement and drifts toward static (motion 4.15 vs 12.15 at 3s).
+    "wan": {"width": 1280, "height": 704, "fps": 24, "seconds": 3.0,
             "steps": 50, "guidance": 5.0},
 }
 
@@ -85,6 +89,16 @@ _VIDEO_FPS = int(os.getenv("VIDEO_FPS", _backend_default("fps")))
 _VIDEO_SECONDS = float(os.getenv("VIDEO_SECONDS", _backend_default("seconds")))
 _VIDEO_STEPS = int(os.getenv("VIDEO_STEPS", _backend_default("steps")))
 _VIDEO_GUIDANCE = float(os.getenv("VIDEO_GUIDANCE", _backend_default("guidance")))
+# Number of clips to chain into one video. 1 = a single clip (default).
+# Chaining conditions each clip on the LAST FRAME of the previous one, so the
+# result is continuous rather than a hard cut between unrelated scenes. Cost is
+# linear: at 720p a clip is ~7 min, so 4 clips is roughly half an hour.
+_VIDEO_CLIPS = int(os.getenv("VIDEO_CLIPS", "1"))
+# ~2.7s of usable video per clip after the join frame is dropped, so 24 clips is
+# a little over a minute — the practical ceiling before generation time becomes
+# absurd. Frames accumulate in system RAM (~3.3 GiB at 720p for 24 clips), which
+# is fine on 64 GB; TIME is the binding constraint, not memory.
+_MAX_CLIPS = int(os.getenv("VIDEO_MAX_CLIPS", "24"))
 
 # Most video pipelines require frame counts of the form 8k+1.
 def _frame_count(seconds: float, fps: int) -> int:
@@ -106,6 +120,7 @@ def get_video_params() -> dict:
         "seconds": _VIDEO_SECONDS,
         "steps": _VIDEO_STEPS,
         "guidance": _VIDEO_GUIDANCE,
+        "clips": _VIDEO_CLIPS,
         "model": _LTX_MODEL if VIDEO_BACKEND == "ltx" else _WAN_MODEL,
     }
 
@@ -113,7 +128,8 @@ def get_video_params() -> dict:
 def update_video_params(params: dict) -> dict:
     """Update runtime video parameters. Only known keys are accepted."""
     global VIDEO_BACKEND, _VIDEO_WIDTH, _VIDEO_HEIGHT, _VIDEO_FPS
-    global _VIDEO_SECONDS, _VIDEO_STEPS, _VIDEO_GUIDANCE, _video_pipe, _video_pipe_kind
+    global _VIDEO_SECONDS, _VIDEO_STEPS, _VIDEO_GUIDANCE, _VIDEO_CLIPS
+    global _video_pipe, _video_pipe_kind
 
     if "video_backend" in params:
         val = str(params["video_backend"]).lower()
@@ -153,6 +169,8 @@ def update_video_params(params: dict) -> dict:
         _VIDEO_STEPS = max(4, min(100, int(params["steps"])))
     if "guidance" in params:
         _VIDEO_GUIDANCE = max(0.0, min(15.0, float(params["guidance"])))
+    if "clips" in params:
+        _VIDEO_CLIPS = max(1, min(_MAX_CLIPS, int(params["clips"])))
     return get_video_params()
 
 
@@ -281,8 +299,116 @@ def _export(frames, fps: int) -> str:
     return fname
 
 
-def _generate_video_once(prompt: str) -> str:
-    """Render one clip and return an HTML <video> tag, or an error string."""
+
+def _as_pil(frame):
+    """Coerce a generated frame to PIL.
+
+    Pipelines return frames as numpy arrays, but the image-to-video pipeline
+    accepts only torch.Tensor or PIL.Image, so the conditioning frame has to be
+    converted before it can be handed back in.
+    """
+    from PIL import Image
+    import numpy as np
+
+    if isinstance(frame, Image.Image):
+        return frame
+    arr = np.asarray(frame)
+    if arr.dtype != np.uint8:
+        # Pipelines may emit float RGB in [0, 1].
+        arr = ((arr.clip(0, 1) * 255).astype("uint8") if float(arr.max()) <= 1.0
+               else arr.astype("uint8"))
+    return Image.fromarray(arr)
+
+
+def _chain_clips(pipe, prompt: str, negative: str, num_frames: int,
+                 width: int, height: int, clips: int, log,
+                 step_cb=None) -> list:
+    """Generate *clips* clips, each continuing from the last frame of the one before.
+
+    Wan 2.2 TI2V-5B is a text-AND-image model, so the previous clip's final frame
+    conditions the next one. That is what makes the join continuous — naively
+    concatenating independently generated clips gives a hard cut to an unrelated
+    scene, which is worse than a shorter video.
+
+    The two pipelines are used SEQUENTIALLY, never together. Deriving an
+    image-to-video pipeline from the loaded text-to-video one with ``from_pipe``
+    looks tempting since they share weights, but both then want their own
+    accelerate offload hooks over the same modules and the second one OOMs while
+    the first still holds ~15 GiB. Releasing the first outright costs one extra
+    pipeline load (~40 s) and simply works.
+    """
+    global _video_pipe, _video_pipe_kind
+    import torch
+    from diffusers import WanImageToVideoPipeline
+
+    def _run(p, **kw):
+        if step_cb is not None:
+            kw["callback_on_step_end"] = step_cb
+        with torch.inference_mode():
+            return p(prompt=prompt, negative_prompt=negative, width=width,
+                     height=height, num_frames=num_frames,
+                     num_inference_steps=_VIDEO_STEPS,
+                     guidance_scale=_VIDEO_GUIDANCE, **kw).frames[0]
+
+    log(f"[VIDEO] Clip 1/{clips} (text-to-video)")
+    frames = list(_run(pipe))
+    if clips <= 1:
+        return frames
+
+    # Release the text-to-video pipeline completely before loading the next one.
+    log("[VIDEO] Releasing text-to-video pipeline before image-to-video")
+    _video_pipe = None
+    _video_pipe_kind = None
+    del pipe
+    for _ in range(2):
+        gc.collect()
+        torch.cuda.empty_cache()
+    log(f"[VIDEO] {torch.cuda.mem_get_info()[0]/2**30:.2f} GiB free")
+
+    try:
+        i2v = WanImageToVideoPipeline.from_pretrained(
+            _WAN_MODEL, torch_dtype=torch.bfloat16
+        )
+        i2v.enable_model_cpu_offload()
+        for opt in ("enable_tiling", "enable_slicing"):
+            fn = getattr(getattr(i2v, "vae", None), opt, None)
+            if callable(fn):
+                try:
+                    fn()
+                except Exception:
+                    pass
+    except Exception as e:
+        log(f"[VIDEO] Could not load image-to-video pipeline ({type(e).__name__}: {e}); "
+            f"returning the single clip")
+        return frames
+
+    for n in range(2, clips + 1):
+        pct = int(100 * (n - 1) / clips)
+        log(f"[VIDEO] Clip {n}/{clips} ({pct}% — {len(frames)} frames so far, "
+            f"~{len(frames)/max(1,_VIDEO_FPS):.1f}s of video)")
+        try:
+            nxt = list(_run(i2v, image=_as_pil(frames[-1])))
+        except Exception as e:
+            # A partial video beats no video: keep what we already have.
+            log(f"[VIDEO] Clip {n} failed ({type(e).__name__}: {str(e)[:120]}); "
+                f"keeping {len(frames)} frames")
+            break
+        # Drop the first frame: it reproduces the conditioning image we already have.
+        frames.extend(nxt[1:] if len(nxt) > 1 else nxt)
+
+    del i2v
+    gc.collect()
+    torch.cuda.empty_cache()
+    return frames
+
+
+def _generate_video_once(prompt: str, progress=None) -> str:
+    """Render one clip and return an HTML <video> tag, or an error string.
+
+    *progress* is an optional ``callable(str)`` that receives human-readable
+    status lines. A stitched 30s video takes over an hour, so a request that
+    reports nothing for that long is indistinguishable from a hang.
+    """
     import sys as _sys
     import torch
 
@@ -326,21 +452,60 @@ def _generate_video_once(prompt: str) -> str:
             if "frame_rate" in _inspect.signature(pipe.__call__).parameters:
                 extra["frame_rate"] = _VIDEO_FPS
 
-            with torch.inference_mode():
-                result = pipe(
-                    prompt=prompt,
-                    **extra,
-                    negative_prompt=os.getenv(
-                        "VIDEO_NEGATIVE_PROMPT",
-                        "blurry, distorted, low quality, watermark, text",
-                    ),
-                    width=_VIDEO_WIDTH,
-                    height=_VIDEO_HEIGHT,
-                    num_frames=num_frames,
-                    num_inference_steps=_VIDEO_STEPS,
-                    guidance_scale=_VIDEO_GUIDANCE,
+            negative = os.getenv(
+                "VIDEO_NEGATIVE_PROMPT",
+                "blurry, distorted, low quality, watermark, text",
+            )
+
+            def _report(msg: str):
+                _sys.stderr.write(msg + "\n")
+                _sys.stderr.flush()
+                if progress:
+                    try:
+                        progress(msg)
+                    except Exception:
+                        pass  # never let reporting break generation
+
+            # Per-step progress with a running estimate. The first steps are
+            # slower (weights migrating to the GPU), so the estimate is based on
+            # elapsed/completed rather than a fixed per-step cost.
+            import time as _time
+            _t0 = _time.time()
+            _total_steps = _VIDEO_STEPS * max(1, _VIDEO_CLIPS)
+            _done_steps = [0]
+
+            def _step_cb(pipe_ref, step_index, timestep, cbk):
+                _done_steps[0] += 1
+                n = _done_steps[0]
+                if n % 5 and n != _total_steps:
+                    return cbk
+                elapsed = _time.time() - _t0
+                eta = (elapsed / max(1, n)) * (_total_steps - n)
+                _report(
+                    f"🎬 {int(100 * n / _total_steps)}% — step {n}/{_total_steps}"
+                    f" — about {int(eta // 60)}m {int(eta % 60)}s left"
                 )
-            frames = result.frames[0]
+                return cbk
+            if _VIDEO_CLIPS > 1 and backend == "wan":
+                frames = _chain_clips(pipe, prompt, negative, num_frames,
+                                      _VIDEO_WIDTH, _VIDEO_HEIGHT, _VIDEO_CLIPS,
+                                      _report, _step_cb)
+            else:
+                _report(f"🎬 Generating {_VIDEO_WIDTH}x{_VIDEO_HEIGHT}, "
+                        f"{num_frames} frames, {_VIDEO_STEPS} steps")
+                with torch.inference_mode():
+                    result = pipe(
+                        prompt=prompt,
+                        **extra,
+                        negative_prompt=negative,
+                        width=_VIDEO_WIDTH,
+                        height=_VIDEO_HEIGHT,
+                        num_frames=num_frames,
+                        num_inference_steps=_VIDEO_STEPS,
+                        guidance_scale=_VIDEO_GUIDANCE,
+                        callback_on_step_end=_step_cb,
+                    )
+                frames = result.frames[0]
             fname = _export(frames, _VIDEO_FPS)
         except torch.cuda.OutOfMemoryError:
             # Rather than dead-ending, walk down a cascade: fewer frames first

@@ -85,7 +85,10 @@ function textForTTS(text) {
     return t;
 }
 
-function speakText(text, wrapper) {
+// `lang` lets a caller that already knows the language say so — the tutor does,
+// via its session target language. Without it the server has to guess from the
+// selected voice, which is wrong whenever the two disagree.
+function speakText(text, wrapper, lang) {
     if (!text) return Promise.resolve();
     return new Promise(async (resolve) => {
         stopSpeaking();  // stop any prior speech
@@ -107,7 +110,7 @@ function speakText(text, wrapper) {
             const resp = await fetch('/tts/speak', {
                 method: 'POST',
                 headers: jsonAuthHeaders(),
-                body: JSON.stringify({ text: clean, voice: selectedVoiceName })
+                body: JSON.stringify({ text: clean, voice: selectedVoiceName, lang: lang || '' })
             });
             if (!resp.ok) throw new Error('TTS server error');
             const blob = await resp.blob();

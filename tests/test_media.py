@@ -315,11 +315,15 @@ class TestBackendDefaults:
         v._PINNED = set()
         # Force a real transition: re-selecting the current backend is a no-op
         # by design, so start from the other one.
+        # Assert against the defaults table rather than literals, so tuning a
+        # default (e.g. raising Wan to its native 1280x704) does not break a test
+        # that is really about the switching behaviour.
+        wan, ltx = v._BACKEND_DEFAULTS["wan"], v._BACKEND_DEFAULTS["ltx"]
         v.update_video_params({"video_backend": "ltx"})
         v.update_video_params({"video_backend": "wan"})
-        assert (v._VIDEO_WIDTH, v._VIDEO_FPS) == (832, 24)
+        assert (v._VIDEO_WIDTH, v._VIDEO_FPS) == (wan["width"], wan["fps"])
         v.update_video_params({"video_backend": "ltx"})
-        assert (v._VIDEO_WIDTH, v._VIDEO_FPS) == (704, 25)
+        assert (v._VIDEO_WIDTH, v._VIDEO_FPS) == (ltx["width"], ltx["fps"])
 
     def test_reselecting_the_same_backend_changes_nothing(self):
         v = video_mod
@@ -348,6 +352,25 @@ class TestBackendDefaults:
             assert (n - 1) % 8 == 0, f"{n} frames is not 8k+1"
             assert (n - 1) % 4 == 0, f"{n} frames is not 4k+1"
             assert n >= 9
+
+    def test_wan_defaults_to_its_native_resolution(self):
+        """1280x704 is Wan 2.2 TI2V-5B's training resolution and measurably
+        better than 832x480; 480p was only ever a VRAM guess."""
+        assert video_mod._BACKEND_DEFAULTS["wan"]["width"] == 1280
+        assert video_mod._BACKEND_DEFAULTS["wan"]["height"] == 704
+
+    def test_clips_is_clamped_to_a_sane_range(self):
+        v = video_mod
+        saved = v._VIDEO_CLIPS
+        try:
+            # Read the cap rather than hardcoding it: the ceiling is a tuning
+            # decision (raised from 6 to 24 to allow ~30s stitched videos), not
+            # part of the contract this test is protecting.
+            assert v.update_video_params({"clips": 999})["clips"] == v._MAX_CLIPS
+            assert v.update_video_params({"clips": 0})["clips"] == 1
+            assert v._MAX_CLIPS >= 10, "cap must allow at least ~30s of video"
+        finally:
+            v.update_video_params({"clips": saved})
 
     def test_wan_is_the_default_backend(self):
         assert video_mod._BACKEND_DEFAULTS.get("wan") is not None

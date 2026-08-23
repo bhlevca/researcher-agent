@@ -2,7 +2,7 @@
 
 A CrewAI-powered research agent with a browser-based chat UI, voice dialog, image generation, and session management. Runs locally using Ollama — the **client only needs a web browser**.
 
-**Version 2.8.0**
+**Version 2.9.0**
 
 ## Architecture
 
@@ -295,7 +295,7 @@ while it conditions on 25 made walking animals appear to limp.
 
 | | Wan | LTX |
 |---|---|---|
-| Resolution | 832x480 | 704x512 |
+| Resolution | 1280x704 | 704x512 |
 | Frame rate | 24 | 25 (conditioning, not just playback) |
 | Guidance | 5.0 | 3.0 |
 
@@ -306,6 +306,40 @@ commented unless you mean it.
 Memory scales with the **frame count** — frames are denoised jointly — so raising
 fps shortens the clip that fits. On OOM the generator retries with fewer frames,
 then smaller ones, rather than failing outright.
+
+##### Longer videos: clip stitching
+
+A single clip is ~3 seconds, and pushing duration further is the wrong lever —
+at 5 seconds the model runs out of coherent movement and drifts toward static
+(measured: mean inter-frame motion fell from 12.2 to 4.2). Length comes from
+**stitching** instead.
+
+Set **⚙️ Params → Video → Clips** (1–24). Each clip is generated from the
+**last frame of the previous one**, because Wan 2.2 is a text-*and-image* model.
+That is what makes the joins continuous — concatenating independently generated
+clips gives a hard cut to an unrelated scene.
+
+Measured at 720p: 3 clips → 193 frames → 8.0 s in 22.6 minutes, with inter-frame
+change at the joins (2.2, 3.7) at or below the clip average of 3.4 — no visible seam.
+
+| Target | Clips | Time at 720p |
+|--------|-------|--------------|
+| ~8 s | 3 | ~23 min |
+| ~30 s | 11 | ~83 min |
+| ~60 s | 22 | ~2.8 hours |
+
+Two caveats. Cost is linear and **time is the only real limit** — frames live in
+system RAM (~3 GiB for a minute of 720p), not VRAM. And quality **drifts** over a
+long chain: each clip is conditioned only on the previous frame, so the scene
+wanders. Over 11 clips expect the background to change character.
+
+Progress streams to the reasoning panel, since an 80-minute request that reports
+nothing is indistinguishable from a hang:
+
+```
+🎬 Clip 2/11 (33% — 128 frames so far, ~5.3s of video)
+🎬 33% — step 50/150 — about 42m 10s left
+```
 
 ### Tuning at runtime
 
@@ -476,6 +510,66 @@ With a 16 GB GPU shared between the LLM (Ollama) and image generation:
 For text-only queries, the Ollama model stays resident in VRAM for fast responses.
 
 See [docs/HF_zimage_clean_download.txt](docs/HF_zimage_clean_download.txt) for detailed model download and troubleshooting instructions.
+
+## Music Composer
+
+The composer writes in **ABC notation**, which music21 converts to MusicXML.
+
+### Why ABC and not JSON
+
+The composer originally emitted note-by-note JSON and needed ~500 lines of regex
+repair to survive its own output. ABC replaced it for two reasons, the second
+mattering more:
+
+- **It parses.** The same local model that produced broken JSON writes valid ABC
+  first time.
+- **It carries structure.** JSON encodes only pitches and durations, so the model
+  had no way to express repeats, sections or phrasing. ABC does, is ~38% of the
+  tokens, and appears in training data as *music* rather than as arbitrary data.
+
+### How a composition is made
+
+Style comes from the interface — genre, key, time signature and tempo — plus the
+matching block from `knowledge/genres.yaml` (form, structure, rhythm, voicing,
+melody style; ~1.6 KB of real guidance for jazz alone).
+
+The prompt then enforces a **method** rather than asking for notes: invent a
+two-bar motif, develop it by sequence/inversion/fragmentation/augmentation, build
+antecedent–consequent phrases, place one high point about two thirds through, and
+cadence on the tonic.
+
+That alone is not enough, so each composition goes through:
+
+1. **Generate** ABC.
+2. **Validate** — `validate_abc()` measures bar lengths, the longest run in one
+   direction, and the proportion of stepwise motion. These catch faults music21
+   accepts silently: a 3/4 piece whose bars each hold 2 beats parses fine and
+   plays wrong.
+3. **Correct** — faults are fed back *specifically* ("a 12-note unbroken run in
+   one direction — that is a scale, not a melody"), up to
+   `COMPOSER_REFINE_ROUNDS` times.
+4. **Keep the best attempt**, not the last — a correction pass can make things
+   worse, and does.
+5. **Re-bar deterministically.** The model never counted bar durations correctly
+   in any attempt, even when given the arithmetic. So the code discards its
+   barlines, re-bars at the correct metre and ties notes across barlines.
+
+Measured on the same prompt, before and after this pipeline:
+
+| | Before | After |
+|---|---|---|
+| Longest scale run | 12 notes | 6 |
+| Stepwise motion | 90% | 61% |
+| Bar lengths | wrong, silently | every bar correct |
+| Output | often unparseable | valid MusicXML every time |
+
+### Known limits
+
+- Quality is bounded by the local model. It writes *structured* music, not good
+  music; the validator enforces a floor, not excellence.
+- `report["ok"]` reflects the **pre-repair ABC**, so it can read `false` even
+  though the delivered MusicXML has correct bars.
+- Dynamics, articulation and mid-score key changes are still unimplemented.
 
 ## Testing
 

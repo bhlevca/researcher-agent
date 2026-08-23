@@ -255,14 +255,14 @@
                 <select id="param-sub-video_backend" onchange="updateSubParamDisplay('video_backend')" style="width:100%;background:#0b1e3a;border:1px solid #1e3a5f;color:#e2e8f0;padding:0.35rem;border-radius:0.35rem;font-size:0.8rem;"><option value="wan" selected>wan</option><option value="ltx">ltx</option><option value="none">none</option></select>
             </div>
             <div class="llm-param-group">
-                <div class="llm-param-label"><span>Width</span><span class="llm-param-value" id="val-sub-width">832</span></div>
+                <div class="llm-param-label"><span>Width</span><span class="llm-param-value" id="val-sub-width">1280</span></div>
                 <div class="llm-param-hint">Video is far more memory-hungry than images: every frame is generated jointly.</div>
-                <input type="range" id="param-sub-width" min="256" max="1280" step="64" value="832" oninput="updateSubParamDisplay('width')">
+                <input type="range" id="param-sub-width" min="256" max="1280" step="64" value="1280" oninput="updateSubParamDisplay('width')">
             </div>
             <div class="llm-param-group">
-                <div class="llm-param-label"><span>Height</span><span class="llm-param-value" id="val-sub-height">480</span></div>
+                <div class="llm-param-label"><span>Height</span><span class="llm-param-value" id="val-sub-height">704</span></div>
                 <div class="llm-param-hint">Keep modest on a 16GB card.</div>
-                <input type="range" id="param-sub-height" min="256" max="1280" step="64" value="480" oninput="updateSubParamDisplay('height')">
+                <input type="range" id="param-sub-height" min="256" max="1280" step="64" value="704" oninput="updateSubParamDisplay('height')">
             </div>
             <div class="llm-param-group">
                 <div class="llm-param-label"><span>Frames Per Second</span><span class="llm-param-value" id="val-sub-fps">24</span></div>
@@ -283,6 +283,11 @@
                 <div class="llm-param-label"><span>Guidance Scale</span><span class="llm-param-value" id="val-sub-guidance">5.0</span></div>
                 <div class="llm-param-hint">How strictly the model follows the prompt.</div>
                 <input type="range" id="param-sub-guidance" min="0" max="15" step="0.5" value="5.0" oninput="updateSubParamDisplay('guidance')">
+            </div>
+            <div class="llm-param-group">
+                <div class="llm-param-label"><span>Clips (stitched)</span><span class="llm-param-value" id="val-sub-clips">1</span></div>
+                <div class="llm-param-hint">Chain clips into one longer video — each continues from the LAST FRAME of the previous, so joins are continuous rather than cuts. Each clip adds ~2.7s. Cost is linear and TIME is the limit: ~7 min per clip at 720p, ~3.5 min at 832x480. A 1-minute video needs ~20 clips (about 70 min at 480p, 135 min at 720p). Quality also drifts over a long chain, since each clip is conditioned on the previous one. Wan only.</div>
+                <input type="range" id="param-sub-clips" min="1" max="24" step="1" value="1" oninput="updateSubParamDisplay('clips')">
             </div>
 
             <!-- Image self-refinement -->

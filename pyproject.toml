@@ -1,6 +1,6 @@
 [project]
 name = "researcher-agent"
-version = "2.8.0"
+version = "2.9.0"
 dependencies = [
     "crewai[tools]>=1.14.5",
     "litellm",
@@ -34,6 +34,22 @@ dependencies = [
     # Without this, transformers 5.x misroutes it through the tiktoken loader
     # and dies with "Error parsing line b'\\x0e'".
     "sentencepiece",
+    # Wan's image-to-video pipeline (used for clip chaining) calls ftfy for
+    # prompt cleaning. diffusers imports it lazily, so its absence surfaces as
+    # a bare NameError deep inside encode_prompt rather than an ImportError.
+    "ftfy",
+    # music21 parses ABC notation and converts it to MusicXML. ABC is far more
+    # compatible with LLMs than note-by-note JSON (~38% of the tokens, and it
+    # encodes repeats and structure intrinsically), so it is the composer's
+    # interchange format.
+    "music21",
+    # Phoneme-level pronunciation scoring. epitran maps graphemes to IPA and
+    # panphon measures ARTICULATORY FEATURE distance between IPA segments, so
+    # a near-miss (/\u0281/ for /\u027e/) scores differently from a wrong word. Word-level
+    # WER cannot: it scores recognition, so an accent Whisper still decodes
+    # scores a perfect 1.0. Neither package needs espeak or any system binary.
+    "epitran",
+    "panphon",
     # Video export: imageio-ffmpeg writes H.264 MP4 that browsers can play.
     # OpenCV's VideoWriter defaults to mp4v, which most browsers refuse.
     "imageio",

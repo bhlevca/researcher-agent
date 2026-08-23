@@ -1,8 +1,8 @@
 # TODO_Claude.md — Improvement Plan for Researcher, Tutor & Composer
 
 Generated: 2026-05-23 | Project: ai-agent v2.2.0 | Branch: developer
-Updated: 2026-08-10 — statuses below re-verified against the code, not against the
-previous checkboxes. Several entries were stale in both directions.
+Updated: 2026-08-22 for v2.9.0 — see "Session notes" for the video/tutor/composer work.
+Statuses re-verified against the code, not against previous checkboxes.
 
 ---
 
@@ -32,7 +32,7 @@ locally, and now is:
       Guards: a broken or missing critic degrades to plain generation, a failed retry keeps
       the earlier image, and a critic that faults the image without offering a better prompt
       stops rather than re-rendering an identical prompt.
-- [x] **Video generation** (`video.py`) — LTX-Video or Wan 2.1 T2V 1.3B behind
+- [x] **Video generation** (`video.py`) — Wan 2.2 TI2V-5B (default) or LTX-Video behind
       `VIDEO_BACKEND`, reusing the existing `_gpu_inference_ctx` VRAM choreography, new
       `GenerateAIVideo` tool, `<video>` rendering in the chat UI. Weights are **not**
       downloaded during a chat request: an uncached model returns `hf download <model>`
@@ -40,9 +40,9 @@ locally, and now is:
 - [ ] **Remote/OpenAI-compatible media backend** — deliberately deferred. It delivers nothing
       until a Muse API exists, and is about an hour's work once one does.
 
-**Not yet verified on hardware.** The NVIDIA driver was down when this landed (no kernel
-modules, `/dev/nvidia*` absent), so neither the refine loop nor video generation has run
-end-to-end on a GPU. All logic is covered by mocked tests; the pixels are not.
+**Verified on hardware since (2026-08-20/22).** The refine loop and video generation have
+both run end-to-end on the GPU. Video moved to Wan 2.2 TI2V-5B at 1280x704 and gained clip
+stitching; see the v2.9.0 session notes.
 
 ---
 
@@ -61,13 +61,13 @@ end-to-end on a GPU. All logic is covered by mocked tests; the pixels are not.
 | T1–T6 | Tutor feature set | ✅ done (v2.3.0) |
 | T-A | FSRS replaces SM-2 | ✅ done (v2.6.0-dev) |
 | T-B | Comprehensible input | ✅ done (v2.6.0) |
-| T-C | Feedback loop / phoneme scoring | ❌ not started |
-| T-D | TTS first-reply language bug | ❌ open |
+| T-C | Feedback loop / phoneme scoring | ✅ done (v2.9.0) — phoneme-level scoring |
+| T-D | TTS first-reply language bug | ✅ done (v2.9.0) — root cause found |
 | C1 | Modulation / key changes | ❌ not started |
 | C2 | Dynamics & articulation | ❌ not started |
 | C3 | Multi-instrument | ✅ done — entry was stale |
 | C4 | Browser score playback | ❌ not started — gates all composer work |
-| C5 | JSON repair hardening | ⚠️ partial — likely deleted by the ABC switch |
+| C5 | JSON repair hardening | ✅ obsolete — JSON path replaced by ABC (v2.9.0) |
 | C6 | Harmonization feedback UI | ❌ endpoint exists, no comparison view |
 | C7 | Ear training | ❌ not started |
 | X1 | Shared LLM factory | ❌ not started — duplication has grown since |
@@ -79,6 +79,88 @@ end-to-end on a GPU. All logic is covered by mocked tests; the pixels are not.
 **Delivered since this file was written, and not in the list above:** faster-whisper STT,
 PDF/image OCR with automatic DOCX/ODT export, the extraction fast path, the CrewAI executor
 pin, and `max_iter` as a tunable parameter. See the session notes below.
+
+---
+
+## Session notes — 2026-08-22 (v2.9.0)
+
+### Delivered
+
+**Video**
+- Wan 2.2 TI2V-5B at its native 1280x704. Measured better than 832x480 by eye;
+  my Laplacian "detail" metric said the opposite and was simply the wrong tool —
+  it rewards grain and punishes clean gradients, so it cannot compare across
+  resolutions. The frames settled it in seconds.
+- **Clip stitching**, conditioned on the previous clip's last frame. 3 clips ->
+  193 frames -> 8.0s at 720p in 22.6 min, joins measurably smooth (2.2 / 3.7
+  against a 3.4 average). ~11 clips gives 30s in ~83 min.
+- Duration is the WRONG lever for length: at 5s motion collapsed from 12.2 to
+  4.2 as the model ran out of coherent movement. Stitching is the right one.
+- Progress streams to the reasoning panel; an 80-minute silent request is
+  indistinguishable from a hang.
+
+**Tutor**
+- T-D fixed. `base_lang` was inferred from the selected VOICE, so a French reply
+  with an English voice selected was scored against English. Short openers split
+  into 2-4 word fragments that lose to the base-language bias — which is why only
+  the FIRST line was mispronounced. The tutor now declares its target language.
+- T-C fixed. Word-level WER returns 0.00 for "perfect but spelled differently"
+  AND for "entirely wrong word" — indistinguishable to the learner. Phoneme
+  scoring via epitran + panphon separates them and names the substitution
+  ("/ʒ/ -> /z/"). Neither metric worked alone: pure feature distance rated that
+  error 0.98, since those sounds differ by ~one articulatory feature, so the
+  score combines acoustic closeness with segment accuracy.
+
+**Composer** — JSON replaced by ABC end to end, with a validate-and-correct loop.
+See the COMPOSER section below, which has been rewritten.
+
+### What this session taught, and what to do differently
+
+1. **A tool the agent does not need actively harms it.** The composer kept
+   emitting JSON because `CompositionPrep` returns a JSON skeleton and the agent
+   kept reaching for it. Removing the tool fixed what three prompt rewrites could
+   not. The same shape as the dialog-mode bug in v2.4.0.
+2. **Instructions do not fix what the model cannot do.** A prompt that explicitly
+   banned runs longer than five notes still produced a twelve-note scale, and
+   three generations produced wrong-length bars after being given the arithmetic.
+   Measure the fault, feed it back specifically, and if it still fails, do the
+   mechanical part in code.
+3. **Keep the best attempt, not the last.** A correction pass made the tune worse
+   (7 short bars vs 6) more than once. Any retry loop needs best-of selection.
+4. **Verify metrics before trusting them.** The Laplacian detail score, and the
+   first bar-repair implementation (which left 11 bars wrong after "fixing" 5),
+   both looked reasonable and were wrong. Cheap checks catch this.
+5. **Undeclared dependencies keep biting.** music21 vanished mid-session because
+   it was pip-installed and a later `uv sync` pruned it — the same failure that
+   broke the app in v2.4.0. Everything imported is now declared.
+
+### Proposals for betterment
+
+**Researcher**
+- R3 remains the worst open bug: `/chat/cancel` sets an event nothing reads, so a
+  "cancelled" run still holds the GPU. On a single-GPU box that is expensive.
+- The extraction and media fast paths showed their value — consider a general
+  intent router so obvious jobs never pay for planning.
+- X1/X2 (shared LLM factory, central settings) keep growing more expensive: every
+  new parameter is added by hand in three crew files.
+
+**Tutor**
+- The per-learner **error profile** from T-C was never built. Phoneme scoring now
+  produces exactly the data for it: recurring substitutions per learner, fed back
+  into quiz and scenario generation so practice targets real weaknesses.
+- Feedback **strictness** (soft/balanced/strict) is still not implemented.
+- The i+1 metric needs lemmatisation and proper-noun handling to be trustworthy.
+
+**Composer**
+- Quality is now bounded by the model, not the plumbing. The obvious next step is
+  a music-specialist model: **NotaGen** (516M, ABC-native, conditioned on period
+  and composer) is small enough to sit alongside everything else, and
+  ChatMusician is ABC-native too. That is the single biggest remaining lever.
+- Multi-voice writing: the ABC path currently produces one melodic line with
+  chord symbols. Real accompaniment needs `[V:1]`/`[V:2]` voices.
+- `report["ok"]` describes the pre-repair ABC, so it can read false when the
+  delivered MusicXML is correct. Tidy so status is not misleading.
+- Playback in the browser (C4) is still the gate on iterating by ear.
 
 ---
 
@@ -172,15 +254,16 @@ time cannot hear bar 4 by the time it writes bar 12, so it produces locally plau
 globally incoherent sequences — no motivic development, no phrase structure, no harmonic
 direction.
 
-**Action:**
-- [ ] Switch the composer's output format from JSON to **ABC notation**.
-- [ ] Parse it with `music21` (`converter.parse(abc_string)`), which reads ABC natively and
-      converts to MusicXML — so `musicxml_builder.py` keeps working downstream.
-- [ ] This **deletes most of `musicxml_fix.py` (506 lines) and `_repair_json` in
-      `composer/crew.py`**. Those exist only because JSON from an LLM arrives broken; ABC is
-      far more forgiving and music21 validates it properly.
-- [ ] Keep grammar-constrained decoding as a backstop where useful, but the format change
-      does most of the work.
+**Action — DONE (v2.9.0):**
+- [x] Composer output switched from JSON to **ABC notation**.
+- [x] Parsed with `music21`, which reads ABC natively and converts to MusicXML.
+- [x] `validate_abc()` measures bar lengths, longest directional run and stepwise
+      proportion — faults music21 accepts silently.
+- [x] Generate → validate → correct loop with best-of-N selection.
+- [x] Deterministic re-barring, because the model never counted bar durations correctly
+      in any attempt even when given the arithmetic.
+- [ ] `musicxml_fix.py` (506 lines) is now dead code on the ABC path — delete once the
+      old JSON endpoints are retired.
 
 ### Cause 2 — a general chat model has no musical training
 

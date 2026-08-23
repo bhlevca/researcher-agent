@@ -1,5 +1,6 @@
 """Tests for language-aware TTS voice switching."""
 
+import pytest
 from researcher.tts import _detect_lang, _pick_voice_for_lang, _split_multilingual
 
 
@@ -125,3 +126,49 @@ class TestSplitMultilingual:
         segs = _split_multilingual(text, "en")
         langs = [s[0] for s in segs]
         assert "fr" in langs
+
+
+# ---------------------------------------------------------------------------
+# Declared language overrides detection (T-D)
+# ---------------------------------------------------------------------------
+
+
+class TestDeclaredLanguage:
+    """The tutor knows its target language, so TTS must not have to guess.
+
+    Regression: short, punctuation-heavy opening lines like
+    "Bonjour ! Ça va très bien, merci ! Et toi ?" split into 2-4 word fragments,
+    none long enough to beat the base-language bias. With an English voice
+    selected that resolved to English, so the FIRST tutor reply was spoken with
+    an English accent while later, longer replies were fine.
+    """
+
+    @pytest.mark.parametrize("value,expected", [
+        ("French", "fr"), ("french", "fr"), ("fr", "fr"), ("fr-FR", "fr"),
+        ("Romanian", "ro"), ("Chinese", "zh"), ("Japanese", "ja"),
+        ("", ""), ("  ", ""),
+    ])
+    def test_lang_code_accepts_names_and_codes(self, value, expected):
+        from researcher.tts import _lang_code
+        assert _lang_code(value) == expected
+
+    def test_short_french_opener_is_misdetected_without_a_declared_language(self):
+        """Pins the actual bug: this is why the fix is needed at all."""
+        from researcher.tts import _split_multilingual
+        text = "Bonjour ! Ça va très bien, merci ! Et toi ?"
+        langs = {lang for lang, _ in _split_multilingual(text, "en")}
+        assert "fr" not in langs, (
+            "If this now detects French unaided, langdetect changed and the "
+            "declared-language path is no longer load-bearing for this case."
+        )
+
+    def test_declaring_french_fixes_the_same_text(self):
+        from researcher.tts import _split_multilingual, _lang_code
+        text = "Bonjour ! Ça va très bien, merci ! Et toi ?"
+        langs = {lang for lang, _ in _split_multilingual(text, _lang_code("French"))}
+        assert "fr" in langs and "en" not in langs
+
+    def test_request_model_carries_lang_and_defaults_blank(self):
+        from researcher.tts import TTSRequest
+        assert TTSRequest(text="hi").lang == ""
+        assert TTSRequest(text="hi", lang="French").lang == "French"

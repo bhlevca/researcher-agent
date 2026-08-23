@@ -140,7 +140,9 @@ function speakPassage(markdown) {
     const text = _passageProseOnly(markdown);
     if (!text) { tutorShowToast('Nothing to read aloud'); return; }
     if (typeof speakText === 'function') {
-        speakText(text);
+        // Passages are always in the target language; say so rather than let the
+        // server infer it from whatever voice happens to be selected.
+        speakText(text, null, getTutorConfig().target_lang);
     } else {
         tutorShowToast('TTS unavailable');
     }

@@ -8,6 +8,7 @@ import sys
 import io
 import re
 import json
+import pathlib
 import queue
 import asyncio
 import threading
@@ -303,6 +304,129 @@ def register_composer_routes(app):
         uid = user["id"]
         composer_crew = _get_composer_crew(request, uid)
 
+        # ── Specialist path ──────────────────────────────────────────────
+        # A model pre-trained on ABC writes idiomatic music; a general chat
+        # model writes exercises. When one is configured, call it directly:
+        # it has no tools and needs no planning loop, so routing it through
+        # CrewAI would only add minutes and a format it does not speak.
+        from researcher.composer import specialist
+
+        if specialist.COMPOSER_MODEL:
+            from researcher.composer.knowledge.loader import get_genre_block
+
+            style_guide = get_genre_block(req.style or session["genre"]) or ""
+
+            def _sse(event, data):
+                return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+            async def specialist_stream():
+                yield _sse("reasoning",
+                           f"🎼 Composing with {specialist.COMPOSER_MODEL}")
+
+                # Long form is assembled, not requested in one go: a single
+                # model call holds together for 8-16 bars and then repeats.
+                if req.minutes and req.minutes >= 0.5:
+                    yield _sse("reasoning",
+                               f"🏗️ Assembling ~{req.minutes:g} min from recurring "
+                               f"sections with extended harmony")
+                    loop = asyncio.get_running_loop()
+                    score, info = await loop.run_in_executor(
+                        None,
+                        lambda: specialist.compose_long(
+                            description=req.description,
+                            genre=session["genre"],
+                            key_signature=session["key_signature"],
+                            time_signature=session["time_signature"],
+                            tempo=session["tempo"],
+                            minutes=req.minutes,
+                            style_guide=style_guide,
+                        ),
+                    )
+                    if score is None:
+                        yield _sse("error", "Could not assemble the piece.")
+                        return
+                    seeded = ("seeded by the specialist" if info.get("used_specialist")
+                              else "using a default motif")
+                    yield _sse("reasoning",
+                               f"📐 {info['bars']} bars, {info['seconds']/60:.1f} min, "
+                               f"{info['sections']} sections, {seeded}")
+                    import tempfile as _tf
+                    with _tf.NamedTemporaryFile(suffix=".musicxml", delete=False) as t:
+                        xml_path = t.name
+                    score.write("musicxml", fp=xml_path)
+                    xml = pathlib.Path(xml_path).read_text()
+                    pathlib.Path(xml_path).unlink(missing_ok=True)
+                    yield _sse("done", {
+                        "response": (
+                            f"Composed a {info['seconds']/60:.1f}-minute piece: "
+                            f"{info['bars']} bars in {info['sections']} sections.\n\n"
+                            f"```musicxml\n{xml}\n```"
+                        ),
+                        "reasoning": [f"Assembled by realize.py, {seeded}"],
+                        "token_usage": {}, "incomplete": False,
+                    })
+                    return
+                loop = asyncio.get_running_loop()
+                abc = await loop.run_in_executor(
+                    None,
+                    lambda: specialist.compose(
+                        description=req.description,
+                        genre=session["genre"],
+                        key_signature=session["key_signature"],
+                        time_signature=session["time_signature"],
+                        tempo=session["tempo"],
+                        bars=req.measures,
+                        style_guide=style_guide,
+                    ),
+                )
+                if not abc:
+                    yield _sse("error", "The composer model returned nothing.")
+                    return
+                abc, repairs = specialist.sanitize_abc(abc)
+                if repairs:
+                    yield _sse("reasoning", "🧹 Fixed notation: " + ", ".join(repairs))
+                report = composer_crew.validate_abc(abc, session["time_signature"])
+                yield _sse("reasoning",
+                           f"📐 {report['measures']} bars, "
+                           f"{report['stepwise_pct']:.0f}% stepwise, "
+                           f"longest run {report['longest_run']}")
+                if not report["ok"] and report.get("short_bars"):
+                    fixed, bars = composer_crew.repair_bar_lengths(
+                        abc, session["time_signature"])
+                    if fixed:
+                        yield _sse("reasoning",
+                                   f"🔧 Re-barred {report['short_bars']} short bar(s)")
+                        abc = fixed
+
+                # The specialist supplies idiomatic material; this enforces what
+                # it reliably gets wrong — scale runs, and a bare single line.
+                try:
+                    from researcher.composer import realize
+
+                    polished, prep = realize.polish(
+                        abc, genre=session["genre"],
+                        key_name=session["key_signature"],
+                        tempo=session["tempo"])
+                    if polished is not None:
+                        notes = []
+                        if prep["scale_runs_fixed"]:
+                            notes.append(f"broke {prep['scale_runs_fixed']} scale run(s)")
+                        if prep["bass_added"]:
+                            notes.append("added a bass line from the chord symbols")
+                        if notes:
+                            yield _sse("reasoning", "🎹 Polished: " + ", ".join(notes))
+                except Exception as e:
+                    logger.warning("[Composer] polish skipped: %s", e)
+                yield _sse("done", {
+                    "response": f"```abc\n{abc}\n```",
+                    "reasoning": [f"Composed by {specialist.COMPOSER_MODEL}"],
+                    "token_usage": {},
+                    "incomplete": False,
+                })
+
+            return StreamingResponse(specialist_stream(),
+                                     media_type="text/event-stream")
+
         crew = composer_crew.build_score_crew(
             description=req.description,
             instruments=req.instruments,
@@ -467,6 +591,76 @@ def register_composer_routes(app):
         if not comp:
             raise HTTPException(status_code=404, detail="Composition not found")
         return comp
+
+    @app.post("/composer/convert-midi")
+    async def composer_convert_midi(request: Request):
+        """Render a response's score to MIDI so it can be played in the browser."""
+        user = await get_current_user(request)
+        body = await request.json()
+        response_text = body.get("response", "")
+        if not response_text:
+            raise HTTPException(status_code=400, detail="No response text")
+
+        key_sig, time_sig, tempo = "C major", "4/4", 120
+        session_id = body.get("session_id", "")
+        if session_id:
+            session = await get_composer_session(request.app.state.db, session_id, user["id"])
+            if session:
+                key_sig = session["key_signature"]
+                time_sig = session["time_signature"]
+                tempo = session["tempo"]
+
+        crew = _get_composer_crew(request, user["id"])
+        musicxml = crew.extract_musicxml(response_text, key_sig, time_sig, tempo)
+        if not musicxml:
+            raise HTTPException(status_code=422, detail="No score found in that response")
+        midi = crew.musicxml_to_midi(musicxml, tempo)
+        if not midi:
+            raise HTTPException(status_code=500, detail="Could not render MIDI")
+        return Response(
+            content=midi,
+            media_type="audio/midi",
+            headers={"Content-Disposition": 'attachment; filename="composition.mid"'},
+        )
+
+    @app.post("/composer/convert-audio")
+    async def composer_convert_audio(request: Request):
+        """Render a response's score to WAV so it can be played in the browser.
+
+        Falls back to 422 when no synth is available, so the UI can offer the
+        MIDI download instead of failing silently.
+        """
+        user = await get_current_user(request)
+        body = await request.json()
+        response_text = body.get("response", "")
+        if not response_text:
+            raise HTTPException(status_code=400, detail="No response text")
+
+        key_sig, time_sig, tempo = "C major", "4/4", 120
+        session_id = body.get("session_id", "")
+        if session_id:
+            session = await get_composer_session(request.app.state.db, session_id, user["id"])
+            if session:
+                key_sig = session["key_signature"]
+                time_sig = session["time_signature"]
+                tempo = session["tempo"]
+
+        crew = _get_composer_crew(request, user["id"])
+        musicxml = crew.extract_musicxml(response_text, key_sig, time_sig, tempo)
+        if not musicxml:
+            raise HTTPException(status_code=422, detail="No score found in that response")
+        midi = crew.musicxml_to_midi(musicxml, tempo)
+        if not midi:
+            raise HTTPException(status_code=500, detail="Could not render MIDI")
+
+        loop = asyncio.get_running_loop()
+        audio = await loop.run_in_executor(None, crew.midi_to_audio, midi)
+        if not audio:
+            raise HTTPException(
+                status_code=422,
+                detail="No audio synth available on the server; download the MIDI instead",
+            )
+        return Response(content=audio, media_type="audio/wav")
 
     @app.get("/composer/compositions/{composition_id}/musicxml")
     async def composer_download_musicxml(composition_id: str, request: Request):

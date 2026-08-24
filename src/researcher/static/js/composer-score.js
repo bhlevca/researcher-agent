@@ -10,6 +10,9 @@ async function generateScore() {
 
     const instruments = getSelectedInstruments();
     const measures = parseInt(document.getElementById('score-measures').value) || 16;
+    // 0 = short form (use measures); above 0 the backend assembles a piece of
+    // roughly this many minutes from recurring sections.
+    const minutes = parseFloat(document.getElementById('score-minutes')?.value) || 0;
 
     const content = document.getElementById('score-content');
     content.innerHTML = '';
@@ -34,6 +37,7 @@ async function generateScore() {
                 description: desc,
                 instruments: instruments,
                 measures: measures,
+                minutes: minutes,
                 style: '',
             }),
         });
@@ -117,6 +121,18 @@ function renderScoreResponse(text, reasoning, container, hasScore) {
     }
 
     if (hasScore || _hasScore(text)) {
+        const playBtn = document.createElement('button');
+        playBtn.textContent = '▶️ Play';
+        playBtn.title = 'Render the score to audio and play it here';
+        playBtn.onclick = () => playScoreFromText(text, playBtn, acts);
+        acts.appendChild(playBtn);
+
+        const midiBtn = document.createElement('button');
+        midiBtn.textContent = '🎹 MIDI';
+        midiBtn.title = 'Download as a MIDI file';
+        midiBtn.onclick = () => downloadMidiFromText(text);
+        acts.appendChild(midiBtn);
+
         const dlBtn = document.createElement('button');
         dlBtn.textContent = '📥 Download MusicXML';
         dlBtn.onclick = () => downloadMusicXMLFromText(text);
@@ -394,4 +410,70 @@ function escapeHtml(str) {
     const d = document.createElement('div');
     d.appendChild(document.createTextNode(str));
     return d.innerHTML;
+}
+
+// ── Playback ─────────────────────────────────────────────────────────────
+// A score you cannot hear is hard to judge, so the server renders the notation
+// to audio (music21 -> MIDI -> timidity -> WAV) and we play it inline.
+
+async function playScoreFromText(text, btn, container) {
+    const original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '⏳ Rendering…';
+    try {
+        const resp = await fetch('/composer/convert-audio', {
+            method: 'POST',
+            headers: composerJsonHeaders(),
+            body: JSON.stringify({ response: text, session_id: composerSessionId || '' }),
+        });
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            // 422 means no synth on the server — offer the MIDI instead of dying.
+            composerShowToast(err.detail || 'Could not render audio');
+            return;
+        }
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        let player = container.querySelector('audio.score-audio');
+        if (!player) {
+            player = document.createElement('audio');
+            player.className = 'score-audio';
+            player.controls = true;
+            player.style.cssText = 'display:block;width:100%;margin-top:0.5rem;';
+            container.appendChild(player);
+        }
+        player.src = url;
+        player.play().catch(() => {});   // autoplay may be blocked; controls still work
+    } catch (e) {
+        composerShowToast('Playback error: ' + e.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = original;
+    }
+}
+
+async function downloadMidiFromText(text) {
+    try {
+        const resp = await fetch('/composer/convert-midi', {
+            method: 'POST',
+            headers: composerJsonHeaders(),
+            body: JSON.stringify({ response: text, session_id: composerSessionId || '' }),
+        });
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            composerShowToast(err.detail || 'Could not render MIDI');
+            return;
+        }
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'composition.mid';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+    } catch (e) {
+        composerShowToast('MIDI error: ' + e.message);
+    }
 }

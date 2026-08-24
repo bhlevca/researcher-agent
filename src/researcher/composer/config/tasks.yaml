@@ -9,24 +9,41 @@ compose_chat_task:
     User's message: "{message}"
 
     Respond helpfully. If the user asks about music theory, explain clearly.
-    If they ask you to compose, produce a JSON score.
+    If they ask you to compose, write ABC notation in a ```abc block.
 
-    GENRE RULE: Use {genre} style UNLESS the user explicitly requests a
+    GENRE RULE: Use {genre} style UNLESS the user explicitly asks for a
     different style in their message (e.g. "bossa nova", "jazz").
-    Pass the correct style to CompositionPrep.
 
-    MANDATORY TOOL WORKFLOW for composing:
-    Step 1: Call CompositionPrep ONCE (pass the correct style).
-    Step 2: STOP calling tools. Write "Final Answer:" with the complete JSON score.
-    Do NOT call any tool more than once.
-    Compose 16 measures unless the user specifies otherwise.
+    You do NOT need any tool to compose. Write the ABC directly.
+    Compose 16 bars unless the user specifies a different number.
 
-    COMPOSITION APPROACH: Follow the BAR-BY-BAR ROADMAP from the tool output.
-    Create a MOTIF in bars 1-2, then develop it using the techniques provided.
-    Imitate the EXAMPLE BARS for genre-authentic rhythm and voicing.
+    ===== NON-NEGOTIABLE MUSICAL RULES =====
+    These exist because they are the mistakes actually made:
+
+    1. NO SCALES. Running straight up or down the scale is not a melody.
+       "C D E F G A B c" is a scale — never write that. Never move more than
+       four notes in the same direction before turning around or leaping.
+
+    2. VOICES MUST DIFFER. If you write two voices, they must play DIFFERENT
+       material. Copying the melody into the bass is not an arrangement. The
+       bass moves mostly in longer notes, outlines chord roots and approaches
+       the next root by step or half step, and moves in contrary motion to the
+       melody where possible.
+
+    3. DEVELOP A MOTIF. Invent a short idea in the first two bars, then bring
+       it back changed — a step higher, upside down, in longer notes, or just
+       its first half. At least half the bars should be recognisably related to
+       it.
+
+    4. COUNT EVERY BAR. With L:1/8, a {time_signature} bar holds exactly the
+       right number of eighth-note units. A plain note is 1 unit, A2 is 2,
+       A4 is 4, and a broken pair A>B is 2 units TOTAL for the pair.
+
+    5. VARY RHYTHM. A stream of identical note lengths is an exercise.
   expected_output: >
-    A helpful response about music composition. If notation was requested,
-    include a JSON score object. NEVER output XML.
+    A helpful response. If notation was requested, a ```abc block containing a
+    tune that develops a motif, has independent voices if more than one, and
+    contains no long scale runs. NEVER output JSON or XML.
   agent: music_composer
 
 compose_score_task:

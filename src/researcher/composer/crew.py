@@ -233,7 +233,8 @@ class ComposerCrew:
         time_signature: str,
         tempo: int,
     ) -> Crew:
-        agent = self._build_agent(genre, key_signature, time_signature, tempo)
+        agent = self._build_agent(genre, key_signature, time_signature, tempo,
+                                  tools=[])  # ABC needs no tools; CompositionPrep emits JSON
         desc, exp = self._render_task("compose_chat_task", {
             "genre": genre,
             "key_signature": key_signature,
@@ -259,7 +260,8 @@ class ComposerCrew:
         time_signature: str,
         tempo: int,
     ) -> Crew:
-        agent = self._build_agent(genre, key_signature, time_signature, tempo)
+        agent = self._build_agent(genre, key_signature, time_signature, tempo,
+                                  tools=[])  # ABC needs no tools; CompositionPrep emits JSON
         desc, exp = self._render_task("compose_score_task", {
             "description": description,
             "genre": genre,
@@ -285,7 +287,8 @@ class ComposerCrew:
         time_signature: str,
         tempo: int,
     ) -> Crew:
-        agent = self._build_agent(genre, key_signature, time_signature, tempo)
+        agent = self._build_agent(genre, key_signature, time_signature, tempo,
+                                  tools=[])  # ABC needs no tools; CompositionPrep emits JSON
         desc, exp = self._render_task("harmonize_task", {
             "melody": melody,
             "style": style,
@@ -661,6 +664,75 @@ class ComposerCrew:
             logger.warning("[Composer] bar repair failed: %s", e)
             return "", 0
 
+
+    @staticmethod
+    def musicxml_to_midi(musicxml: str, tempo: int = 120) -> bytes | None:
+        """Render a MusicXML score to MIDI so it can be played immediately.
+
+        A score you cannot hear is hard to judge. MusicXML needs MuseScore or
+        similar to play; MIDI plays in the browser and in every DAW, which
+        closes the loop between composing and listening.
+        """
+        import tempfile as _tempfile
+
+        try:
+            from music21 import converter, tempo as m21tempo
+
+            score = converter.parse(musicxml, format="musicxml")
+            if tempo and not list(score.recurse().getElementsByClass(m21tempo.MetronomeMark)):
+                score.insert(0, m21tempo.MetronomeMark(number=int(tempo)))
+            with _tempfile.NamedTemporaryFile(suffix=".mid", delete=False) as tmp:
+                path = tmp.name
+            score.write("midi", fp=path)
+            data = pathlib.Path(path).read_bytes()
+            pathlib.Path(path).unlink(missing_ok=True)
+            return data
+        except Exception as e:
+            logger.warning("[Composer] MIDI render failed: %s", e)
+            return None
+
+
+    @staticmethod
+    def midi_to_audio(midi: bytes) -> bytes | None:
+        """Render MIDI to WAV so the browser can simply play it.
+
+        Browsers cannot play MIDI natively, and shipping a JavaScript synth plus
+        a soundfont would be megabytes. timidity with the system soundfont is
+        already present here and gives real instrument sounds rather than beeps.
+
+        Returns None when timidity is unavailable — the caller falls back to
+        offering the MIDI file for download.
+        """
+        import subprocess
+        import tempfile as _tempfile
+
+        mid = wav = None
+        try:
+            with _tempfile.NamedTemporaryFile(suffix=".mid", delete=False) as f:
+                f.write(midi)
+                mid = f.name
+            wav = _tempfile.mktemp(suffix=".wav")
+            proc = subprocess.run(
+                ["timidity", mid, "-Ow", "-o", wav],
+                capture_output=True, timeout=180,
+            )
+            if proc.returncode != 0 or not pathlib.Path(wav).exists():
+                logger.warning("[Composer] timidity failed: %s",
+                               proc.stderr.decode(errors="replace")[:200])
+                return None
+            data = pathlib.Path(wav).read_bytes()
+            return data if len(data) > 44 else None      # 44 bytes = empty WAV header
+        except FileNotFoundError:
+            logger.info("[Composer] timidity not installed; audio preview unavailable")
+            return None
+        except Exception as e:
+            logger.warning("[Composer] audio render failed: %s", e)
+            return None
+        finally:
+            for path in (mid, wav):
+                if path:
+                    pathlib.Path(path).unlink(missing_ok=True)
+
     def extract_raw(self, result) -> str:
         return result.raw if hasattr(result, "raw") else str(result)
 
@@ -668,18 +740,51 @@ class ComposerCrew:
                          key: str = "C major",
                          time_signature: str = "4/4",
                          tempo: int = 120) -> str | None:
-        """Extract score from response — tries JSON builder first, falls back to XML.
+        """Extract a score from a model response, whatever format it used.
 
         Priority:
-          1. ```json block → build_musicxml()
-          2. ```xml block → fix_musicxml() (legacy fallback)
+          1. ABC  → music21, with validation and deterministic re-barring
+          2. JSON → build_musicxml()   (legacy)
+          3. XML  → fix_musicxml()     (legacy)
+
+        ABC comes first because the agent now writes ABC everywhere. Missing
+        this branch is what sent raw ABC to the chat with no playable score
+        attached — every path that shows a score must go through here.
         """
-        # Try JSON extraction first
+        abc = self.extract_abc(response)
+        if abc:
+            report = self.validate_abc(abc, time_signature)
+            # Re-bar when the model miscounted; it reliably does. This is the
+            # difference between a score that plays and one that only parses.
+            if not report["ok"] and report.get("short_bars"):
+                fixed, bars = self.repair_bar_lengths(abc, time_signature)
+                if fixed:
+                    logger.info("[Composer] re-barred to %d correct bars", bars)
+                    return fixed
+            xml = self.abc_to_musicxml(abc, tempo)
+            if xml:
+                return xml
+
+        # Try JSON extraction (legacy path)
         xml = self._extract_json_score(response, key, time_signature, tempo)
         if xml:
             return xml
 
         # Fallback: try raw XML extraction (legacy)
+        # A response may already CONTAIN finished MusicXML — the long-form path
+        # assembles the score itself and ships it directly. Without this branch
+        # every downstream consumer (Play, MIDI, Download) searched for ABC,
+        # found none, and reported that there was no score in a response that
+        # was nothing but score.
+        m = re.search(r"```(?:musicxml|xml)\s*(.*?)```", response, re.DOTALL)
+        if m and "<score-partwise" in m.group(1):
+            return m.group(1).strip()
+        if "<score-partwise" in (response or ""):
+            start = response.index("<?xml") if "<?xml" in response else response.index("<score-partwise")
+            end = response.rfind("</score-partwise>")
+            if end > start:
+                return response[start:end + len("</score-partwise>")]
+
         m = re.search(r"```xml\s*(.*?)```", response, re.DOTALL)
         if m:
             raw_xml = m.group(1).strip()

@@ -63,10 +63,10 @@ stitching; see the v2.9.0 session notes.
 | T-B | Comprehensible input | ✅ done (v2.6.0) |
 | T-C | Feedback loop / phoneme scoring | ✅ done (v2.9.0) — phoneme-level scoring |
 | T-D | TTS first-reply language bug | ✅ done (v2.9.0) — root cause found |
-| C1 | Modulation / key changes | ❌ not started |
+| C1 | Modulation / key changes | ⚠️ harmony now extended; true modulation still open |
 | C2 | Dynamics & articulation | ❌ not started |
 | C3 | Multi-instrument | ✅ done — entry was stale |
-| C4 | Browser score playback | ❌ not started — gates all composer work |
+| C4 | Browser score playback | ✅ MIDI + WAV playback in-browser (v2.9.0) |
 | C5 | JSON repair hardening | ✅ obsolete — JSON path replaced by ABC (v2.9.0) |
 | C6 | Harmonization feedback UI | ❌ endpoint exists, no comparison view |
 | C7 | Ear training | ❌ not started |
@@ -113,6 +113,95 @@ pin, and `max_iter` as a tunable parameter. See the session notes below.
 
 **Composer** — JSON replaced by ABC end to end, with a validate-and-correct loop.
 See the COMPOSER section below, which has been rewritten.
+
+### Late additions (same session)
+
+**Composer specialist.** `COMPOSER_MODEL` now sits beside `MODEL` exactly as
+`OCR_MODEL` does. ChatMusician is called directly, not through CrewAI: it has no
+tools, needs no planning loop, and a ReAct wrapper adds minutes plus a format it
+does not speak. Measured against the general model on the same jazz task —
+**7 distinct rhythms vs 2, 11/12 pitch classes vs 7**. Two rhythm values is
+exactly the mechanical quality that made earlier output unlistenable.
+
+Its quirks, all found by running it and all handled: the Ollama template is a
+bare `{{ .Prompt }}` so `Human:`/`Assistant:` framing must be supplied or it
+behaves as a raw completion engine; it restates an 8-bar request three times, so
+output is truncated; Ollama returns empty mid-model-swap, so one retry is issued.
+
+**Long form: 15 s → 2.6 min.** A single call holds together for 8-16 bars then
+repeats, so length is **assembled, not requested**. The specialist writes an
+8-bar seed in its own idiom; `build_long_plan()` develops that motif across a
+recurring form with genre-specific extended harmony (`IMaj7 vi7 ii7 V9`,
+`V7/ii`, `iv7 bVII7`, `IV Ger+65 V I` — every figure verified to realise in
+music21). Measured: 64 bars, 2.6 min, 8 sections, ~5 s. Recurrence is deliberate
+and tested: three minutes of *new* material is three minutes of mush.
+
+**Notation sanitising.** The specialist emits ABC that music21 accepts and
+stricter renderers reject — `[M:3/4]` dropped mid-bar, `C4 >z` (a broken-rhythm
+marker on a rest, which is meaningless), unbalanced slurs. This is the sharpest
+form of lesson 4 below: **music21 parsing is not validation.** It read 63 notes
+from a tune the browser refused outright, so the validator passed something
+unusable.
+
+### Composer — what is still missing
+
+**Measured diagnosis of "repetitive and simple" (2026-08-24).** On a 2.5-minute
+jazz piece the output contains:
+
+| | value | |
+|---|---|---|
+| distinct pitches | 11 | acceptable |
+| **distinct rhythms** | **3** | **the core problem** |
+| literal repeats of the opening 8-note cell | **5** | too many |
+
+The realisation engine develops the motif by *transform* — transpose, invert,
+augment — but its **rhythm never changes** and **no new material is ever
+introduced**. music21 is being asked to repeat, not to compose. Three rhythmic
+values across three minutes is what the ear hears as mechanical, and it is the
+same fault the general chat model had (2 rhythms) that ChatMusician fixed for
+short passages (7 rhythms). The long-form path throws that advantage away by
+using only the seed's *pitches*.
+
+**The specific fixes, in order of expected effect:**
+
+- [ ] **Carry the specialist's rhythm, not just its pitches.** `extract_motif()`
+      takes `(pitch, duration)` pairs but every development preserves the
+      original durations. Ask the specialist for a *second* contrasting idea and
+      alternate them; vary durations per section (dotted, syncopated, triplet)
+      rather than only pitch.
+- [ ] **Introduce genuine new material at B and C sections.** Today every
+      section is the same motif transformed. A rondo needs episodes that are
+      *not* the refrain. Generate one fresh 8-bar idea per contrasting section
+      from the specialist and develop that.
+- [ ] **Harmonic rhythm should vary.** Currently every section spreads its four
+      chords evenly. Real music lingers and then moves — two bars of I, then
+      four chords in one bar approaching a cadence.
+- [ ] **Voice-lead the parts against each other.** `find_voice_leading_problems`
+      only *reports*; nothing acts on it. music21 can resolve sevenths and
+      leading tones correctly — the theory is available and unused.
+- [ ] **Let the interface cues reach the realisation, not just the prompt.**
+      Tempo, key and genre shape the prompt but not the *structure*: a slow
+      piece should have longer phrases and slower harmonic rhythm than a fast
+      one. This is the "more compositional leverage" ask — the theory is in
+      music21, it simply is not being consulted.
+- [ ] True modulation (C1): harmony is extended but never leaves the home key.
+      music21 realises pivot chords and secondary dominants already; the plan
+      has no key-change mechanism to use them.
+- [ ] Dynamics, articulation, slurs (C2) — still entirely absent from output.
+
+**Original list, still open:**
+
+
+- [ ] **The long-form melody is the developed motif, not the specialist's full
+      surface.** Structurally coherent, but ChatMusician's idiomatic detail only
+      reaches the seed. Carrying it into every section is the biggest remaining
+      quality win.
+- [ ] Scale-run repair lands *at* the limit (6), not comfortably below it.
+- [ ] `polish()` reports on the short path but the polished score is not yet what
+      the UI receives — the ABC is.
+- [ ] True modulation (C1): harmony is extended but stays in one key.
+- [ ] Dynamics, articulation, slurs (C2).
+- [ ] Counterpoint beyond parallel-fifth detection.
 
 ### What this session taught, and what to do differently
 
@@ -412,6 +501,8 @@ only word-level scoring:
 [Research-backed app comparison](https://www.sciencebasedlearning.com/blog/best-language-learning-apps-2026) ·
 [Praktika review](https://languatalk.com/blog/praktika-review/) ·
 [AI speaking apps compared](https://www.talkio.ai/blog/best-ai-language-speaking-practice-apps-in-2026)
+
+---
 
 ---
 

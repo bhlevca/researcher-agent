@@ -2,7 +2,7 @@
 
 A CrewAI-powered research agent with a browser-based chat UI, voice dialog, image generation, and session management. Runs locally using Ollama — the **client only needs a web browser**.
 
-**Version 2.9.0**
+**Version 2.10.0**
 
 ## Architecture
 
@@ -116,6 +116,7 @@ cp .env.example .env
 | `OCR_MODEL` | Vision model used to read scans | `deepseek-ocr:3b` |
 | `WHISPER_MODEL` | faster-whisper size | `small` |
 | `SRS_ALGO` | Tutor scheduler: `fsrs` or `sm2` | `fsrs` |
+| `COMPOSER_MODEL` | Music-specialist model for composing (empty = general model) | *(unset)* |
 
 > This table lists the settings people change most often. **`.env.example` documents
 > all 64**, commented out and showing each actual default — it is generated against
@@ -526,6 +527,62 @@ mattering more:
 - **It carries structure.** JSON encodes only pitches and durations, so the model
   had no way to express repeats, sections or phrasing. ABC does, is ~38% of the
   tokens, and appears in training data as *music* rather than as arbitrary data.
+
+### The specialist model
+
+`COMPOSER_MODEL` is independent of `MODEL`, exactly as `OCR_MODEL` is, and is
+called **directly** rather than through CrewAI: it has no tools and is not an
+instruction-following chat model, so a planning loop would add minutes and a
+format it does not speak.
+
+```bash
+ollama pull SeekerThe3rd/chatmusician
+# .env
+COMPOSER_MODEL=SeekerThe3rd/chatmusician:latest
+```
+
+Measured against the general chat model on the same jazz task:
+
+| | ChatMusician | general model |
+|---|---|---|
+| distinct rhythms | **7** | 2 |
+| distinct pitches | **14** | 8 |
+| pitch classes used | **11/12** | 7/12 |
+
+Two rhythmic values is what the ear hears as an exercise. 11 of 12 pitch classes
+is real jazz vocabulary — blue notes and approach tones the model has actually
+heard, rather than a prompt asking for them.
+
+Leave `COMPOSER_MODEL` empty to compose with the general model instead.
+
+### Length: short form vs assembled
+
+A single model call holds together for 8–16 bars and then repeats or drifts, so
+longer pieces are **assembled, not requested**.
+
+| Score tab setting | Behaviour |
+|---|---|
+| **Length: short (bars)** | The model writes **Measures** bars directly |
+| **Length: 1–3 min** | An 8-bar seed is written in the model's idiom, then developed across a recurring form with extended harmony |
+
+Assembled pieces use genre-appropriate chromatic harmony — `IMaj7 vi7 ii7 V9`,
+`V7/ii`, `iv7 bVII7`, `ii65 V7 I V7/vi`, `IV Ger+65 V I` — every figure realised
+by music21 rather than guessed.
+
+Measured: 64 bars, 2.6 minutes, 8 sections, in about 5 seconds.
+
+Recurring material is deliberate: three minutes of entirely *new* material is
+three minutes of mush. But see `TODO_Claude.md` for the measured limits — only
+**3 distinct rhythms** currently reach the long form, which is why extended
+pieces still sound repetitive.
+
+### Output
+
+| Action | Result |
+|---|---|
+| Download MusicXML | Opens in MuseScore and any notation editor |
+| MIDI | Plays in the browser or any DAW |
+| Save | Stored per session with its score, listed in the **Compositions** tab |
 
 ### How a composition is made
 

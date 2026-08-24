@@ -228,9 +228,20 @@
     <div class="composer-panel" id="cpanel-score">
         <div class="score-form">
             <input type="text" id="score-description" placeholder="Describe what to compose (e.g. 'A gentle waltz melody for piano with a melancholic feel')">
-            <label style="font-size:0.78rem;color:#94a3b8;display:flex;align-items:center;gap:0.3rem;">
+            <label style="font-size:0.78rem;color:#94a3b8;display:flex;align-items:center;gap:0.3rem;" title="Short form: the model writes this many bars directly. Ignored when Length is set.">
                 Measures:
                 <input type="number" id="score-measures" value="16" min="4" max="128">
+            </label>
+            <label style="font-size:0.78rem;color:#94a3b8;display:flex;align-items:center;gap:0.3rem;" title="Target length in minutes. Above 0 the piece is ASSEMBLED from recurring sections with extended harmony, because a single model call only holds together for 8-16 bars. 0 = short form, use Measures instead.">
+                Length:
+                <select id="score-minutes" style="min-width:96px;">
+                    <option value="0" selected>short (bars)</option>
+                    <option value="1">~1 min</option>
+                    <option value="1.5">~1.5 min</option>
+                    <option value="2">~2 min</option>
+                    <option value="2.5">~2.5 min</option>
+                    <option value="3">~3 min</option>
+                </select>
             </label>
             <label style="font-size:0.78rem;color:#94a3b8;display:flex;align-items:center;gap:0.3rem;">
                 Instruments:

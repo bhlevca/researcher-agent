@@ -35,6 +35,11 @@ class ComposeScoreRequest(BaseModel):
     instruments: list[str] = ["Piano"]
     measures: int = 16
     style: str = ""            # additional style hints
+    # Target length in minutes. Above ~0.5 the piece is ASSEMBLED from recurring
+    # sections rather than asked for in one go: a single model call holds
+    # together for 8-16 bars and then repeats or drifts, so 80 bars of
+    # continuous request produces 80 bars of mush.
+    minutes: float = 0.0
 
 
 class ComposeHarmonizeRequest(BaseModel):

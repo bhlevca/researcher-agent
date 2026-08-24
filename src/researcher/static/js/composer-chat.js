@@ -76,6 +76,10 @@ function addComposerMsg(role, text, reasoning, hasScore) {
 
 /** Check whether the response contains a JSON score or legacy XML score. */
 function _hasScore(text) {
+    // ABC is the current format. Missing it here meant a valid score produced
+    // no Download/Play buttons at all — the response looked like plain text.
+    if (/^X:\s*\d/m.test(text) && /^K:/m.test(text)) return true;
+    if (text.includes('```abc')) return true;
     if (text.includes('<score-partwise') || text.includes('```xml')) return true;
     // JSON score: look for ```json with "parts" inside
     const jm = text.match(/```json\s*([\s\S]*?)```/);

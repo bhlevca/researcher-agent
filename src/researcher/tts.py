@@ -17,6 +17,17 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
+# langdetect samples randomly and is seeded from global state, so the SAME text
+# can detect differently depending on what ran before it. That made a test pass
+# alone and fail in the full suite, and — worse — meant a user could get a
+# different voice for identical text. Seeding makes detection deterministic.
+try:
+    from langdetect import DetectorFactory as _DetectorFactory
+
+    _DetectorFactory.seed = 0
+except Exception:  # pragma: no cover - langdetect always present in practice
+    pass
+
 # ---------------------------------------------------------------------------
 # Voice cache
 # ---------------------------------------------------------------------------

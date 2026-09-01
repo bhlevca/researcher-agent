@@ -183,6 +183,23 @@ def develop_motif(motif: list[tuple[str, float]], how: str, key_name: str):
                 c.quarterLength = n.quarterLength
                 out.append(c)
         return out
+    if how in ("dotted", "diminution", "syncopate", "even", "long_short_pairs"):
+        # Rhythm-only development: same pitches, different timing.
+        varied = vary_rhythm([(n.nameWithOctave, n.quarterLength)
+                              for n in src.flatten().notes], how)
+        out = stream.Part()
+        for name, ql in varied:
+            c = note.Note(name)
+            c.quarterLength = ql
+            out.append(c)
+        return out
+    if how.startswith("sequence_up+"):
+        # Combined: transpose AND re-time, so a returning section is recognisable
+        # without being identical.
+        base = develop_motif(motif, "sequence_up", key_name)
+        return develop_motif([(n.nameWithOctave, n.quarterLength)
+                              for n in base.flatten().notes],
+                             how.split("+", 1)[1], key_name)
     if how == "retrograde":
         notes = list(src.flatten().notes)[::-1]
         out = stream.Part()
@@ -193,6 +210,93 @@ def develop_motif(motif: list[tuple[str, float]], how: str, key_name: str):
         return out
     return src
 
+
+
+
+# ---------------------------------------------------------------------------
+# Rhythmic development
+#
+# Every transformation above changes PITCH and copies quarterLength verbatim.
+# augmentation scales everything uniformly, which is not variety either. The
+# result was music with three distinct durations across two and a half minutes:
+# the motif came back transposed and inverted, but always in the same rhythm, so
+# the ear heard one idea repeated rather than an idea developed.
+#
+# These operate on rhythm alone and preserve the total length of the phrase, so
+# a varied motif still fills exactly the bars it is meant to.
+# ---------------------------------------------------------------------------
+
+def _rhythm_of(notes) -> list[float]:
+    return [float(n.quarterLength) for n in notes]
+
+
+def vary_rhythm(motif: list[tuple[str, float]], how: str,
+                seed: int = 0) -> list[tuple[str, float]]:
+    """Re-time a motif without changing its pitches or total duration.
+
+    Keeping the pitch sequence intact is the point: the listener still
+    recognises the idea, but it arrives differently. Changing both at once
+    produces new material, not development.
+    """
+    if not motif:
+        return motif
+    pitches = [p for p, _ in motif]
+    durs = [float(d) for _, d in motif]
+    total = sum(durs)
+    n = len(durs)
+
+    if how == "dotted" and n >= 2:
+        # Long-short pairs: the single most characteristic rhythmic gesture in
+        # tonal music, and completely absent from the current output.
+        out = []
+        for i in range(0, n - 1, 2):
+            pair = durs[i] + durs[i + 1]
+            out.extend([pair * 0.75, pair * 0.25])
+        if n % 2:
+            out.append(durs[-1])
+        durs = out
+    elif how == "diminution":
+        # Twice as fast, then hold the last note to keep the length.
+        durs = [d / 2.0 for d in durs]
+        durs[-1] += total - sum(durs)
+    elif how == "syncopate" and n >= 3:
+        # Push the accent off the beat by lengthening an inner note and
+        # shortening its neighbour.
+        i = 1 + (seed % max(1, n - 2))
+        take = min(durs[i] * 0.5, durs[i - 1] * 0.5)
+        durs[i] += take
+        durs[i - 1] -= take
+    elif how == "even":
+        durs = [total / n] * n
+    elif how == "long_short_pairs" and n >= 4:
+        unit = total / n
+        durs = [unit * 1.5 if i % 2 == 0 else unit * 0.5 for i in range(n)]
+
+    # Snap to durations a musician can actually read. Arithmetic like 0.75*x
+    # produces values such as 0.188 or 1.125 quarter-notes, which are legal in
+    # MIDI but notate as knots of tied 32nds — technically playable, unreadable
+    # on the page, and exactly the kind of thing that marks a score as machine
+    # output.
+    grid = [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0]
+    durs = [min(grid, key=lambda g: abs(g - d)) for d in durs]
+
+    # Snapping changes the total, so the FINAL note absorbs the remainder
+    # exactly. It is deliberately not snapped: the phrase must fill its bars to
+    # the beat or the section drifts out of alignment, and a single held closing
+    # note notates cleanly as a tie even at an off-grid length. Diminution is the
+    # case that forces this — halving four beats leaves 2.5 to absorb, which no
+    # grid value can express, and snapping it stalls the length permanently
+    # short.
+    drift = total - sum(durs)
+    if abs(drift) > 1e-6:
+        want = durs[-1] + drift
+        durs[-1] = want if want >= 0.125 else durs[-1]
+    return list(zip(pitches, durs))
+
+
+def rhythmic_variety(part) -> int:
+    """How many distinct note lengths a part uses — the metric that exposed this."""
+    return len({round(float(n.quarterLength), 4) for n in part.recurse().notes})
 
 
 def _fill_bars(part, bars: int, beats_per_bar: float, key_name: str):
@@ -213,9 +317,19 @@ def _fill_bars(part, bars: int, beats_per_bar: float, key_name: str):
     total = 0.0
     repeat = 0
     while total < target - 1e-6:
-        src = notes if repeat % 2 == 0 else list(
-            develop_motif([(n.nameWithOctave, n.quarterLength) for n in notes],
-                          "sequence_up", key_name).recurse().notes)
+        # Cycle through pitch AND rhythm transforms. Alternating "original,
+        # sequence_up, original, sequence_up" is what produced five literal
+        # repeats of the opening cell: only two shapes ever appeared, and both
+        # shared one rhythm.
+        variants = ("original", "sequence_up", "dotted", "sequence_up+syncopate",
+                    "fragment", "diminution")
+        how = variants[repeat % len(variants)]
+        if how == "original":
+            src = notes
+        else:
+            src = list(develop_motif(
+                [(n.nameWithOctave, n.quarterLength) for n in notes],
+                how, key_name).recurse().notes)
         for n in src:
             remaining = target - total
             if remaining <= 1e-6:
@@ -298,16 +412,23 @@ def find_voice_leading_problems(part_a, part_b) -> list[str]:
     return problems
 
 
-def assemble(plan: Plan):
+def assemble(plan: Plan, instruments: list[str] | None = None):
     """Build the complete score from a plan.
 
     Returns a music21 Score with a melody part (motif, developed per section)
     and a bass part, in the requested key, metre and tempo.
+
+    *instruments* assigns real instruments to the parts in order. Every part
+    used to be hardcoded to Piano, so the instrument picker in the UI had no
+    effect whatsoever — and nothing checked that the notes were playable on
+    whatever was chosen.
     """
     from music21 import stream, meter, key as m21key, tempo as m21tempo, instrument
 
     score = stream.Score()
     melody = stream.Part()
+    # Instrument assignment happens after the notes exist, so ranges can be
+    # checked against real content; Piano is only a placeholder.
     melody.insert(0, instrument.Piano())
     harmony_part = stream.Part()
     bass_part = stream.Part()
@@ -341,6 +462,19 @@ def assemble(plan: Plan):
 
     score.insert(0, melody)
     score.insert(0, bass_part)
+    if instruments:
+        from researcher.composer.orchestration import orchestrate
+
+        report = orchestrate(score, instruments)
+        moved = sum(r["notes_moved"] for r in report["reports"])
+        if moved:
+            logger.info("[realize] octave-shifted %d note(s) to fit instrument ranges", moved)
+        for r in report["reports"]:
+            if r["breathing"]:
+                logger.info("[realize] %s: %d phrase(s) too long to play in one breath",
+                            r["instrument"], len(r["breathing"]))
+        score.editorial.orchestration = report
+
     return score
 
 
@@ -564,15 +698,22 @@ def build_long_plan(genre: str, key_name: str, time_signature: str, tempo: int,
     # A rondo-ish shape: the A material returns, each time developed
     # differently, with contrasting episodes between. This is how real pieces
     # reach three minutes without becoming three minutes of new material.
+    # Three of the eight sections used to be "original" — the motif returning
+    # completely unchanged. That is what produced five literal repeats of the
+    # opening cell. A theme should RETURN recognisably, not be pasted back in.
+    #
+    # Only the opening statement is untouched. Every later return of A keeps its
+    # pitch shape but arrives in a different rhythm, which is how a listener
+    # hears one idea developing rather than one idea repeating.
     cycle = [
-        ("A",  "original"),
-        ("A2", "sequence_up"),
+        ("A",  "original"),                     # state the idea plainly, once
+        ("A2", "sequence_up+dotted"),
         ("B",  "inversion"),
-        ("A",  "original"),
+        ("A",  "syncopate"),                    # same theme, displaced accents
         ("bridge", "fragment"),
         ("A2", "augmentation"),
-        ("turn", "retrograde"),
-        ("A",  "original"),
+        ("turn", "sequence_up+diminution"),
+        ("A",  "long_short_pairs"),             # final return, re-timed again
     ]
 
     form: list[str] = []

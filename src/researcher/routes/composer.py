@@ -340,6 +340,7 @@ def register_composer_routes(app):
                             tempo=session["tempo"],
                             minutes=req.minutes,
                             style_guide=style_guide,
+                            instruments=req.instruments,
                         ),
                     )
                     if score is None:

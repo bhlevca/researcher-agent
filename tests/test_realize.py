@@ -332,3 +332,57 @@ class TestSanitizeAbc:
         out, notes = self._clean(src)
         assert notes == []
         assert "C2 E2 G2 E2" in out
+
+
+class TestRhythmicDevelopment:
+    """The motif used to return transposed and inverted but always in the SAME
+    rhythm, so 2.5 minutes contained three distinct note lengths and the ear
+    heard one idea repeated rather than developed."""
+
+    def test_rhythm_transforms_preserve_pitch_and_length(self):
+        from researcher.composer.realize import vary_rhythm
+
+        motif = [("C4", 1.0), ("D4", 1.0), ("E4", 1.0), ("F4", 1.0)]
+        for how in ("dotted", "diminution", "syncopate", "even", "long_short_pairs"):
+            out = vary_rhythm(motif, how)
+            assert [p for p, _ in out] == [p for p, _ in motif], f"{how} changed pitches"
+            assert abs(sum(d for _, d in out) - 4.0) < 0.01, f"{how} changed total length"
+
+    def test_varied_rhythms_are_notatable(self):
+        """0.188 or 1.125 quarter-lengths are legal MIDI but notate as knots of
+        tied 32nds — unreadable, and a giveaway that a machine wrote it."""
+        from researcher.composer.realize import vary_rhythm
+
+        grid = {0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0}
+        motif = [("C4", 1.0), ("D4", 0.5), ("E4", 1.5), ("F4", 1.0)]
+        for how in ("dotted", "diminution", "syncopate", "long_short_pairs"):
+            out = vary_rhythm(motif, how)
+            # The last note absorbs the exact remainder so the phrase fills its
+            # bars; every other note must sit on the readable grid.
+            for _, d in out[:-1]:
+                assert d in grid, f"{how} produced unnotatable duration {d}"
+
+    def test_dotted_actually_creates_long_short(self):
+        from researcher.composer.realize import vary_rhythm
+
+        out = vary_rhythm([("C4", 1.0), ("D4", 1.0)], "dotted")
+        assert out[0][1] > out[1][1], "dotted did not lengthen the first note"
+
+    def test_a_long_piece_uses_more_than_three_rhythms(self):
+        """The measurement that exposed the problem in the first place."""
+        from researcher.composer.realize import build_long_plan, assemble, rhythmic_variety
+
+        plan = build_long_plan("jazz", "C major", "4/4", 120, 2.0)
+        assert rhythmic_variety(assemble(plan).parts[0]) >= 5
+
+    def test_the_theme_still_returns_recognisably(self):
+        """Variety must not become incoherence: development means the SAME idea
+        coming back changed, so its pitch shape has to survive."""
+        from researcher.composer.realize import build_long_plan, assemble
+
+        plan = build_long_plan("classical", "C major", "4/4", 100, 2.0)
+        notes = list(assemble(plan).parts[0].recurse().notes)
+        seq = [n.pitch.midi for n in notes if hasattr(n, "pitch")]
+        cell = tuple(seq[:8])
+        returns = sum(1 for i in range(len(seq) - 8) if tuple(seq[i:i + 8]) == cell)
+        assert returns >= 2, "the opening idea never comes back — that is not development"

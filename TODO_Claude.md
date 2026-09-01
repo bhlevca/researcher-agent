@@ -70,6 +70,9 @@ stitching; see the v2.9.0 session notes.
 | C5 | JSON repair hardening | ✅ obsolete — JSON path replaced by ABC (v2.9.0) |
 | C6 | Harmonization feedback UI | ❌ endpoint exists, no comparison view |
 | C7 | Ear training | ❌ not started |
+| C-O1 | Instrument ranges & transposition | ✅ done (v2.11.0) |
+| C-O2 | Sampled instruments (sfizz + SFZ) | ❌ not started |
+| C-O3 | Choir / singing voices | ❌ not started |
 | X1 | Shared LLM factory | ❌ not started — duplication has grown since |
 | X2 | Central settings | ❌ not started — `pydantic-settings` installed but unused |
 | X3 | Per-user concurrency | ✅ done — entry was stale |
@@ -307,6 +310,128 @@ methods are on it. `patches._check_executor_reachability()` now logs this at sta
 - **R3 is still open and still real**: `/chat/cancel` sets an event that `_run_crew` never
   reads, so the worker thread runs to completion holding the GPU, and the early-exit `return`
   releases the semaphore while that thread is still alive.
+
+---
+
+## Composer rhythm — resolved 2026-08-24 (v2.11.0)
+
+The long-form output had **3 distinct note lengths across 2.5 minutes** and
+repeated its opening 8-note cell 5 times. Diagnosis: every transformation in
+`develop_motif` changed PITCH and copied `quarterLength` verbatim —
+`sequence`, `inversion`, `fragment`, `retrograde` — while `augmentation` scaled
+everything uniformly, which is not variety either. The motif came back
+transposed and inverted but always in the same rhythm, so the ear heard one idea
+repeated rather than developed. Three of the eight sections were literally
+`"original"`: the motif pasted back unchanged.
+
+Fixed by adding rhythm as a development dimension of its own:
+
+- `vary_rhythm()` — dotted, diminution, syncopate, even, long_short_pairs.
+  Pitches and total length are preserved, so the idea stays recognisable and the
+  phrase still fills its bars exactly.
+- Combined transforms (`sequence_up+dotted`) so a returning section differs in
+  both shape and timing.
+- Only the opening statement is now `"original"`; every later return of A is
+  re-timed.
+- **Durations snap to a readable grid.** The arithmetic produced values like
+  0.188 and 1.125 quarter-notes — legal MIDI, but they notate as knots of tied
+  32nds. The final note absorbs the exact remainder so sections stay aligned to
+  the beat.
+
+Measured on the same 2.5-minute jazz piece:
+
+| | before | after |
+|---|---|---|
+| distinct rhythms | 3 | **6**, all notatable |
+| verbatim repeats (pitch AND rhythm) | 5 | **4** |
+| same pitches, re-timed | — | **15** — development rather than repetition |
+
+Honest limits: 4 verbatim returns of the theme remain, which is defensible for a
+recurring subject but is not zero; and the B/C sections still develop the A
+motif rather than introducing genuinely new material. Harmony still never leaves
+the home key, and dynamics and articulation are still absent (C2).
+
+---
+
+## COMPOSER — orchestration and voices (roadmap, 2026-08-24)
+
+*Answering "can we make this professional for instrument composing, and add
+choir/voices?" Three separate problems that get conflated; only one is about
+sound.*
+
+**Where it stands:** audio renders through timidity + `FluidR3_GM.sf2` — plain
+General MIDI. Adequate for auditioning, and the reason output sounds plastic
+regardless of how good the notes are. No sampled instruments, no articulations,
+and the composer does not know which instrument plays what it writes.
+
+### C-O1 — Instrument ranges and transposition — ✅ DONE (v2.11.0)
+
+The composer emits notes with no instrument awareness. Nothing stops it writing
+below a violin's G3, and transposing instruments are written at concert pitch —
+which is *wrong on the page* to any player, however good the MIDI sounds. This
+is the single most unprofessional thing in current output.
+
+music21 already carries the data, unused:
+
+    Violin  range=G3..    Clarinet  transposition=M-2
+    Viola   range=C3..    Trumpet   transposition=M-2
+    Cello   range=C2..    Horn      transposition=P-5
+
+- [x] `orchestration.py`: explicit ranges for 34 instruments and voices
+- [x] Out-of-range notes move by **whole octaves**, never clamped — that
+      preserves the pitch class and therefore the harmony. A test asserts pitch
+      classes are unchanged.
+- [x] Transposing instruments carry their transposition (clarinet/trumpet -2,
+      horn -7, double bass/tenor -12), so the part is right **on the page**
+- [x] Breathing check for winds, brass and voices; strings correctly exempt
+- [x] Vocal ranges supplied — music21 returns `None..None` for all of them
+- [x] **Bug found:** `realize.py` hardcoded `instrument.Piano()` for every part,
+      so the UI's instrument picker was silently discarded. It now reaches the
+      score, and out-of-range notes are fixed against the chosen instrument.
+- [x] **Bug found:** attaching an instrument without removing the Piano
+      placeholder left every part reading "Piano" while the report claimed
+      otherwise — music21 honours the FIRST instrument it finds.
+- [ ] Still open: string double stops, brass endurance beyond breath length
+
+*Deliberately ahead of better samples: a beautifully sampled cello playing an
+unplayable line is still amateur; a plain GM cello playing idiomatic writing is
+not.*
+
+### C-O2 — Sampled instruments instead of General MIDI (MEDIUM)
+
+Cheapest real gain in *sound*. Changes nothing about the notes.
+
+- [ ] Install `sfizz` (neither sfizz nor fluidsynth is currently present;
+      timidity is)
+- [ ] Add a free SFZ library — Sonatina Symphonic Orchestra or Virtual Playing
+      Orchestra (~400-500 MB)
+- [ ] Route `/composer/convert-audio` through it, keeping timidity as fallback
+- [ ] `AUDIO_BACKEND` / `SFZ_LIBRARY` env vars, same pattern as the image and
+      video backends
+
+### C-O3 — Choir and human voices (LOW/LARGE — three different technologies)
+
+| Approach | Gives you | Cost | Keeps the score? |
+|---|---|---|---|
+| Sampled choir (SFZ "ahh"/"ooh") | Sustained vowels, no words | Low — same MIDI path | yes |
+| Singing synthesis (DiffSinger, NNSVS, OpenUtau) | Real singing **with lyrics** | High — voicebank, GPU, phoneme timing | yes |
+| Text-to-song (YuE, DiffRhythm, ACE-Step) | Finished audio from a prompt | Medium | **NO** |
+
+- [ ] (a) Sampled choir as just another SFZ instrument, once C-O2 lands
+- [ ] (b) Singing synthesis with lyrics — a genuine project; needs a lyric line
+      in the score, phoneme alignment, and a voicebank
+
+**Do NOT take the third row.** Those models make impressive audio but they do
+not perform *your* score — they replace it. For a tool whose point is an
+editable composition, that is the wrong product, however good the demos sound.
+
+### Ordering, and why
+
+**C-O1 → C-O2 → C-O3a → C-O3b.** Correctness before sound before voices.
+
+But **all of it is behind the open rhythm problem** (3 distinct durations, motif
+repeated 5x — see the v2.10.0 notes). Better samples applied to repetitive music
+only make the repetition easier to hear.
 
 ---
 

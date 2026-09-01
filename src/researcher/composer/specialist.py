@@ -286,7 +286,8 @@ def extract_motif(abc: str, max_notes: int = 6) -> list[tuple[str, float]]:
 
 def compose_long(description: str, genre: str, key_signature: str,
                  time_signature: str, tempo: int, minutes: float = 2.5,
-                 style_guide: str = ""):
+                 style_guide: str = "",
+                 instruments: list[str] | None = None):
     """Compose a piece of roughly *minutes*, combining both halves.
 
     The specialist writes a short seed in its own idiom; the realisation engine
@@ -310,7 +311,8 @@ def compose_long(description: str, genre: str, key_signature: str,
 
     plan = realize.build_long_plan(genre, key_signature, time_signature, tempo,
                                    minutes, motif=motif or None)
-    score = realize.assemble(plan)
+    score = realize.assemble(plan, instruments=instruments)
+    info["instruments"] = instruments or ["Piano"]
     info["bars"] = plan.total_bars()
     info["seconds"] = realize.estimate_duration(plan)
     info["sections"] = len(plan.form)

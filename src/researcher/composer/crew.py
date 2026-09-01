@@ -712,8 +712,20 @@ class ComposerCrew:
                 f.write(midi)
                 mid = f.name
             wav = _tempfile.mktemp(suffix=".wav")
+            # The system timidity.cfg on this machine sources only
+            # piano+guitar.cfg and drums.cfg — a minimal patch set with NO
+            # strings, brass or winds. A violin part (GM program 40) therefore
+            # fell back to the nearest available patch, which is why every score
+            # played back as a keyboard instrument regardless of orchestration.
+            # fluidr3_gm.cfg maps the full 128-instrument GM set onto the
+            # FluidR3_GM.sf2 soundfont that is already installed.
+            cfg = os.getenv("TIMIDITY_CONFIG", "/usr/share/timidity/fluidr3_gm.cfg")
+            cfg_args = ["-c", cfg] if cfg and pathlib.Path(cfg).is_file() else []
+            if not cfg_args:
+                logger.info("[Composer] %s not found; using timidity's default "
+                            "patch set, which may lack orchestral instruments", cfg)
             proc = subprocess.run(
-                ["timidity", mid, "-Ow", "-o", wav],
+                ["timidity", *cfg_args, mid, "-Ow", "-o", wav],
                 capture_output=True, timeout=180,
             )
             if proc.returncode != 0 or not pathlib.Path(wav).exists():

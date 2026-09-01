@@ -71,7 +71,7 @@ stitching; see the v2.9.0 session notes.
 | C6 | Harmonization feedback UI | ❌ endpoint exists, no comparison view |
 | C7 | Ear training | ❌ not started |
 | C-O1 | Instrument ranges & transposition | ✅ done (v2.11.0) |
-| C-O2 | Sampled instruments (sfizz + SFZ) | ❌ not started |
+| C-O2 | Sampled instruments (sfizz + SFZ) | ⚠️ partly solved — see below |
 | C-O3 | Choir / singing voices | ❌ not started |
 | X1 | Shared LLM factory | ❌ not started — duplication has grown since |
 | X2 | Central settings | ❌ not started — `pydantic-settings` installed but unused |
@@ -313,6 +313,59 @@ methods are on it. `patches._check_executor_reachability()` now logs this at sta
 
 ---
 
+## Where to spend effort next — a candid read (2026-08-31)
+
+Raised by the user: *"Perhaps I am pulling in too many directions and should
+focus on the researcher and the language tutor to make both better."*
+
+**That instinct is right, and the evidence supports it.**
+
+### Why the composer is the wrong place to keep pushing
+
+Professional-quality composition is not a tuning problem, it is an open research
+problem. The honest position after several sessions:
+
+- The specialist model (ChatMusician) genuinely helped — 7 distinct rhythms
+  against 2, 11/12 pitch classes against 7 — but it writes 8-16 good bars and
+  then repeats or drifts. That is a property of the model, not of our prompt.
+- `realize.py` supplies structure deterministically, which is why the output is
+  coherent at all. But code can only *develop* material it is given; it cannot
+  invent a good theme. Every improvement so far has been "enforce another rule",
+  and each has diminishing returns.
+- Assessment across sessions moved from "kindergarten" to "senior kindergarten".
+  That is real progress and still a long way from useful.
+
+**What would actually be needed:** a model trained on full scores with structural
+supervision, not an 8-bar-window generator. Nothing in that class runs in 16 GB
+today. The next honest step is C-O2 (better samples), which improves how it
+*sounds* without touching how it *composes*.
+
+### Where the same effort pays off
+
+- **Researcher** — already the strongest component and used daily. R3 alone
+  (cancel does not actually cancel; a "cancelled" run still holds the GPU) is a
+  concrete defect with a known cause. R4/R5 (error format, structured logging)
+  are ordinary engineering with predictable results.
+- **Tutor** — FSRS, comprehensible input and phoneme scoring have landed, and
+  each was measurable. What remains (per-learner error profile feeding quiz
+  generation, curriculum-aware review) is *also* measurable, because language
+  learning has ground truth: did the learner recall the word or not.
+
+The difference that matters: in the researcher and tutor, "better" is defined
+and testable. In the composer it is a matter of taste that a local model cannot
+currently reach.
+
+### Recommendation
+
+Put the composer in maintenance — finish C-O2 for sound quality, keep it usable,
+stop trying to make it a professional composition tool on this hardware. Spend
+the recovered time on the researcher and tutor, where the same hours produce
+something demonstrably better.
+
+Revisit the composer when a score-level open model appears that fits in 16 GB.
+
+---
+
 ## Composer rhythm — resolved 2026-08-24 (v2.11.0)
 
 The long-form output had **3 distinct note lengths across 2.5 minutes** and
@@ -399,7 +452,20 @@ not.*
 
 ### C-O2 — Sampled instruments instead of General MIDI (MEDIUM)
 
-Cheapest real gain in *sound*. Changes nothing about the notes.
+**Partly solved 2026-08-31, and the cause was not what this entry assumed.**
+Playback sounded like a harpsichord regardless of orchestration because the
+system `timidity.cfg` sources only `piano+guitar.cfg` and `drums.cfg` — a
+minimal patch set with **no strings, brass or winds at all**. A violin part
+(GM program 40) therefore fell back to the nearest available patch. The full
+`fluidr3_gm.cfg`, backed by the 148 MB `FluidR3_GM.sf2` already installed, was
+sitting unused. Passing `-c` fixed it: measured spectral centroid moved from
+2771 Hz to 9461 Hz on the same violin/cello score. Override with
+`TIMIDITY_CONFIG`.
+
+So playback now uses real sampled instruments. A dedicated SFZ orchestra would
+still be better, but the gap is far smaller than it was.
+
+Remaining, for genuine realism rather than correctness:
 
 - [ ] Install `sfizz` (neither sfizz nor fluidsynth is currently present;
       timidity is)

@@ -7,6 +7,7 @@ recomputation rather than trusting the generator.
 """
 
 import random
+import shutil
 
 import pytest
 
@@ -144,6 +145,46 @@ class TestGeneration:
     def test_unknown_topic_raises(self):
         with pytest.raises(ValueError):
             g.generate("no_such_topic", "grade8", 3)
+
+
+class TestLatexSafety:
+    """Characters that break silently in LaTeX.
+
+    A literal ° reached the typesetter once and came out as "45ř", because T1
+    font encoding maps that byte to r-with-caron. It compiled cleanly, so only
+    reading the printed sheet revealed it. Nothing non-ASCII goes to LaTeX now.
+    """
+
+    def test_no_generator_emits_non_ascii(self):
+        bad = []
+        for t in g.available_topics():
+            for p in g.generate(t, "grade10", 6, seed=12):
+                for field, text in (("question", p.question), ("answer", p.answer),
+                                    *[(f"step{i}", s) for i, s in enumerate(p.steps)]):
+                    stray = {c for c in text if ord(c) > 127}
+                    if stray:
+                        bad.append((t, field, stray))
+        assert not bad, f"non-ASCII reaching LaTeX: {bad[:8]}"
+
+    def test_degrees_are_typeset_as_degrees(self):
+        """Not just absent — actually rendered."""
+        import subprocess
+
+        from researcher.mathtutor import worksheet as w
+
+        probs = g.generate("angles_basic", "grade6", 3, seed=4)
+        assert any("circ" in p.answer for p in probs), "no degree answers to check"
+        pdf = w.render_pdf(probs, "T", "Grade 6", "grade6", answers=True)
+        if pdf is None or not shutil.which("pdftotext"):
+            pytest.skip("pdflatex or pdftotext not installed")
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".pdf") as f:
+            f.write(pdf)
+            f.flush()
+            out = subprocess.run(["pdftotext", f.name, "-"],
+                                 capture_output=True, text=True).stdout
+        assert "\u0159" not in out and "r\u030c" not in out, "degree sign became r-caron"
+        assert "\u25e6" in out or "\u00b0" in out, "no degree symbol in the output"
 
 
 class TestGeometryFigures:

@@ -13,6 +13,7 @@ key cannot drift from the sheet.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import logging
 import tempfile
@@ -95,6 +96,79 @@ def _escape_text(s: str) -> str:
     return s
 
 
+# LaTeX spacing commands, which are not mathematics and must not be left
+# stranded inside dollar signs.
+_SPACE = r"(?:\\[,;:!]|\\q?quad|\\ |~|\s)"
+
+
+def _mixed(latex: str, display: bool = False) -> str:
+    r"""Turn a question written entirely in math mode into wrappable prose.
+
+    Generators write a question as one math expression with the words inside
+    \text{...}. That is correct LaTeX, but **math mode does not line-break**, so
+    a long worded question ran off the right edge of the page instead of
+    wrapping. Here the \text{...} parts become real text and only the
+    mathematics stays between dollar signs, which is what lets a paragraph wrap.
+    """
+    out: list[str] = []
+    i, n = 0, len(latex)
+    buf: list[str] = []
+
+    def flush_math():
+        raw = "".join(buf)
+        buf.clear()
+        # A fragment that is only LaTeX spacing (\, \; \quad \ ) carries no
+        # mathematics; left between dollar signs it compiles to "$\$".
+        if re.fullmatch(_SPACE + "*", raw):
+            if raw:
+                out.append(" ")
+            return
+        chunk = re.sub(_SPACE + "+$", "", re.sub("^" + _SPACE + "+", "", raw))
+        # Trailing punctuation belongs to the sentence, not to the formula.
+        tail = ""
+        while chunk and chunk[-1] in ".,;:?":
+            tail = chunk[-1] + tail
+            chunk = re.sub(_SPACE + "+$", "", chunk[:-1])
+        if chunk:
+            out.append(rf"$\displaystyle {chunk}$" if display else f"${chunk}$")
+        if tail:
+            # The space that followed the punctuation was consumed above; put
+            # one back, or "(6, 5), radius 7" sets as "(6, 5),radius 7". A
+            # trailing one is harmless — the join below trims it.
+            out.append(tail + " ")
+
+    def close_brace(start: int) -> int:
+        """Index just past the brace group opening at *start*."""
+        j, depth = start, 1
+        while j < n and depth:
+            if latex[j] == "{":
+                depth += 1
+            elif latex[j] == "}":
+                depth -= 1
+            j += 1
+        return j
+
+    while i < n:
+        if latex.startswith(r"\text{", i):
+            j = close_brace(i + 6)
+            # A unit carrying an exponent — \text{cm}^{2} — must stay in math
+            # mode, or the exponent is orphaned from what it belongs to.
+            if j < n and latex[j] in "^_":
+                k = close_brace(j + 2) if latex[j + 1:j + 2] == "{" else j + 2
+                buf.append(latex[i:k])
+                i = k
+                continue
+            flush_math()
+            out.append(latex[i + 6:j - 1])
+            i = j
+        else:
+            buf.append(latex[i])
+            i += 1
+    flush_math()
+    # Collapse the double spaces left where a \text{} abutted a formula.
+    return " ".join("".join(out).split()) or latex
+
+
 def _figure_files(problems, workdir: Path) -> dict[int, str]:
     """Render each figure to PDF beside the .tex so graphicx can include it."""
     from researcher.mathtutor.geometry import render_figure
@@ -142,10 +216,7 @@ def _build_tex(problems, title: str, level_label: str, *,
     lines.append(r"\begin{enumerate}[leftmargin=*,itemsep=0pt]")
     for i, p in enumerate(problems):
         lines.append(r"\item")
-        q = p.question.strip()
-        # A question is either prose containing \text{...} or a bare expression.
-        lines.append(rf"$\displaystyle {q}$" if "\\text" not in q
-                     else rf"${q}$")
+        lines.append(_mixed(p.question.strip()))
 
         if i in figures:
             lines.append(r"\\[2mm]")
@@ -154,8 +225,8 @@ def _build_tex(problems, title: str, level_label: str, *,
         if answers:
             lines.append(r"\\[1mm]")
             for st in p.steps:
-                lines.append(rf"{{\small $\displaystyle {st}$}}\\[1mm]")
-            lines.append(rf"\textbf{{Answer:}} $\displaystyle {p.answer}$")
+                lines.append(rf"{{\small {_mixed(st, display=True)}}}\\[1mm]")
+            lines.append(rf"\textbf{{Answer:}} {_mixed(p.answer, display=True)}")
             lines.append(r"\vspace{3mm}")
         else:
             lines.append(rf"\\[{space}]")

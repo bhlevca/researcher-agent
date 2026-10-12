@@ -6,6 +6,98 @@ Statuses re-verified against the code, not against previous checkboxes.
 
 ---
 
+## ▶ NEXT SESSION — START HERE (written 2026-10-12)
+
+**Goal: make the LANGUAGE TUTOR printable.** Everything else in this file is
+history or lower priority. The math tutor is finished and usable; the language
+tutor cannot print at all, which is what was actually asked for, twice.
+
+### What exists today (keep all of it)
+
+chat, lesson plans, reading passages, quizzes, vocabulary with FSRS, scenarios,
+translation, appraisal, pronunciation scoring, voice and TTS. **Voice and the
+interactive mode must keep working exactly as they do now** — this is additive.
+
+The only export is `/tutor/lessons/{id}/export` -> Markdown or DOCX, which is a
+teacher's lesson *plan*, not a sheet a child writes on. There is no PDF path
+anywhere in `src/researcher/tutor/` or `routes/tutor.py`, and no answer keys.
+
+### The decision that shapes the work
+
+Math was easy to keep honest: SymPy computes every answer, no model involved.
+Language cannot work that way — stories must be generated. But it splits:
+
+- **Rule-based, answers computed and provably right:** conjugation and
+  declension tables, gender/agreement, article choice, tense transformation,
+  cloze deletion from a known text, word order, plural formation. Deterministic
+  for French and Romanian, same discipline as the math generators.
+- **Model-generated:** stories, reading passages, comprehension questions,
+  summary prompts. The key here is a *model answer*, not an answer, and the
+  sheet should say so.
+
+Mixing the two silently is how you get a grammar sheet with a confidently wrong
+key. **Default plan unless told otherwise: build the deterministic generators
+for grammar, use the model only for prose.** Bogdan was asked and left before
+answering; do not block on it — start with the deterministic path, which is the
+half that is useless if done wrong.
+
+### Tasks, in order
+
+1. **`src/researcher/tutor/exercises.py`** — deterministic grammar generators,
+   mirroring `mathtutor/generators.py`: one `Exercise` dataclass (prompt,
+   answer, distractors, skill, level), a `GENERATORS` registry, and a
+   `generate(skill, level, count, seed, lang)` with the same seed-is-a-sheet
+   guarantee. Start with: verb conjugation, gender/article, adjective
+   agreement, plural formation, tense transformation, preposition choice,
+   word order, cloze.
+2. **`src/researcher/tutor/printing.py`** — reuse `mathtutor/worksheet.py`.
+   Its `_mixed`, `_preamble`, per-level spacing and two-document worksheet/key
+   generation all apply unchanged. Factor the shared parts out rather than
+   copying them; the math sheets must keep working (658 tests).
+3. **Sheet types**: homework, test, exam (sections + marks per question +
+   total), quick challenge. Exams need a mark scheme, which the math side does
+   not have yet — build it here and let math borrow it later.
+4. **Storytelling + summary**: print a generated passage followed by
+   comprehension and "write a summary in N words" prompts. Key is a model
+   answer, clearly labelled as such.
+5. **Routes** `/tutor/sheets/*` mirroring `/math/*`: generate, pdf, answers,
+   save, list, reprint. Store the recipe (skill, level, count, seed, lang), not
+   the content — same reason as math.
+6. **UI**: a Print/Sheets panel in `tutor.html`. PDF-in-an-iframe preview, as
+   `math.html` does; do not build an HTML approximation of the sheet.
+7. **Tests** `tests/test_tutor_exercises.py` + `tests/test_tutor_sheets.py`.
+   The rule that earned its keep in math: verify answers by independent
+   recomputation, and fail if any sheet leaks the wrong language.
+
+### Not in scope for that session
+
+Pronunciation/diction stays on screen — Bogdan said so explicitly ("except
+pronunciation-diction exercises with correct markings").
+
+### Math tutor leftovers (secondary, ~half a day total)
+
+- **Marking UI.** `/math/results` and `/math/progress` exist and are tested but
+  nothing posts to them, so the Progress panel can never fill. Build the
+  marking screen or remove the button — leaving it is the worst option.
+- **16 of 53 topics print no working in the key**, only the answer. Fine for
+  `times_tables`; wrong for `simultaneous`, `differentiation`,
+  `complex_numbers`, `circle_equations`, where the method is what gets marked.
+- **`vectors_3d` is flagged `geometry: true` but draws no figure.**
+- **Exam papers**: marks per question, totals, sections (see task 3 above).
+
+### Environment notes
+
+- The GPU was unusable on 2026-10-12: `nvidia-smi` reported a driver/library
+  mismatch (NVML 610.57) because the kernel module predated a driver update.
+  A reboot fixes it. Check before blaming anything CUDA-related.
+- HAProxy change planned for the evening of 2026-10-12: terminate TLS on
+  :58000 with the existing piwigo.hlevca.com cert and point the backend at
+  the agent, instead of NAT-ing straight to port 8000 in the clear. Optional
+  follow-up: `proxy_headers=True, forwarded_allow_ips="<haproxy-ip>"` in
+  `main.py`'s `uvicorn.run`.
+
+---
+
 ## Session notes — 2026-10-12 (v2.13.0) — GEOMETRY AND LANGUAGES
 
 ### Geometry rebuilt

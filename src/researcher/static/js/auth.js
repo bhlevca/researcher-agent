@@ -155,6 +155,7 @@ async function submitAuth() {
         if (typeof loadModels === 'function') loadModels();
         if (typeof loadTutorModels === 'function') loadTutorModels();
         if (typeof loadVoices === 'function') loadVoices();
+        if (typeof loadMathCurriculum === 'function') loadMathCurriculum();
         // Restore persisted image params (checkbox state etc.) for this user
         fetch('/image-params', { headers: authHeaders() })
             .then(r => r.ok ? r.json() : null)

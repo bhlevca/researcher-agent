@@ -1,10 +1,98 @@
 # TODO_Claude.md — Improvement Plan for Researcher, Tutor & Composer
 
 Generated: 2026-05-23 | Project: ai-agent v2.2.0 | Branch: developer
-Updated: 2026-08-22 for v2.9.0 — see "Session notes" for the video/tutor/composer work.
+Updated: 2026-10-12 for v2.12.0 — Math Tutor added; see the top session notes.
 Statuses re-verified against the code, not against previous checkboxes.
 
 ---
+
+## Session notes — 2026-10-12 (v2.12.0) — MATH TUTOR
+
+A new third tutor: printable IB-level mathematics, Grade 1 to Grade 12,
+with drawn geometry. Requested as higher priority than the composer.
+
+### The governing rule
+
+**No language model produces a question or an answer.** SymPy computes every
+answer; matplotlib draws every figure from the same parameters. This is a
+sharper version of the principle the composer arrived at (deterministic code for
+correctness, LLM for variety) and it is non-negotiable here for a reason worth
+writing down: a wrong note in a composition is a bad listen, but a wrong answer
+on a worksheet teaches a child something false, and whoever marks it then
+reinforces the error. An LLM that is right 97% of the time is useless for this.
+
+### Delivered
+
+- `mathtutor/curriculum.yaml` — 12 grades, 68 topic slots, every one backed by a
+  working generator (enforced by a test). Each grade carries its IB equivalent.
+- `mathtutor/generators.py` — 32 generators. Arithmetic through number bonds,
+  fractions, ratio, indices, quadratics, surds, sequences, probability,
+  functions, calculus, logs, binomial, complex numbers, integration by parts,
+  **proof by induction, implicit differentiation, first-order differential
+  equations, 3D vectors, Maclaurin series, discriminant theory, trig identities**.
+- `mathtutor/geometry.py` — 14 figure-drawing generators and 7 renderers
+  (right triangle, rectangle, circle, compound, SAS triangle, coordinates,
+  regular polygon). SVG for the browser, PDF for print, black line work only.
+- `mathtutor/worksheet.py` — LaTeX typesetting. Worksheet and answer key from
+  one problem set, so the key cannot drift from the sheet.
+- `mathtutor/storage.py` — worksheets stored as *recipes*, plus per-question
+  marking and topic-accuracy reporting.
+- `routes/mathtutor.py` — 11 endpoints; `static/math.html` + `js/math.js` +
+  `css/math.css`.
+- `tests/test_mathtutor.py` (18) and `tests/test_mathtutor_api.py` (22).
+
+### Decisions worth remembering
+
+- **A seed is a worksheet.** Generation is deterministic, so storage keeps only
+  (grade, topics, count, seed). A sheet reprints identically months later and
+  its key always matches. ~100 bytes per saved worksheet.
+- **The preview is the actual PDF in an iframe**, not an HTML rendering. The app
+  had no KaTeX/MathJax, and adding a CDN dependency to an offline-first tool to
+  produce a *worse* approximation of the thing it already generates in 0.1s was
+  the wrong trade. What you see is what prints.
+- **Both namings are selectable.** `grade8`, `MYP3`, `Grade 8` and `8` all
+  resolve to the same level, and both appear on the printed sheet. PYP/MYP
+  number from the start of the programme — Grade 8 is MYP 3, not MYP 8 — so the
+  equivalence has to be shown rather than assumed.
+- **Answers stay exact.** Surds, not decimals: Pythagoras deliberately mixes
+  triples (whole answers) with surd answers. A test fails if a decimal leaks in.
+
+### Bugs found by running it rather than reading it
+
+Every one of these would have survived a static review:
+
+1. **Geometry dedup discarded nearly every problem.** Geometry questions share
+   one question text ("Find the hypotenuse") and differ only in the figure, so
+   keying the duplicate check on text alone threw them away. Key now includes
+   the figure and the answer.
+2. **`\documentclass[14pt]` made primary type SMALLER.** `article` accepts only
+   10/11/12pt and *silently discards* anything else, falling back to 10pt. Fixed
+   with `extarticle` (extsizes) plus a graceful fallback.
+3. **`\text{cm^2}`** — a superscript inside `\text{}` is invalid LaTeX; the
+   answer key for every area topic failed to compile.
+4. **`\color` without `xcolor`** — same, silent until the key was built.
+5. **Grade 1 was asking "Convert 81 km to m"** and "How many vertices does *a*
+   octagon have?" with no picture. Generators now scale on grade, and shapes are
+   drawn so a six-year-old can count them.
+6. **"A ribbon is 9 L long"** — the word problem's noun was chosen independently
+   of the unit. Teaching a child that litres measure length is worse than asking
+   nothing.
+7. **SymPy's notation is not an examiner's.** `\sin{\left(x \right)}` and
+   `\operatorname{atan}` became `\sin x` and `\arctan`.
+8. **Implicit-differentiation questions read "x³ + y³ + 10 = 10"** — the constant
+   was added back onto the wrong side for templates that never had one there.
+
+### Still to do
+
+- **Language tutor printables** (homework, tests, exams, challenges,
+  storytelling + summary) reusing `worksheet.py`. Requested in the same message
+  as the math tutor; not started.
+- Mixed-topic *exam papers* with marks per question and a total.
+- A marking UI — the `/math/results` endpoint and the progress view exist, but
+  nothing in the page posts to it yet.
+- 3D geometry figures (vectors_3d is flagged as geometry but prints no diagram).
+- Worked solutions for topics where `steps` is currently empty (simultaneous
+  equations, differentiation).
 
 ## Media generation — Muse research outcome (2026-08-11)
 

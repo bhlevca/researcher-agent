@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Math Tutor</title>
+    <link rel="stylesheet" href="/static/css/main.css">
+    <link rel="stylesheet" href="/static/css/math.css?v=1">
+</head>
+<body>
+    <header>
+        <h1>📐 Math Tutor</h1>
+        <span class="model-info" id="math-info">Grade 1–12 · IB curriculum</span>
+        <div style="flex:1"></div>
+        <div class="header-actions">
+            <a href="/" class="nav-link" title="Back to Research Agent">🔬 Research</a>
+            <a href="/tutor" class="nav-link" title="Language Tutor">📚 Tutor</a>
+            <a href="/composer" class="nav-link" title="Music Composer">🎼 Composer</a>
+            <a href="/chat-direct" class="nav-link" title="Direct Chat">🤖 Direct</a>
+        </div>
+        <div class="user-badge" id="user-badge" style="display:none;">
+            <span>👤</span><span class="username" id="user-badge-name"></span>
+            <button onclick="logout()" title="Log out">✕</button>
+        </div>
+        <button id="login-btn" onclick="openAuthModal('login')" style="background:#0f3460;color:#94a3b8;border:1px solid #1a3a6e;padding:0.35rem 0.65rem;border-radius:0.5rem;font-size:0.75rem;cursor:pointer;">🔑 Login</button>
+    </header>
+
+    <!-- Auth modal (shared) -->
+    <div class="auth-overlay" id="auth-overlay" onclick="if(event.target===this)closeAuthModal()">
+        <div class="auth-box">
+            <h2 id="auth-title">Login</h2>
+            <div class="auth-error" id="auth-error"></div>
+            <input type="text" id="auth-username" placeholder="Username" autocomplete="username">
+            <input type="password" id="auth-password" placeholder="Password" autocomplete="current-password">
+            <input type="text" id="auth-invite" placeholder="Invite code" style="display:none;">
+            <!-- Honeypot -->
+            <input type="text" id="auth-website" name="website" autocomplete="off" tabindex="-1" style="position:absolute;left:-9999px;opacity:0;height:0;width:0;">
+            <div class="auth-actions">
+                <button class="auth-btn-primary" id="auth-submit" onclick="submitAuth()">Login</button>
+                <button class="auth-btn-secondary" id="auth-toggle" onclick="switchAuthMode()">Need an account? Register</button>
+            </div>
+        </div>
+    </div>
+
+    <main class="math-main">
+        <!-- Builder -->
+        <section class="math-panel">
+            <h3>Worksheet</h3>
+
+            <div class="math-field">
+                <label>Level naming</label>
+                <div class="math-row">
+                    <button type="button" id="math-name-grade" class="naming on"
+                            onclick="setNaming('grade')">Grade</button>
+                    <button type="button" id="math-name-ib" class="naming"
+                            onclick="setNaming('ib')">IB</button>
+                </div>
+                <div class="math-hint">Both are always shown — Grade 8 is MYP 3, not MYP 8.</div>
+            </div>
+
+            <div class="math-field">
+                <label for="math-grade">Level</label>
+                <select id="math-grade" onchange="onGradeChange()"></select>
+            </div>
+
+            <div class="math-field">
+                <label>Topics <span id="math-topic-count" style="color:#64748b"></span></label>
+                <div id="math-topics"></div>
+                <div class="math-row" style="margin-top:0.35rem">
+                    <button type="button" onclick="selectTopics(true)"
+                            style="background:#0f3460;color:#94a3b8;border:1px solid #1a3a6e;border-radius:0.3rem;padding:0.25rem;font-size:0.7rem;cursor:pointer;">All</button>
+                    <button type="button" onclick="selectTopics(false)"
+                            style="background:#0f3460;color:#94a3b8;border:1px solid #1a3a6e;border-radius:0.3rem;padding:0.25rem;font-size:0.7rem;cursor:pointer;">None</button>
+                </div>
+            </div>
+
+            <div class="math-field math-row">
+                <div>
+                    <label for="math-count">Questions</label>
+                    <input type="number" id="math-count" value="12" min="1" max="60">
+                </div>
+                <div>
+                    <label for="math-seed">Seed</label>
+                    <input type="text" id="math-seed" placeholder="random">
+                </div>
+            </div>
+
+            <div class="math-field">
+                <label for="math-title">Title</label>
+                <input type="text" id="math-title" value="Mathematics Practice">
+            </div>
+
+            <div class="math-field">
+                <label for="math-student">Student name (optional)</label>
+                <input type="text" id="math-student" placeholder="printed on the sheet">
+            </div>
+
+            <div class="math-actions">
+                <button class="primary" id="math-go" onclick="generateSheet()">Preview</button>
+                <button onclick="downloadSheet(false)">⬇ Worksheet</button>
+                <button onclick="downloadSheet(true)">⬇ Answer key</button>
+                <button onclick="saveSheet()">💾 Save</button>
+            </div>
+            <div class="math-hint" id="math-status"></div>
+        </section>
+
+        <!-- Preview: the actual PDF, so what is seen is what prints -->
+        <section class="math-preview">
+            <div class="math-preview-bar">
+                <button id="math-tab-sheet" class="on" onclick="showPdf(false)">Worksheet</button>
+                <button id="math-tab-key" onclick="showPdf(true)">Answer key</button>
+                <span id="math-preview-meta"></span>
+                <div style="flex:1"></div>
+                <button onclick="openSaved()">📂 Saved</button>
+                <button onclick="openProgress()">📊 Progress</button>
+            </div>
+            <iframe id="math-frame" style="display:none" title="Worksheet preview"></iframe>
+            <div class="math-empty" id="math-empty">
+                Choose a level and topics, then press <strong>Preview</strong>.<br>
+                Every answer is computed with SymPy — no language model is
+                involved in producing a question or its answer.
+            </div>
+        </section>
+    </main>
+
+    <!-- Saved / progress side panel -->
+    <div id="math-side" style="display:none;position:fixed;top:0;right:0;width:360px;height:100vh;background:#16213e;border-left:1px solid #1a3a6e;padding:1rem;overflow-y:auto;z-index:50;box-shadow:-8px 0 24px rgba(0,0,0,.4)">
+        <div style="display:flex;align-items:center;margin-bottom:0.75rem">
+            <h3 style="margin:0;color:#60a5fa;font-size:0.85rem;text-transform:uppercase;letter-spacing:0.05em" id="math-side-title">Saved</h3>
+            <div style="flex:1"></div>
+            <button onclick="document.getElementById('math-side').style.display='none'"
+                    style="background:none;border:0;color:#94a3b8;cursor:pointer;font-size:1rem">✕</button>
+        </div>
+        <div id="math-side-body"></div>
+    </div>
+
+    <script src="/static/js/state.js"></script>
+    <script src="/static/js/utils.js"></script>
+    <script src="/static/js/auth.js"></script>
+    <script src="/static/js/math.js?v=1"></script>
+</body>
+</html>

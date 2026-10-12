@@ -22,6 +22,7 @@ from researcher.image import generate_ai_image, preload_sd, preload_zimage, prel
 from researcher.config import STATIC_DIR, DB_PATH
 from researcher.tutor.storage import init_tutor_tables
 from researcher.composer.storage import init_composer_tables
+from researcher.mathtutor.storage import init_math_tables
 
 from researcher.auth import (
     register_auth_routes,
@@ -39,6 +40,7 @@ from researcher.routes.models import register_model_routes
 from researcher.routes.speech import register_speech_routes
 from researcher.routes.tutor import register_tutor_routes
 from researcher.routes.composer import register_composer_routes
+from researcher.routes.mathtutor import register_mathtutor_routes
 from researcher.routes.proxy import register_proxy_routes
 from researcher.tts import register_tts_routes
 
@@ -132,6 +134,7 @@ async def lifespan(app: FastAPI):
 
     # Composer tables
     await init_composer_tables(db)
+    await init_math_tables(db)
 
     # Optional image backend warm-up/bootstrap.
     # This can prefill HF cache on startup when missing.
@@ -208,6 +211,7 @@ register_model_routes(app)
 register_speech_routes(app)
 register_tutor_routes(app)
 register_composer_routes(app)
+register_mathtutor_routes(app)
 register_proxy_routes(app)
 register_tts_routes(app)
 
@@ -231,6 +235,11 @@ async def tutor_page():
 @app.get("/composer")
 async def composer_page():
     return FileResponse(STATIC_DIR / "composer.html", headers=_NO_STORE)
+
+
+@app.get("/math")
+async def math_page():
+    return FileResponse(STATIC_DIR / "math.html", headers=_NO_STORE)
 
 
 @app.get("/chat-direct")

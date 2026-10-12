@@ -2,7 +2,7 @@
 
 A CrewAI-powered research agent with a browser-based chat UI, voice dialog, image generation, and session management. Runs locally using Ollama — the **client only needs a web browser**.
 
-**Version 2.11.1**
+**Version 2.12.0**
 
 ## Architecture
 
@@ -16,6 +16,8 @@ A CrewAI-powered research agent with a browser-based chat UI, voice dialog, imag
 | **ZImage (Z-Image-Turbo)** | Server | Fast AI image generation via diffusers (optional, needs NVIDIA GPU) |
 | **Vision critic** | Server | Inspects each generated image and triggers a re-render if it does not match the request |
 | **Wan 2.2 / LTX-Video** | Server | Text-to-video generation (optional, needs NVIDIA GPU) |
+| **SymPy + matplotlib** | Server | Math Tutor: computes every answer and draws every figure — no LLM involved |
+| **LaTeX (pdflatex)** | Server | Typesets printable worksheets and answer keys |
 | **Browser UI** | Client | Just a modern web browser — no plugins, no installs |
 
 > **The client computer needs nothing except a web browser with microphone access** (for voice features). All AI processing, TTS, and STT happen on the server.
@@ -32,6 +34,7 @@ Install these on the **server** machine:
 | Python 3.11+ | Yes | Application runtime | `pyenv install 3.12` |
 | ffmpeg | No | No longer needed — faster-whisper decodes in-process via PyAV, which bundles its own ffmpeg libraries | — |
 | NVIDIA GPU + CUDA | Recommended | GPU inference for Ollama & Stable Diffusion | Driver + CUDA toolkit |
+| TeX Live (`pdflatex`) | For Math Tutor | Typesets printable worksheets; `extsizes` gives the large type primary grades need | `zypper in texlive-latex texlive-extsizes` |
 
 ### Python Dependencies
 
@@ -379,6 +382,77 @@ showing its actual default.
 | GET | `/files/{id}` | Yes | Get file details + extracted text (own only) |
 | DELETE | `/files/{id}` | Yes | Delete an uploaded file (own only) |
 | POST | `/export` | Yes | Export content to MD, TXT, DOCX, or XLSX |
+| GET | `/math` | No | Math Tutor UI |
+| GET | `/math/curriculum` | Yes | Grades 1–12 with their IB equivalents and topics |
+| POST | `/math/generate` | Yes | Generate problems + HTML preview (nothing stored) |
+| POST | `/math/pdf` | Yes | Printable worksheet (PDF) |
+| POST | `/math/answers` | Yes | Answer key for the same sheet (PDF) |
+| POST | `/math/worksheets` | Yes | Save a worksheet recipe |
+| GET | `/math/worksheets` | Yes | List saved worksheets (own only) |
+| GET | `/math/worksheets/{id}` | Yes | Load a saved worksheet, regenerated from its seed |
+| GET | `/math/worksheets/{id}/pdf` | Yes | Reprint it (`?answers=true` for the key) |
+| DELETE | `/math/worksheets/{id}` | Yes | Delete a saved worksheet |
+| POST | `/math/results` | Yes | Record a marked sheet |
+| GET | `/math/progress` | Yes | Accuracy per topic, weakest first |
+
+## Math Tutor
+
+Open `/math`. Generates printable mathematics worksheets with matching answer
+keys, Grade 1 to Grade 12, at International Baccalaureate level.
+
+**No language model is involved in producing a question or an answer.** Every
+answer is computed with SymPy and every figure is drawn with matplotlib from the
+same parameters that produced the answer, so a diagram cannot contradict its
+question. The reason is simple: a wrong note in a composition is a bad listen,
+but a wrong answer on a worksheet teaches a child something false, and whoever
+marks it then reinforces the error.
+
+### Levels
+
+Grades carry their IB equivalent and **either naming can be used to choose a
+level** — `grade8`, `MYP3`, `Grade 8` and `8` all select the same level. The
+equivalence is shown in the selector and printed on the sheet, because the two
+schemes do not line up the way people assume: PYP and MYP number their years
+from the start of the *programme*, so Grade 8 is MYP 3, not MYP 8.
+
+| Grade | IB | Grade | IB |
+|-------|-----|-------|-----|
+| 1–5 | PYP Years 2–6 | 9 | MYP Year 4 |
+| 6 | MYP Year 1 | 10 | MYP Year 5 |
+| 7 | MYP Year 2 | 11 | DP 1 — Analysis & Approaches SL |
+| 8 | MYP Year 3 | 12 | DP 2 — Analysis & Approaches HL |
+
+The sequence is IB, not North American: algebra starts in Grade 6, Pythagoras
+and circle geometry land in Grade 8, exact form (surds, fractions) is expected
+throughout rather than decimals, and Grades 11–12 cover calculus, complex
+numbers, proof by induction, differential equations and Maclaurin series.
+
+### Geometry
+
+45 topics, 14 of which draw a figure: right triangles for Pythagoras, circles,
+compound areas, coordinate grids, polygons, SAS triangles for the sine and
+cosine rules. Figures render to SVG for the browser and PDF for printing, in
+black line work only — worksheets get photocopied, and colour turns to grey mush.
+
+### Printing
+
+PDF is the real output; the on-screen preview *is* the PDF, so what is seen is
+what prints. Type size and working space scale with the grade — 14pt with short
+gaps for Grade 1, 11pt with half a page for a Grade 12 integration question.
+A sheet can carry the student's name; the answer key never does.
+
+### A seed is a worksheet
+
+Generation is deterministic, so only the recipe (grade, topics, count, seed) is
+stored, never the problems. A sheet printed in March reprints identically in
+June, and its answer key cannot drift from it. Saving a worksheet stores about a
+hundred bytes.
+
+### Marking and progress
+
+Marked sheets can be recorded per question, and `/math/progress` reports
+accuracy per topic with the weakest first — so "which topics is she actually
+getting wrong" is a query rather than a memory.
 
 ## File Ingestion & Export
 

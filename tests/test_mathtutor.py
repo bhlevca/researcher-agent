@@ -147,6 +147,82 @@ class TestGeneration:
             g.generate("no_such_topic", "grade8", 3)
 
 
+class TestLanguages:
+    """English, French and Romanian.
+
+    The bar is not "does it produce something" but "is it the language a
+    teacher would recognise": a half-translated sheet with English sentences
+    scattered through the French is worse than not offering French at all.
+    """
+
+    def test_catalogue_is_complete(self):
+        from researcher.mathtutor import i18n
+
+        assert not i18n.missing(), f"untranslated phrases: {i18n.missing()[:10]}"
+
+    def test_every_topic_translates(self):
+        """No topic may fall back to English in another language."""
+        import re
+
+        # Words that exist in English but in neither French nor Romanian.
+        english = re.compile(
+            r"\b(Find|Solve|Simplify|Given|Evaluate|Convert|Which|Prove|Share|"
+            r"Differentiate|the|and|with|of|shaded|sides|height|width|length|"
+            r"holds|weighs|inscribed|similar|roots|Assume|Collect)\b")
+        leaks = []
+        for t in g.available_topics():
+            for lang in ("fr", "ro"):
+                for p in g.generate(t, "grade11", 4, seed=9, lang=lang):
+                    for field in (p.question, p.answer, *p.steps):
+                        for frag in re.findall(r"\\text\{([^{}]*)\}", field):
+                            if english.search(frag):
+                                leaks.append((t, lang, frag[:40]))
+        assert not leaks, f"English in a translated sheet: {leaks[:8]}"
+
+    def test_every_topic_fills_a_sheet_in_each_language(self):
+        short = []
+        for t in g.available_topics():
+            for lang in ("en", "fr", "ro"):
+                if len(g.generate(t, "grade11", 4, seed=2, lang=lang)) != 4:
+                    short.append((t, lang))
+        assert not short, short
+
+    def test_answers_do_not_depend_on_language(self):
+        """Translation must change the wording and nothing else."""
+        for t in ("quadratics", "pythagoras", "sectors_arcs", "geometry_3d"):
+            en = g.generate(t, "grade11", 5, seed=31, lang="en")
+            fr = g.generate(t, "grade11", 5, seed=31, lang="fr")
+            assert [p.answer for p in en] == [p.answer for p in fr], t
+            assert [p.figure for p in en] == [p.figure for p in fr], t
+
+    def test_bilingual_fills_both_fields(self):
+        for p in g.generate("sectors_arcs", "grade10", 4, seed=5, lang="fr+en"):
+            assert p.question and p.question_alt
+            assert p.question != p.question_alt
+            assert "\x00" not in p.question and "\x00" not in p.question_alt
+
+    def test_decimal_comma_in_french_and_romanian(self):
+        """French and Romanian write 4,4 — printing 4.4 marks the sheet as a
+        translation rather than something written in the language."""
+        from researcher.mathtutor.i18n import fmt_num
+
+        assert fmt_num(4.4, "fr") == "4,4"
+        assert fmt_num(4.4, "ro") == "4,4"
+        assert fmt_num(4.4, "en") == "4.4"
+
+    def test_sheets_compile_in_every_language(self):
+        from researcher.mathtutor import worksheet as w
+
+        if not w.latex_available():
+            pytest.skip("pdflatex not installed")
+        for lang in ("en", "fr", "ro", "fr+en", "ro+en"):
+            probs = g.generate("circle_theorems", "grade10", 2, seed=6, lang=lang)
+            probs += g.generate("geometry_3d", "grade10", 2, seed=6, lang=lang)
+            pdf = w.render_pdf(probs, "T", "Grade 10", "grade10",
+                               answers=True, lang=lang)
+            assert pdf and pdf[:4] == b"%PDF", f"{lang} failed to compile"
+
+
 class TestLatexSafety:
     """Characters that break silently in LaTeX.
 
@@ -155,16 +231,25 @@ class TestLatexSafety:
     reading the printed sheet revealed it. Nothing non-ASCII goes to LaTeX now.
     """
 
-    def test_no_generator_emits_non_ascii(self):
+    def test_no_non_ascii_in_mathematics(self):
+        r"""Accented letters are fine inside \text{}; nothing else is.
+
+        French and Romanian need é, ș, ț, so the rule cannot be "ASCII only".
+        It is the MATHEMATICS that must stay ASCII — that is where the degree
+        sign silently became r-caron.
+        """
+        import re
+
         bad = []
         for t in g.available_topics():
-            for p in g.generate(t, "grade10", 6, seed=12):
-                for field, text in (("question", p.question), ("answer", p.answer),
-                                    *[(f"step{i}", s) for i, s in enumerate(p.steps)]):
-                    stray = {c for c in text if ord(c) > 127}
-                    if stray:
-                        bad.append((t, field, stray))
-        assert not bad, f"non-ASCII reaching LaTeX: {bad[:8]}"
+            for lang in ("en", "fr", "ro"):
+                for p in g.generate(t, "grade10", 4, seed=12, lang=lang):
+                    for text in (p.question, p.answer, *p.steps):
+                        maths = re.sub(r"\\text\{[^{}]*\}", "", text)
+                        stray = {c for c in maths if ord(c) > 127}
+                        if stray:
+                            bad.append((t, lang, stray))
+        assert not bad, f"non-ASCII in math mode: {bad[:8]}"
 
     def test_degrees_are_typeset_as_degrees(self):
         """Not just absent — actually rendered."""

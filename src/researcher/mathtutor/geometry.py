@@ -17,6 +17,8 @@ import math
 import random
 import logging
 
+from researcher.mathtutor.i18n import T
+
 logger = logging.getLogger(__name__)
 
 # A deliberately plain look: black on white, thin lines, no grid unless the
@@ -638,7 +640,7 @@ def _fig_analytic(s: dict, fmt: str) -> bytes:
 # ---------------------------------------------------------------------------
 
 
-def gen_shapes_2d(rng: random.Random, level: str):
+def gen_shapes_2d(rng: random.Random, level: str, lang: str = "en"):
     from researcher.mathtutor.generators import Problem
 
     from researcher.mathtutor.generators import _grade
@@ -647,30 +649,31 @@ def gen_shapes_2d(rng: random.Random, level: str):
               ("heptagon", 7), ("octagon", 8)]
     name, sides = rng.choice(shapes)
     grade = _grade(level)
-    article = "an" if name[0] in "aeiou" else "a"
+    shape_name = T(f"shape_{name}", lang)
 
     if grade <= 3:
         # Young children count the picture; the name is what they are learning,
         # so it must not be the thing the question withholds.
         ask = rng.choice(["sides", "corners"])
         return Problem(
-            question=rf"\text{{This shape is {article} {name}. "
-                     rf"How many {ask} does it have?}}",
+            question=T("shape_named_count", lang, name=shape_name,
+                       what=T(f"count_{ask}", lang)),
             answer=str(sides),
             figure=draw_polygon(sides, rotate=rng.choice([0, 15, 30]),
                                 marks=(ask == "corners")),
             topic="shapes_2d", level=level)
 
-    ask = rng.choice(["sides", "vertices", "lines of symmetry"])
+    ask = rng.choice(["sides", "vertices", "lines_of_symmetry"])
     answer = sides          # a regular n-gon has n of each
     return Problem(
-        question=rf"\text{{How many {ask} does a regular {name} have?}}",
+        question=T("regular_polygon_count", lang, name=shape_name,
+                   what=T(f"count_{ask}", lang)),
         answer=str(answer),
         figure=draw_polygon(sides, rotate=rng.choice([0, 15, 30])),
         topic="shapes_2d", level=level)
 
 
-def gen_area_perimeter(rng: random.Random, level: str):
+def gen_area_perimeter(rng: random.Random, level: str, lang: str = "en"):
     from researcher.mathtutor.generators import Problem
 
     w, h = rng.randint(3, 15), rng.randint(3, 12)
@@ -679,7 +682,8 @@ def gen_area_perimeter(rng: random.Random, level: str):
     # Keep the exponent in MATH mode: \text{cm^2} is invalid LaTeX.
     unit = r"\text{cm}^2" if want == "area" else r"\text{cm}"
     return Problem(
-        question=rf"\text{{Find the {want} of this rectangle.}}",
+        question=T("find_area_rectangle" if want == "area"
+                   else "find_perimeter_rectangle", lang),
         answer=rf"{ans}\ {unit}",
         steps=[rf"{w} \times {h} = {w*h}" if want == "area"
                else rf"2({w} + {h}) = {2*(w+h)}"],
@@ -687,29 +691,29 @@ def gen_area_perimeter(rng: random.Random, level: str):
         figure=draw_rectangle(w, h, f"{w} cm", f"{h} cm"))
 
 
-def gen_angles_basic(rng: random.Random, level: str):
+def gen_angles_basic(rng: random.Random, level: str, lang: str = "en"):
     from researcher.mathtutor.generators import Problem
 
     known = rng.randint(25, 150)
     kind = rng.choice(["straight", "triangle"])
     if kind == "straight":
         return Problem(
-            question=(rf"\text{{Angles on a straight line. One angle is }}{known}^\circ."
-                      rf"\text{{ Find the other.}}"),
+            question=T("angles_on_straight_line", lang,
+                       a=rf"{known}^\circ"),
             answer=rf"{180-known}^\circ",
             steps=[rf"180^\circ - {known}^\circ = {180-known}^\circ"],
             topic="angles_basic", level=level)
     a = rng.randint(30, 80)
     b = rng.randint(30, 180 - a - 20)
     return Problem(
-        question=(rf"\text{{A triangle has angles }}{a}^\circ \text{{ and }} {b}^\circ."
-                  rf"\text{{ Find the third angle.}}"),
+        question=T("triangle_third_angle", lang, a=rf"{a}^\circ",
+                   b=rf"{b}^\circ"),
         answer=rf"{180-a-b}^\circ",
         steps=[rf"180^\circ - {a}^\circ - {b}^\circ = {180-a-b}^\circ"],
         topic="angles_basic", level=level)
 
 
-def gen_area_compound(rng: random.Random, level: str):
+def gen_area_compound(rng: random.Random, level: str, lang: str = "en"):
     from researcher.mathtutor.generators import Problem
 
     w1, h1 = rng.randint(4, 10), rng.randint(3, 8)
@@ -718,13 +722,13 @@ def gen_area_compound(rng: random.Random, level: str):
     parts = [{"x": 0, "y": 0, "w": w1, "h": h1},
              {"x": w1, "y": 0, "w": w2, "h": h2}]
     return Problem(
-        question=r"\text{Find the total area of this compound shape.}",
+        question=T("find_area_compound", lang),
         answer=rf"{total}\ \text{{cm}}^2",
         steps=[rf"({w1}\times{h1}) + ({w2}\times{h2}) = {w1*h1} + {w2*h2} = {total}"],
         topic="area_compound", level=level, figure=draw_compound(parts))
 
 
-def gen_coordinates(rng: random.Random, level: str):
+def gen_coordinates(rng: random.Random, level: str, lang: str = "en"):
     from researcher.mathtutor.generators import Problem
     import sympy as sp
 
@@ -734,14 +738,14 @@ def gen_coordinates(rng: random.Random, level: str):
         x2, y2 = rng.randint(-6, 6), rng.randint(-6, 6)
     mid = (sp.Rational(x1 + x2, 2), sp.Rational(y1 + y2, 2))
     return Problem(
-        question=(rf"\text{{Find the midpoint of }} A({x1}, {y1}) "
-                  rf"\text{{ and }} B({x2}, {y2})"),
+        question=T("find_midpoint", lang, A=f"A({x1}, {y1})",
+                   B=f"B({x2}, {y2})"),
         answer=rf"\left({sp.latex(mid[0])}, {sp.latex(mid[1])}\right)",
         topic="coordinates", level=level,
         figure=draw_coordinates([(x1, y1), (x2, y2)]))
 
 
-def gen_pythagoras(rng: random.Random, level: str):
+def gen_pythagoras(rng: random.Random, level: str, lang: str = "en"):
     from researcher.mathtutor.generators import Problem
     import sympy as sp
 
@@ -755,14 +759,14 @@ def gen_pythagoras(rng: random.Random, level: str):
         a, b = rng.randint(2, 11), rng.randint(2, 11)
         ans = sp.latex(sp.sqrt(a**2 + b**2))
     return Problem(
-        question=r"\text{Find the length of the hypotenuse, in exact form.}",
+        question=T("pythagoras_find", lang, x="c"),
         answer=rf"{ans}\ \text{{cm}}",
         steps=[rf"c^2 = {a}^2 + {b}^2 = {a**2 + b**2}"],
         topic="pythagoras", level=level,
-        figure=draw_right_triangle(a, b, "?", f"{a} cm", f"{b} cm"))
+        figure=draw_right_triangle(a, b, "c", f"{a} cm", f"{b} cm"))
 
 
-def gen_circle_geometry(rng: random.Random, level: str):
+def gen_circle_geometry(rng: random.Random, level: str, lang: str = "en"):
     from researcher.mathtutor.generators import Problem
     import sympy as sp
 
@@ -772,14 +776,15 @@ def gen_circle_geometry(rng: random.Random, level: str):
     # Keep the exponent in MATH mode: \text{cm^2} is invalid LaTeX.
     unit = r"\text{cm}^2" if want == "area" else r"\text{cm}"
     return Problem(
-        question=rf"\text{{Find the {want} of this circle, in terms of }} \pi.",
+        question=T("find_area_circle_pi" if want == "area"
+                   else "find_circumference_pi", lang, pi=r"\pi"),
         answer=rf"{sp.latex(ans)}\ {unit}",
         steps=[rf"A = \pi r^2 = \pi \times {r}^2" if want == "area"
                else rf"C = 2\pi r = 2\pi \times {r}"],
         topic="circle_geometry", level=level, figure=draw_circle(r))
 
 
-def gen_straight_line(rng: random.Random, level: str):
+def gen_straight_line(rng: random.Random, level: str, lang: str = "en"):
     from researcher.mathtutor.generators import Problem
     import sympy as sp
 
@@ -789,8 +794,8 @@ def gen_straight_line(rng: random.Random, level: str):
     m = sp.Rational(y2 - y1, x2 - x1)
     c = sp.nsimplify(y1 - m * x1)
     return Problem(
-        question=(rf"\text{{Find the equation of the line through }} "
-                  rf"({x1}, {y1}) \text{{ and }} ({x2}, {y2})"),
+        question=T("find_line_equation", lang, A=f"({x1}, {y1})",
+                   B=f"({x2}, {y2})"),
         answer=rf"y = {sp.latex(m)}x + {sp.latex(c)}" if c >= 0
                else rf"y = {sp.latex(m)}x - {sp.latex(abs(c))}",
         steps=[rf"m = \frac{{{y2}-{y1}}}{{{x2}-{x1}}} = {sp.latex(m)}"],
@@ -798,7 +803,7 @@ def gen_straight_line(rng: random.Random, level: str):
         figure=draw_coordinates([(x1, y1), (x2, y2)], line=(float(m), float(c))))
 
 
-def gen_trigonometry(rng: random.Random, level: str):
+def gen_trigonometry(rng: random.Random, level: str, lang: str = "en"):
     from researcher.mathtutor.generators import Problem
     import sympy as sp
 
@@ -806,8 +811,7 @@ def gen_trigonometry(rng: random.Random, level: str):
     angle = rng.choice([25, 30, 35, 40, 45, 50, 55, 60, 65])
     opp = sp.tan(sp.rad(angle)) * adj
     return Problem(
-        question=(rf"\text{{Find the length marked }} x, "
-                  rf"\text{{ to 3 significant figures.}}"),
+        question=T("trig_find_marked", lang, x="x"),
         answer=rf"{float(opp):.3g}\ \text{{cm}}",
         steps=[rf"\tan {angle}^\circ = \frac{{x}}{{{adj}}}",
                rf"x = {adj}\tan {angle}^\circ"],
@@ -815,7 +819,7 @@ def gen_trigonometry(rng: random.Random, level: str):
         figure=draw_right_triangle(float(opp), adj, "x", "x", f"{adj} cm"))
 
 
-def gen_sine_cosine_rule(rng: random.Random, level: str):
+def gen_sine_cosine_rule(rng: random.Random, level: str, lang: str = "en"):
     from researcher.mathtutor.generators import Problem
     import sympy as sp
 
@@ -824,8 +828,7 @@ def gen_sine_cosine_rule(rng: random.Random, level: str):
     c2 = a**2 + b**2 - 2 * a * b * sp.cos(sp.rad(C))
     c = sp.sqrt(c2)
     return Problem(
-        question=(rf"\text{{Use the cosine rule to find the third side, }}"
-                  rf"\text{{to 3 significant figures.}}"),
+        question=T("cosine_rule_third_side", lang),
         answer=rf"{float(c):.3g}\ \text{{cm}}",
         steps=[rf"c^2 = a^2 + b^2 - 2ab\cos C",
                rf"c^2 = {a}^2 + {b}^2 - 2({a})({b})\cos {C}^\circ"],
@@ -833,7 +836,7 @@ def gen_sine_cosine_rule(rng: random.Random, level: str):
         figure=draw_triangle_sides(a, b, C))
 
 
-def gen_vectors_2d(rng: random.Random, level: str):
+def gen_vectors_2d(rng: random.Random, level: str, lang: str = "en"):
     from researcher.mathtutor.generators import Problem
     import sympy as sp
 
@@ -841,29 +844,30 @@ def gen_vectors_2d(rng: random.Random, level: str):
     b1, b2 = rng.randint(-6, 6), rng.randint(-6, 6)
     mag = sp.sqrt((a1 + b1) ** 2 + (a2 + b2) ** 2)
     return Problem(
-        question=(rf"\text{{Given }} \mathbf{{a}} = \binom{{{a1}}}{{{a2}}} "
-                  rf"\text{{ and }} \mathbf{{b}} = \binom{{{b1}}}{{{b2}}}, "
-                  rf"\text{{ find }} |\mathbf{{a}} + \mathbf{{b}}| \text{{ in exact form.}}"),
+        question=T("vectors_2d_magnitude_sum", lang,
+                   a=rf"\mathbf{{a}} = \binom{{{a1}}}{{{a2}}}",
+                   b=rf"\mathbf{{b}} = \binom{{{b1}}}{{{b2}}}",
+                   expr=r"|\mathbf{a} + \mathbf{b}|"),
         answer=sp.latex(sp.sqrt(sp.Integer((a1 + b1) ** 2 + (a2 + b2) ** 2))),
         steps=[rf"\mathbf{{a}}+\mathbf{{b}} = \binom{{{a1+b1}}}{{{a2+b2}}}"],
         topic="vectors_2d", level=level)
 
 
-def gen_transformations(rng: random.Random, level: str):
+def gen_transformations(rng: random.Random, level: str, lang: str = "en"):
     from researcher.mathtutor.generators import Problem
 
     x, y = rng.randint(-6, 6), rng.randint(-6, 6)
-    kind = rng.choice(["x-axis", "y-axis", "origin"])
-    img = {"x-axis": (x, -y), "y-axis": (-x, y), "origin": (-x, -y)}[kind]
+    kind = rng.choice(["x", "y", "origin"])
+    img = {"x": (x, -y), "y": (-x, y), "origin": (-x, -y)}[kind]
     return Problem(
-        question=(rf"\text{{Reflect the point }} ({x}, {y}) "
-                  rf"\text{{ in the {kind}.}}"),
+        question=T("reflect_point", lang, p=f"({x}, {y})",
+                   axis=T(f"axis_{kind}", lang)),
         answer=rf"({img[0]}, {img[1]})",
         topic="transformations", level=level,
         figure=draw_coordinates([(x, y), img]))
 
 
-def gen_measure_length(rng: random.Random, level: str):
+def gen_measure_length(rng: random.Random, level: str, lang: str = "en"):
     from researcher.mathtutor.generators import Problem
 
     from researcher.mathtutor.generators import _grade
@@ -877,27 +881,26 @@ def gen_measure_length(rng: random.Random, level: str):
         # The noun and the comparative travel with the unit: a word problem that
         # says "a ribbon is 9 L long" teaches a child that litres measure
         # length, which is worse than asking nothing at all.
-        unit, noun, verb, longer, total = rng.choice([
-            ("cm", "ribbon", "long", "longer", "long are they together"),
-            ("m", "rope", "long", "longer", "long are they together"),
-            ("kg", "parcel", "heavy", "heavier", "heavy are they together"),
-            ("L", "jug", "full", "more", "much do they hold together"),
+        # Keyed by the QUANTITY, not by an English noun: "longer" and "heavier"
+        # are one word in some languages and a different construction in others,
+        # so each quantity gets its own frame rather than a swapped adjective.
+        unit, quantity = rng.choice([
+            ("cm", "longer"), ("m", "longer"),
+            ("kg", "heavier"), ("L", "more"),
         ])
+        total_key = {"longer": "total_length", "heavier": "total_mass",
+                     "more": "total_volume"}[quantity]
         a, b = rng.sample(range(2, 20), 2)
         if rng.random() < 0.5:
             return Problem(
-                question=rf"\text{{Which is {longer}: }} {a}\ \text{{{unit}}} "
-                         rf"\text{{ or }} {b}\ \text{{{unit}}}?",
+                question=T(f"which_is_{quantity}", lang,
+                           a=rf"{a}\ \text{{{unit}}}",
+                           b=rf"{b}\ \text{{{unit}}}"),
                 answer=rf"{max(a, b)}\ \text{{{unit}}}",
                 topic="measure_length", level=level)
         return Problem(
-            question=rf"\text{{One {noun} holds }} {a}\ \text{{{unit}}}"
-                     rf"\text{{. Another holds }} {b}\ \text{{{unit}}}"
-                     rf"\text{{. How {total}?}}"
-            if unit == "L" else
-            rf"\text{{One {noun} is }} {a}\ \text{{{unit}}} "
-            rf"\text{{{verb}. Another is }} {b}\ \text{{{unit}}}"
-            rf"\text{{. How {total}?}}",
+            question=T(total_key, lang, a=rf"{a}\ \text{{{unit}}}",
+                       b=rf"{b}\ \text{{{unit}}}"),
             answer=rf"{a + b}\ \text{{{unit}}}",
             topic="measure_length", level=level)
 
@@ -907,7 +910,8 @@ def gen_measure_length(rng: random.Random, level: str):
     if grade <= 4:
         val = rng.randint(2, 20)
         return Problem(
-            question=rf"\text{{Convert }} {val}\ \text{{{frm} to {to}}}",
+            question=T("convert_units", lang, v=rf"{val}\ \text{{{frm}}}",
+                       unit=rf"\text{{{to}}}"),
             answer=rf"{val * factor}\ \text{{{to}}}",
             topic="measure_length", level=level)
 
@@ -916,12 +920,14 @@ def gen_measure_length(rng: random.Random, level: str):
     if rng.random() < 0.5:
         val = round(rng.uniform(1.5, 9.5), 1)
         return Problem(
-            question=rf"\text{{Convert }} {val}\ \text{{{frm} to {to}}}",
+            question=T("convert_units", lang, v=rf"{val}\ \text{{{frm}}}",
+                       unit=rf"\text{{{to}}}"),
             answer=rf"{val * factor:g}\ \text{{{to}}}",
             topic="measure_length", level=level)
     big = rng.randint(2, 95) * factor // rng.choice([1, 2, 4])
     return Problem(
-        question=rf"\text{{Convert }} {big}\ \text{{{to} to {frm}}}",
+        question=T("convert_units", lang, v=rf"{big}\ \text{{{to}}}",
+                   unit=rf"\text{{{frm}}}"),
         answer=rf"{big / factor:g}\ \text{{{frm}}}",
         topic="measure_length", level=level)
 
@@ -975,7 +981,7 @@ def _line_eq(m, c) -> str:
     return f"y = {term} {sign} {_latex(abs(c))}"
 
 
-def gen_circle_theorems(rng: random.Random, level: str):
+def gen_circle_theorems(rng: random.Random, level: str, lang: str = "en"):
     """The circle theorems, each with the configuration drawn.
 
     These are the backbone of a real geometry course and are almost absent from
@@ -993,19 +999,18 @@ def gen_circle_theorems(rng: random.Random, level: str):
         ask_centre = rng.random() < 0.5
         pts = {"A": 200, "B": 340, "P": 80}
         if ask_centre:
-            q = (r"\text{O is the centre. }\angle APB = " rf"{x}^\circ"
-                 r"\text{. Find }\angle AOB\text{, giving a reason.}")
+            q = T("circle_centre_find_inscribed", lang,
+                  given=rf"\angle APB = {x}^\circ", asked=r"\angle AOB")
             ans = rf"\angle AOB = {centre}^\circ"
             labels = {"P": f"{x}°", "O": "?"}
         else:
-            q = (r"\text{O is the centre. }\angle AOB = " rf"{centre}^\circ"
-                 r"\text{. Find }\angle APB\text{, giving a reason.}")
+            q = T("circle_centre_find_inscribed", lang,
+                  given=rf"\angle AOB = {centre}^\circ", asked=r"\angle APB")
             ans = rf"\angle APB = {x}^\circ"
             labels = {"O": f"{centre}°", "P": "?"}
         return Problem(
             question=q, answer=ans,
-            steps=[r"\text{The angle at the centre is twice the angle at the "
-                   r"circumference on the same arc.}"],
+            steps=[T("reason_angle_at_centre", lang)],
             topic="circle_theorems", level=level,
             figure=draw_circle_theorem("centre_angle", pts, labels))
 
@@ -1013,11 +1018,11 @@ def gen_circle_theorems(rng: random.Random, level: str):
         a = rng.randrange(20, 71)
         other = 90 - a
         return Problem(
-            question=(r"\text{AB is a diameter. }\angle BAP = " rf"{a}^\circ"
-                      r"\text{. Find }\angle ABP\text{, giving a reason.}"),
+            question=T("circle_diameter_find", lang, AB="AB",
+                       given=rf"\angle BAP = {a}^\circ", asked=r"\angle ABP"),
             answer=rf"\angle ABP = {other}^\circ",
-            steps=[r"\text{The angle in a semicircle is } 90^\circ "
-                   r"\text{, so } \angle APB = 90^\circ",
+            steps=[T("reason_angle_in_semicircle", lang, right=r"90^\circ",
+                     conclusion=r"\angle APB = 90^\circ"),
                    rf"180^\circ - 90^\circ - {a}^\circ = {other}^\circ"],
             topic="circle_theorems", level=level,
             figure=draw_circle_theorem("semicircle", {"A": 180, "B": 0, "P": 70},
@@ -1026,11 +1031,10 @@ def gen_circle_theorems(rng: random.Random, level: str):
     if variant == "same_segment":
         a = rng.randrange(22, 76)
         return Problem(
-            question=(r"\text{P and Q lie on the same arc. }\angle APB = "
-                      rf"{a}^\circ" r"\text{. Find }\angle AQB"
-                      r"\text{, giving a reason.}"),
+            question=T("circle_same_arc_find", lang,
+                       given=rf"\angle APB = {a}^\circ", asked=r"\angle AQB"),
             answer=rf"\angle AQB = {a}^\circ",
-            steps=[r"\text{Angles in the same segment are equal.}"],
+            steps=[T("reason_same_segment", lang)],
             topic="circle_theorems", level=level,
             figure=draw_circle_theorem("same_segment",
                                        {"A": 200, "B": 340, "P": 80, "Q": 130},
@@ -1039,12 +1043,10 @@ def gen_circle_theorems(rng: random.Random, level: str):
     if variant == "cyclic_quad":
         a = rng.randrange(65, 126)
         return Problem(
-            question=(r"\text{ABCD is a cyclic quadrilateral. }\angle DAB = "
-                      rf"{a}^\circ" r"\text{. Find }\angle BCD"
-                      r"\text{, giving a reason.}"),
+            question=T("circle_cyclic_quad_find", lang,
+                       given=rf"\angle DAB = {a}^\circ", asked=r"\angle BCD"),
             answer=rf"\angle BCD = {180 - a}^\circ",
-            steps=[r"\text{Opposite angles of a cyclic quadrilateral sum to }"
-                   r"180^\circ",
+            steps=[T("reason_cyclic_quad", lang, straight=r"180^\circ"),
                    rf"180^\circ - {a}^\circ = {180 - a}^\circ"],
             topic="circle_theorems", level=level,
             figure=draw_circle_theorem("cyclic_quad",
@@ -1054,18 +1056,16 @@ def gen_circle_theorems(rng: random.Random, level: str):
     # tangent_radius
     a = rng.randrange(25, 66)
     return Problem(
-        question=(r"\text{TA is a tangent to the circle, centre O. The angle "
-                  r"between TA and the chord AO is }" rf"{90 - a}^\circ"
-                  r"\text{. Find }\angle AOT\text{ in triangle OAT, giving a "
-                  r"reason.}"),
+        question=T("circle_tangent_find", lang, given=rf"{90 - a}^\circ",
+                   asked=r"\angle AOT"),
         answer=rf"\angle AOT = {a}^\circ",
-        steps=[r"\text{A tangent meets a radius at } 90^\circ",
+        steps=[T("reason_tangent_radius", lang, right=r"90^\circ"),
                rf"180^\circ - 90^\circ - {90 - a}^\circ = {a}^\circ"],
         topic="circle_theorems", level=level,
         figure=draw_circle_theorem("tangent", {"A": 40}, {"A": "90°"}))
 
 
-def gen_inscribed_shapes(rng: random.Random, level: str):
+def gen_inscribed_shapes(rng: random.Random, level: str, lang: str = "en"):
     r"""Shaded-area problems: a circle inside a shape, or a shape inside a circle.
 
     The classic exercise of the Eastern European syllabus, and the one that
@@ -1085,12 +1085,12 @@ def gen_inscribed_shapes(rng: random.Random, level: str):
         s = rng.choice([4, 6, 8, 10, 12, 14])
         shaded = sp.nsimplify(s**2 - sp.pi * (sp.Rational(s, 2))**2)
         return Problem(
-            question=(rf"\text{{A circle is inscribed in a square of side }} {s}"
-                      r"\text{ cm. Find the shaded area, in terms of }\pi."),
+            question=T("circle_in_square_shaded", lang, s=s, pi=r"\pi"),
             answer=rf"{_exact(sp.simplify(shaded))}\ \text{{cm}}^{{2}}",
-            steps=[rf"\text{{Square}} = {s}^{{2}} = {s**2}",
-                   rf"\text{{Circle}} = \pi \left(\frac{{{s}}}{{2}}\right)^{{2}}"
-                   rf" = {latex(sp.pi * sp.Rational(s, 2)**2)}"],
+            steps=[T("step_square_area", lang, expr=f"{s}^{{2}} = {s**2}"),
+                   T("step_circle_area", lang,
+                     expr=(rf"\pi \left(\frac{{{s}}}{{2}}\right)^{{2}} "
+                           rf"= {latex(sp.pi * sp.Rational(s, 2)**2)}"))],
             topic="inscribed_shapes", level=level,
             figure=draw_inscribed("circle_in_square", s))
 
@@ -1099,13 +1099,13 @@ def gen_inscribed_shapes(rng: random.Random, level: str):
         # The diagonal of the square is the diameter, so the side is r*sqrt(2).
         shaded = sp.simplify(sp.pi * r**2 - 2 * r**2)
         return Problem(
-            question=(rf"\text{{A square is inscribed in a circle of radius }} {r}"
-                      r"\text{ cm. Find the shaded area, in terms of }\pi."),
+            question=T("square_in_circle_shaded", lang, r=r, pi=r"\pi"),
             answer=rf"{_exact(shaded)}\ \text{{cm}}^{{2}}",
-            steps=[r"\text{The diagonal of the square is the diameter, so the "
-                   rf"side is }} {r}\sqrt{{2}}",
-                   rf"\text{{Square}} = \left({r}\sqrt{{2}}\right)^{{2}} = {2*r**2}",
-                   rf"\text{{Circle}} = {latex(sp.pi * r**2)}"],
+            steps=[T("step_diagonal_is_diameter", lang,
+                     expr=rf"{r}\sqrt{{2}}"),
+                   T("step_square_area", lang,
+                     expr=rf"\left({r}\sqrt{{2}}\right)^{{2}} = {2*r**2}"),
+                   T("step_circle_area", lang, expr=latex(sp.pi * r**2))],
             topic="inscribed_shapes", level=level,
             figure=draw_inscribed("square_in_circle", r))
 
@@ -1114,13 +1114,10 @@ def gen_inscribed_shapes(rng: random.Random, level: str):
         # Four quarter-circles of radius s/2 make exactly one full circle.
         shaded = sp.simplify(s**2 - sp.pi * sp.Rational(s, 2)**2)
         return Problem(
-            question=(r"\text{A quarter circle is drawn at each corner of a "
-                      rf"square of side }} {s} \text{{ cm, each of radius }} "
-                      rf"{s // 2} \text{{ cm. Find the shaded area, in "
-                      r"terms of }\pi."),
+            question=T("quarter_circles_shaded", lang, s=s, r=s // 2,
+                       pi=r"\pi"),
             answer=rf"{_exact(shaded)}\ \text{{cm}}^{{2}}",
-            steps=[r"\text{Four quarter circles make one whole circle of radius }"
-                   rf"{s // 2}",
+            steps=[T("step_four_quarters", lang, r=s // 2),
                    rf"{s**2} - {latex(sp.pi * sp.Rational(s, 2)**2)}"],
             topic="inscribed_shapes", level=level,
             figure=draw_inscribed("quarter_circles", s))
@@ -1131,17 +1128,19 @@ def gen_inscribed_shapes(rng: random.Random, level: str):
     inr = sp.simplify(s / (2 * sp.sqrt(3)))
     shaded = sp.simplify(tri - sp.pi * inr**2)
     return Problem(
-        question=(r"\text{A circle is inscribed in an equilateral triangle of "
-                  rf"side }} {s} \text{{ cm. Find the shaded area, in exact form.}}"),
+        question=T("circle_in_triangle_shaded", lang, s=s),
         answer=rf"{_exact(shaded)}\ \text{{cm}}^{{2}}",
-        steps=[rf"\text{{Triangle}} = \frac{{\sqrt{{3}}}}{{4}}({s})^{{2}} = {latex(tri)}",
-               rf"\text{{Inradius}} = \frac{{{s}}}{{2\sqrt{{3}}}} = {latex(inr)}",
-               rf"\text{{Circle}} = \pi r^{{2}} = {latex(sp.simplify(sp.pi * inr**2))}"],
+        steps=[T("step_triangle_area", lang,
+                 expr=rf"\frac{{\sqrt{{3}}}}{{4}}({s})^{{2}} = {latex(tri)}"),
+               T("step_inradius", lang,
+                 expr=rf"\frac{{{s}}}{{2\sqrt{{3}}}} = {latex(inr)}"),
+               T("step_circle_area", lang,
+                 expr=rf"\pi r^{{2}} = {latex(sp.simplify(sp.pi * inr**2))}")],
         topic="inscribed_shapes", level=level,
         figure=draw_inscribed("circle_in_triangle", s))
 
 
-def gen_sectors_arcs(rng: random.Random, level: str):
+def gen_sectors_arcs(rng: random.Random, level: str, lang: str = "en"):
     r"""Arc length, sector area, perimeter and (higher up) segment area."""
     from researcher.mathtutor.generators import Problem, _grade
 
@@ -1158,9 +1157,8 @@ def gen_sectors_arcs(rng: random.Random, level: str):
     if kind == "arc":
         val = sp.simplify(frac * 2 * sp.pi * r)
         return Problem(
-            question=(rf"\text{{A sector has radius }} {r} \text{{ cm and angle }} "
-                      rf"{theta}^\circ" r"\text{. Find the arc length, in terms "
-                      r"of }\pi."),
+            question=T("sector_arc_length", lang, r=r,
+                       theta=rf"{theta}^\circ", pi=r"\pi"),
             answer=rf"{_exact(val)}\ \text{{cm}}",
             steps=[rf"\frac{{{theta}}}{{360}} \times 2\pi({r})"],
             topic="sectors_arcs", level=level,
@@ -1169,8 +1167,8 @@ def gen_sectors_arcs(rng: random.Random, level: str):
     if kind == "area":
         val = sp.simplify(frac * sp.pi * r**2)
         return Problem(
-            question=(rf"\text{{A sector has radius }} {r} \text{{ cm and angle }} "
-                      rf"{theta}^\circ" r"\text{. Find its area, in terms of }\pi."),
+            question=T("sector_area", lang, r=r, theta=rf"{theta}^\circ",
+                       pi=r"\pi"),
             answer=rf"{latex(val)}\ \text{{cm}}^{{2}}",
             steps=[rf"\frac{{{theta}}}{{360}} \times \pi({r})^{{2}}"],
             topic="sectors_arcs", level=level,
@@ -1179,11 +1177,10 @@ def gen_sectors_arcs(rng: random.Random, level: str):
     if kind == "perimeter":
         val = sp.simplify(frac * 2 * sp.pi * r + 2 * r)
         return Problem(
-            question=(rf"\text{{A sector has radius }} {r} \text{{ cm and angle }} "
-                      rf"{theta}^\circ" r"\text{. Find its perimeter, in terms "
-                      r"of }\pi."),
+            question=T("sector_perimeter", lang, r=r, theta=rf"{theta}^\circ",
+                       pi=r"\pi"),
             answer=rf"{_exact(val)}\ \text{{cm}}",
-            steps=[r"\text{Perimeter} = \text{arc} + 2r",
+            steps=[T("step_perimeter_is_arc_plus", lang, expr="2r"),
                    rf"\frac{{{theta}}}{{360}} \times 2\pi({r}) + 2({r})"],
             topic="sectors_arcs", level=level,
             figure=draw_sector(r, theta))
@@ -1194,19 +1191,19 @@ def gen_sectors_arcs(rng: random.Random, level: str):
     sector = sp.simplify(frac * sp.pi * r**2)
     tri = sp.simplify(sp.Rational(1, 2) * r**2 * sp.sin(sp.rad(theta)))
     return Problem(
-        question=(rf"\text{{A chord subtends an angle of }} {theta}^\circ "
-                  rf"\text{{ at the centre of a circle of radius }} {r} "
-                  r"\text{ cm. Find the area of the minor segment, in exact form.}"),
+        question=T("segment_area", lang, theta=rf"{theta}^\circ", r=r),
         answer=rf"{_exact(sp.simplify(sector - tri))}\ \text{{cm}}^{{2}}",
-        steps=[rf"\text{{Sector}} = \frac{{{theta}}}{{360}} \times \pi({r})^{{2}}"
-               rf" = {latex(sector)}",
-               rf"\text{{Triangle}} = \tfrac{{1}}{{2}}({r})^{{2}}\sin {theta}^\circ"
-               rf" = {latex(tri)}"],
+        steps=[T("step_sector_equals", lang,
+                 expr=(rf"\frac{{{theta}}}{{360}} \times \pi({r})^{{2}} "
+                       rf"= {latex(sector)}")),
+               T("step_triangle_area", lang,
+                 expr=(rf"\tfrac{{1}}{{2}}({r})^{{2}}\sin {theta}^\circ "
+                       rf"= {latex(tri)}"))],
         topic="sectors_arcs", level=level,
         figure=draw_sector(r, theta, segment=True))
 
 
-def gen_similar_triangles(rng: random.Random, level: str):
+def gen_similar_triangles(rng: random.Random, level: str, lang: str = "en"):
     """Similar figures: missing sides, and the k^2 / k^3 area and volume ratios.
 
     The area ratio is where almost everyone goes wrong — doubling the lengths
@@ -1225,12 +1222,10 @@ def gen_similar_triangles(rng: random.Random, level: str):
     if kind == "missing_side":
         a2, b2 = sp.simplify(a * k), sp.simplify(b * k)
         return Problem(
-            question=(r"\text{The two triangles are similar. The shorter sides "
-                      rf"are }} {a} \text{{ cm and }} {latex(a2)} "
-                      rf"\text{{ cm. The longer side of the first is }} {b} "
-                      r"\text{ cm. Find the longer side of the second.}"),
+            question=T("similar_missing_side", lang, a=a, a2=latex(a2), b=b),
             answer=rf"{latex(b2)}\ \text{{cm}}",
-            steps=[rf"\text{{Scale factor}} = \frac{{{latex(a2)}}}{{{a}}} = {latex(k)}",
+            steps=[T("step_scale_factor", lang,
+                     expr=rf"\frac{{{latex(a2)}}}{{{a}}} = {latex(k)}"),
                    rf"{b} \times {latex(k)} = {latex(b2)}"],
             topic="similar_triangles", level=level,
             figure=draw_similar(a, b, float(k),
@@ -1241,13 +1236,12 @@ def gen_similar_triangles(rng: random.Random, level: str):
         area1 = rng.choice([12, 18, 20, 24, 32, 40])
         area2 = sp.simplify(area1 * k**2)
         return Problem(
-            question=(r"\text{Two similar triangles have corresponding sides in "
-                      rf"the ratio }} 1 : {latex(k)} \text{{. The smaller has "
-                      rf"area }} {area1} \text{{ cm}}^{{2}} "
-                      r"\text{. Find the area of the larger.}"),
+            question=T("similar_area_ratio", lang, ratio=f"1 : {latex(k)}",
+                       area=rf"{area1}\ \text{{cm}}^{{2}}"),
             answer=rf"{latex(area2)}\ \text{{cm}}^{{2}}",
-            steps=[rf"\text{{Area scale factor}} = \left({latex(k)}\right)^{{2}}"
-                   rf" = {latex(sp.simplify(k**2))}",
+            steps=[T("step_area_scale_factor", lang,
+                     expr=(rf"\left({latex(k)}\right)^{{2}} "
+                           rf"= {latex(sp.simplify(k**2))}")),
                    rf"{area1} \times {latex(sp.simplify(k**2))} = {latex(area2)}"],
             topic="similar_triangles", level=level,
             figure=draw_similar(a, b, float(k), {}))
@@ -1255,18 +1249,17 @@ def gen_similar_triangles(rng: random.Random, level: str):
     vol1 = rng.choice([16, 24, 40, 54, 80])
     vol2 = sp.simplify(vol1 * k**3)
     return Problem(
-        question=(r"\text{Two similar solids have corresponding lengths in the "
-                  rf"ratio }} 1 : {latex(k)} \text{{. The smaller has volume }} "
-                  rf"{vol1} \text{{ cm}}^{{3}}"
-                  r"\text{. Find the volume of the larger.}"),
+        question=T("similar_volume_ratio", lang, ratio=f"1 : {latex(k)}",
+                   vol=rf"{vol1}\ \text{{cm}}^{{3}}"),
         answer=rf"{latex(vol2)}\ \text{{cm}}^{{3}}",
-        steps=[rf"\text{{Volume scale factor}} = \left({latex(k)}\right)^{{3}}"
-               rf" = {latex(sp.simplify(k**3))}",
+        steps=[T("step_volume_scale_factor", lang,
+                 expr=(rf"\left({latex(k)}\right)^{{3}} "
+                       rf"= {latex(sp.simplify(k**3))}")),
                rf"{vol1} \times {latex(sp.simplify(k**3))} = {latex(vol2)}"],
         topic="similar_triangles", level=level)
 
 
-def gen_angle_rules(rng: random.Random, level: str):
+def gen_angle_rules(rng: random.Random, level: str, lang: str = "en"):
     """Angles in parallel lines and polygons, including algebraic forms."""
     from researcher.mathtutor.generators import Problem, _grade
 
@@ -1281,16 +1274,15 @@ def gen_angle_rules(rng: random.Random, level: str):
         a = rng.randrange(35, 146)
         rel = rng.choice(["alternate", "corresponding", "co-interior"])
         if rel == "co-interior":
-            ans, reason = 180 - a, ("Co-interior angles between parallel lines "
-                                    "sum to } 180^\\circ")
+            ans = 180 - a
+            why = T("reason_cointerior_angles", lang, straight=r"180^\circ")
         else:
-            ans, reason = a, (f"{rel.capitalize()} angles between parallel "
-                              "lines are equal.")
+            ans = a
+            why = T(f"reason_{rel}_angles", lang)
         return Problem(
-            question=(rf"\text{{The lines are parallel and one angle is }} {a}^\circ"
-                      r"\text{. Find } x \text{, giving a reason.}"),
+            question=T("parallel_find_x", lang, a=rf"{a}^\circ", x="x"),
             answer=rf"x = {ans}^\circ",
-            steps=[rf"\text{{{reason}}}"],
+            steps=[why],
             topic="angle_rules", level=level,
             figure=draw_parallel_lines(a if rel != "co-interior" else 180 - a,
                                        f"{a}°"))
@@ -1298,8 +1290,7 @@ def gen_angle_rules(rng: random.Random, level: str):
     if kind == "polygon_sum":
         n = rng.randrange(5, 13)
         return Problem(
-            question=(rf"\text{{Find the sum of the interior angles of a polygon "
-                      rf"with }} {n} \text{{ sides.}}"),
+            question=T("polygon_interior_sum", lang, n=n),
             answer=rf"{(n - 2) * 180}^\circ",
             steps=[rf"(n-2) \times 180^\circ = ({n}-2) \times 180^\circ"],
             topic="angle_rules", level=level,
@@ -1309,8 +1300,7 @@ def gen_angle_rules(rng: random.Random, level: str):
         n = rng.choice([5, 6, 8, 9, 10, 12])
         interior = sp.Rational((n - 2) * 180, n)
         return Problem(
-            question=(rf"\text{{Find the size of each interior angle of a regular "
-                      rf"{n}-sided polygon.}}"),
+            question=T("regular_polygon_interior", lang, n=n),
             answer=rf"{latex(interior)}^\circ",
             steps=[rf"\frac{{({n}-2) \times 180^\circ}}{{{n}}}"],
             topic="angle_rules", level=level,
@@ -1321,14 +1311,13 @@ def gen_angle_rules(rng: random.Random, level: str):
         ext = sp.Rational(360, n)
         if rng.random() < 0.5:
             return Problem(
-                question=(rf"\text{{Find the exterior angle of a regular }} {n}"
-                          r"\text{-sided polygon.}"),
+                question=T("regular_polygon_exterior", lang, n=n),
                 answer=rf"{latex(ext)}^\circ",
                 steps=[rf"\frac{{360^\circ}}{{{n}}}"],
                 topic="angle_rules", level=level, figure=draw_polygon(n))
         return Problem(
-            question=(r"\text{A regular polygon has an exterior angle of }"
-                      rf"{latex(ext)}^\circ" r"\text{. How many sides has it?}"),
+            question=T("polygon_sides_from_exterior", lang,
+                       a=rf"{latex(ext)}^\circ"),
             answer=str(n),
             steps=[rf"n = \frac{{360^\circ}}{{{latex(ext)}^\circ}} = {n}"],
             topic="angle_rules", level=level, figure=draw_polygon(n))
@@ -1341,15 +1330,14 @@ def gen_angle_rules(rng: random.Random, level: str):
     angles = [sp.simplify(c * val) for c in coeffs]
     shown = ", ".join(f"{c}x" if c > 1 else "x" for c in coeffs)
     return Problem(
-        question=(rf"\text{{The angles of a triangle are }} {shown} "
-                  r"\text{. Find } x \text{ and the three angles.}"),
+        question=T("triangle_algebraic_angles", lang, angles=shown, x="x"),
         answer=(rf"x = {latex(val)}^\circ, \ "
                 + ", ".join(f"{latex(a)}^\\circ" for a in angles)),
         steps=[rf"{total}x = 180^\circ", rf"x = {latex(val)}^\circ"],
         topic="angle_rules", level=level)
 
 
-def gen_analytic_geometry(rng: random.Random, level: str):
+def gen_analytic_geometry(rng: random.Random, level: str, lang: str = "en"):
     """Coordinate geometry: distance, midpoint, gradient, perpendicular bisector.
 
     Lengths come out as exact surds, which is the whole point of doing it
@@ -1375,8 +1363,7 @@ def gen_analytic_geometry(rng: random.Random, level: str):
     if kind == "distance":
         d = sp.sqrt(dx**2 + dy**2)
         return Problem(
-            question=(rf"\text{{Find the exact distance between }} A{A} "
-                      rf"\text{{ and }} B{B}."),
+            question=T("find_distance_exact", lang, A=f"A{A}", B=f"B{B}"),
             answer=latex(sp.simplify(d)),
             steps=[rf"\sqrt{{({dx})^{{2}} + ({dy})^{{2}}}} = \sqrt{{{dx**2 + dy**2}}}"],
             topic="analytic_geometry", level=level,
@@ -1385,7 +1372,7 @@ def gen_analytic_geometry(rng: random.Random, level: str):
     if kind == "midpoint":
         m = (sp.Rational(A[0] + B[0], 2), sp.Rational(A[1] + B[1], 2))
         return Problem(
-            question=rf"\text{{Find the midpoint of }} A{A} \text{{ and }} B{B}.",
+            question=T("find_midpoint", lang, A=f"A{A}", B=f"B{B}"),
             answer=rf"\left({latex(m[0])}, {latex(m[1])}\right)",
             steps=[r"\left(\frac{x_1+x_2}{2}, \frac{y_1+y_2}{2}\right)"],
             topic="analytic_geometry", level=level,
@@ -1397,7 +1384,7 @@ def gen_analytic_geometry(rng: random.Random, level: str):
 
     if kind == "gradient":
         return Problem(
-            question=rf"\text{{Find the gradient of the line through }} A{A} \text{{ and }} B{B}.",
+            question=T("find_gradient", lang, A=f"A{A}", B=f"B{B}"),
             answer=latex(m),
             steps=[rf"\frac{{{B[1]} - ({A[1]})}}{{{B[0]} - ({A[0]})}} = {latex(m)}"],
             topic="analytic_geometry", level=level,
@@ -1406,8 +1393,8 @@ def gen_analytic_geometry(rng: random.Random, level: str):
     c = sp.simplify(A[1] - m * A[0])
     if kind == "line_equation":
         return Problem(
-            question=(rf"\text{{Find the equation of the line through }} A{A} "
-                      rf"\text{{ and }} B{B} \text{{, in the form }} y = mx + c."),
+            question=T("find_line_equation_form", lang, A=f"A{A}", B=f"B{B}",
+                       form="y = mx + c"),
             answer=_line_eq(m, c),
             steps=[rf"m = {latex(m)}", rf"c = {latex(c)}"],
             topic="analytic_geometry", level=level,
@@ -1419,8 +1406,7 @@ def gen_analytic_geometry(rng: random.Random, level: str):
 
     if kind == "perpendicular":
         return Problem(
-            question=(rf"\text{{A line has gradient }} {latex(m)} "
-                      r"\text{. Find the gradient of a line perpendicular to it.}"),
+            question=T("find_perpendicular_gradient", lang, m=latex(m)),
             answer=latex(mp),
             steps=[rf"m_1 m_2 = -1 \implies m_2 = \frac{{-1}}{{{latex(m)}}}"],
             topic="analytic_geometry", level=level)
@@ -1428,17 +1414,17 @@ def gen_analytic_geometry(rng: random.Random, level: str):
     mid = (sp.Rational(A[0] + B[0], 2), sp.Rational(A[1] + B[1], 2))
     cp = sp.simplify(mid[1] - mp * mid[0])
     return Problem(
-        question=(rf"\text{{Find the equation of the perpendicular bisector of }} "
-                  rf"A{A} \text{{ and }} B{B}."),
+        question=T("find_perpendicular_bisector", lang, A=f"A{A}", B=f"B{B}"),
         answer=_line_eq(mp, cp),
-        steps=[rf"\text{{Midpoint}} = \left({latex(mid[0])}, {latex(mid[1])}\right)",
-               rf"\text{{Gradient of AB}} = {latex(m)}"
-               rf"\text{{, so perpendicular gradient}} = {latex(mp)}"],
+        steps=[T("step_midpoint_is", lang,
+                 p=rf"\left({latex(mid[0])}, {latex(mid[1])}\right)"),
+               T("step_gradient_and_perpendicular", lang, m=latex(m),
+                 mp=latex(mp))],
         topic="analytic_geometry", level=level,
         figure=draw_analytic([A, B], segment=True))
 
 
-def gen_circle_equations(rng: random.Random, level: str):
+def gen_circle_equations(rng: random.Random, level: str, lang: str = "en"):
     """The equation of a circle: reading it off, and completing the square."""
     from researcher.mathtutor.generators import Problem
 
@@ -1451,18 +1437,18 @@ def gen_circle_equations(rng: random.Random, level: str):
     if kind == "read_off":
         lhs = (x - a)**2 + (y - b)**2
         return Problem(
-            question=(rf"\text{{Find the centre and radius of the circle }} "
-                      rf"{latex(lhs)} = {r**2}."),
-            answer=rf"\text{{Centre }}({a}, {b}), \ \text{{radius }} {r}",
+            question=T("circle_centre_radius_from_eq", lang,
+                       eq=f"{latex(lhs)} = {r**2}"),
+            answer=T("answer_centre_radius", lang, c=f"({a}, {b})", r=r),
             topic="circle_equations", level=level,
             figure=draw_analytic([], circle=(a, b, r)))
 
     if kind == "complete_square":
         expanded = sp.expand((x - a)**2 + (y - b)**2 - r**2)
         return Problem(
-            question=(rf"\text{{By completing the square, find the centre and "
-                      rf"radius of }} {latex(expanded)} = 0."),
-            answer=rf"\text{{Centre }}({a}, {b}), \ \text{{radius }} {r}",
+            question=T("circle_complete_square", lang,
+                       eq=f"{latex(expanded)} = 0"),
+            answer=T("answer_centre_radius", lang, c=f"({a}, {b})", r=r),
             steps=[rf"(x {'-' if a >= 0 else '+'} {abs(a)})^{{2}} "
                    rf"+ (y {'-' if b >= 0 else '+'} {abs(b)})^{{2}} = {r**2}"],
             topic="circle_equations", level=level,
@@ -1470,8 +1456,8 @@ def gen_circle_equations(rng: random.Random, level: str):
 
     if kind == "from_centre":
         return Problem(
-            question=(rf"\text{{Find the equation of the circle with centre }} "
-                      rf"({a}, {b}) \text{{ and radius }} {r}."),
+            question=T("circle_equation_from_centre", lang, c=f"({a}, {b})",
+                       r=r),
             answer=rf"{latex((x - a)**2 + (y - b)**2)} = {r**2}",
             topic="circle_equations", level=level,
             figure=draw_analytic([], circle=(a, b, r)))
@@ -1480,16 +1466,16 @@ def gen_circle_equations(rng: random.Random, level: str):
     P = (a - r, b)
     Q = (a + r, b)
     return Problem(
-        question=(rf"\text{{P}}{P} \text{{ and Q}}{Q} \text{{ are the ends of a "
-                  r"diameter. Find the equation of the circle.}"),
+        question=T("circle_equation_from_diameter", lang, P=f"P{P}", Q=f"Q{Q}"),
         answer=rf"{latex((x - a)**2 + (y - b)**2)} = {r**2}",
-        steps=[rf"\text{{Centre is the midpoint}} = ({a}, {b})",
-               rf"\text{{Radius}} = \tfrac{{1}}{{2}} \times {2*r} = {r}"],
+        steps=[T("step_centre_is_midpoint", lang, c=f"({a}, {b})"),
+               T("step_radius_is_half", lang,
+                 expr=rf"\tfrac{{1}}{{2}} \times {2*r} = {r}")],
         topic="circle_equations", level=level,
         figure=draw_analytic([P, Q], circle=(a, b, r)))
 
 
-def gen_geometry_3d(rng: random.Random, level: str):
+def gen_geometry_3d(rng: random.Random, level: str, lang: str = "en"):
     """Solids: volume, surface area, the space diagonal, and angles in 3D.
 
     The space diagonal and the angle a diagonal makes with the base are the
@@ -1513,8 +1499,9 @@ def gen_geometry_3d(rng: random.Random, level: str):
         val = a * b * c if want == "volume" else 2 * (a*b + b*c + a*c)
         unit = "3" if want == "volume" else "2"
         return Problem(
-            question=(rf"\text{{Find the {want} of a cuboid measuring }} "
-                      rf"{a} \times {b} \times {c} \text{{ cm.}}"),
+            question=T("cuboid_volume" if want == "volume"
+                       else "cuboid_surface_area", lang,
+                       dims=rf"{a} \times {b} \times {c}"),
             answer=rf"{val}\ \text{{cm}}^{{{unit}}}",
             steps=[rf"V = {a} \times {b} \times {c}" if want == "volume"
                    else rf"2({a}\cdot{b} + {b}\cdot{c} + {a}\cdot{c})"],
@@ -1527,9 +1514,8 @@ def gen_geometry_3d(rng: random.Random, level: str):
         val = sp.pi * r**2 * h if want == "volume" else 2 * sp.pi * r * h
         unit = "3" if want == "volume" else "2"
         return Problem(
-            question=(rf"\text{{A cylinder has radius }} {r} \text{{ cm and "
-                      rf"height }} {h} \text{{ cm. Find its {want}, in terms "
-                      r"of }\pi."),
+            question=T("cylinder_volume" if want == "volume"
+                       else "cylinder_curved_area", lang, r=r, h=h, pi=r"\pi"),
             answer=rf"{latex(val)}\ \text{{cm}}^{{{unit}}}",
             steps=[rf"\pi r^{{2}} h = \pi({r})^{{2}}({h})" if want == "volume"
                    else rf"2\pi r h = 2\pi({r})({h})"],
@@ -1542,9 +1528,7 @@ def gen_geometry_3d(rng: random.Random, level: str):
         if want == "volume":
             val = sp.simplify(sp.Rational(1, 3) * sp.pi * r**2 * h)
             return Problem(
-                question=(rf"\text{{A cone has radius }} {r} \text{{ cm and "
-                          rf"height }} {h} \text{{ cm. Find its volume, in "
-                          r"terms of }\pi."),
+                question=T("cone_volume", lang, r=r, h=h, pi=r"\pi"),
                 answer=rf"{latex(val)}\ \text{{cm}}^{{3}}",
                 steps=[rf"\tfrac{{1}}{{3}}\pi r^{{2}} h = "
                        rf"\tfrac{{1}}{{3}}\pi({r})^{{2}}({h})"],
@@ -1552,8 +1536,7 @@ def gen_geometry_3d(rng: random.Random, level: str):
                 figure=draw_solid("cone", {"r": r, "h": h}))
         l = sp.sqrt(r**2 + h**2)
         return Problem(
-            question=(rf"\text{{A cone has radius }} {r} \text{{ cm and height }} "
-                      rf"{h} \text{{ cm. Find its slant height, in exact form.}}"),
+            question=T("cone_slant_height", lang, r=r, h=h),
             answer=rf"{latex(sp.simplify(l))}\ \text{{cm}}",
             steps=[rf"l = \sqrt{{{r}^{{2}} + {h}^{{2}}}} = \sqrt{{{r**2 + h**2}}}"],
             topic="geometry_3d", level=level,
@@ -1566,8 +1549,8 @@ def gen_geometry_3d(rng: random.Random, level: str):
                else sp.simplify(4 * sp.pi * r**2))
         unit = "3" if want == "volume" else "2"
         return Problem(
-            question=(rf"\text{{Find the {want} of a sphere of radius }} {r} "
-                      r"\text{ cm, in terms of }\pi."),
+            question=T("sphere_volume" if want == "volume"
+                       else "sphere_surface_area", lang, r=r, pi=r"\pi"),
             answer=rf"{latex(val)}\ \text{{cm}}^{{{unit}}}",
             steps=[rf"\tfrac{{4}}{{3}}\pi r^{{3}}" if want == "volume"
                    else rf"4\pi r^{{2}}"],
@@ -1578,8 +1561,7 @@ def gen_geometry_3d(rng: random.Random, level: str):
         b, h = rng.randrange(3, 13), rng.randrange(4, 16)
         val = sp.simplify(sp.Rational(1, 3) * b**2 * h)
         return Problem(
-            question=(rf"\text{{A pyramid has a square base of side }} {b} "
-                      rf"\text{{ cm and height }} {h} \text{{ cm. Find its volume.}}"),
+            question=T("pyramid_volume", lang, b=b, h=h),
             answer=rf"{latex(val)}\ \text{{cm}}^{{3}}",
             steps=[rf"\tfrac{{1}}{{3}} \times {b}^{{2}} \times {h}"],
             topic="geometry_3d", level=level,
@@ -1589,9 +1571,8 @@ def gen_geometry_3d(rng: random.Random, level: str):
     if kind == "space_diagonal":
         d = sp.sqrt(a**2 + b**2 + c**2)
         return Problem(
-            question=(rf"\text{{Find the length of the space diagonal of a cuboid "
-                      rf"measuring }} {a} \times {b} \times {c} "
-                      r"\text{ cm, in exact form.}"),
+            question=T("cuboid_space_diagonal", lang,
+                       dims=rf"{a} \times {b} \times {c}"),
             answer=rf"{latex(sp.simplify(d))}\ \text{{cm}}",
             steps=[rf"d = \sqrt{{{a}^{{2}} + {b}^{{2}} + {c}^{{2}}}} "
                    rf"= \sqrt{{{a**2 + b**2 + c**2}}}"],
@@ -1602,12 +1583,12 @@ def gen_geometry_3d(rng: random.Random, level: str):
     base = sp.sqrt(a**2 + b**2)
     ang = sp.N(sp.deg(sp.atan(c / base)), 4)
     return Problem(
-        question=(rf"\text{{A cuboid measures }} {a} \times {b} \times {c} "
-                  r"\text{ cm. Find the angle between the space diagonal and "
-                  r"the base, correct to 3 significant figures.}"),
+        question=T("cuboid_angle_to_base", lang,
+                   dims=rf"{a} \times {b} \times {c}"),
         answer=rf"{ang}^\circ",
-        steps=[rf"\text{{Base diagonal}} = \sqrt{{{a}^{{2}} + {b}^{{2}}}} "
-               rf"= {latex(sp.simplify(base))}",
+        steps=[T("step_base_diagonal", lang,
+                 expr=(rf"\sqrt{{{a}^{{2}} + {b}^{{2}}}} "
+                       rf"= {latex(sp.simplify(base))}")),
                rf"\tan\theta = \frac{{{c}}}{{{latex(sp.simplify(base))}}}"],
         topic="geometry_3d", level=level,
         figure=draw_cuboid(a, b, c, diagonal=True))

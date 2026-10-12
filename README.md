@@ -2,7 +2,7 @@
 
 A CrewAI-powered research agent with a browser-based chat UI, voice dialog, image generation, and session management. Runs locally using Ollama — the **client only needs a web browser**.
 
-**Version 2.12.0**
+**Version 2.13.0**
 
 ## Architecture
 
@@ -427,9 +427,33 @@ and circle geometry land in Grade 8, exact form (surds, fractions) is expected
 throughout rather than decimals, and Grades 11–12 cover calculus, complex
 numbers, proof by induction, differential equations and Maclaurin series.
 
+### Languages
+
+Sheets print in **English, French or Romanian**, or in a **pair** — the first
+language leads and the second follows in italics, which is what a child learning
+in a second language actually needs.
+
+Nothing is translated at generation time. The wording comes from
+[`phrases.yaml`](src/researcher/mathtutor/phrases.yaml), a catalogue of ~150
+whole sentence frames written once and checked in. That matters for two reasons:
+
+- **A seed stays a worksheet.** Run the text through a model each time and the
+  French wording drifts between runs, so a reprint would be a different sheet.
+- **Terminology.** French maths says *coefficient directeur*, not "gradient";
+  *médiatrice*, not "bissectrice perpendiculaire". Romanian says *mediatoarea*,
+  *rația*, *patrulater inscriptibil*. A general translator gets these plausibly
+  wrong, which is the worst kind of wrong on a worksheet.
+
+Frames are whole sentences rather than words, so a translation can reorder the
+placeholders; gluing translated words together produces "Trouver le aire de ce
+cercle". Decimals print with a comma in French and Romanian, as they should.
+
+The file is data — edit it and the next sheet changes. A test fails if any
+phrase is missing a language, or if an English sentence reaches a French sheet.
+
 ### Geometry
 
-45 topics, 14 of which draw a figure: right triangles for Pythagoras, circles,
+53 topics, 32 of which draw a figure: right triangles for Pythagoras, circles,
 compound areas, coordinate grids, polygons, SAS triangles for the sine and
 cosine rules. Figures render to SVG for the browser and PDF for printing, in
 black line work only — worksheets get photocopied, and colour turns to grey mush.

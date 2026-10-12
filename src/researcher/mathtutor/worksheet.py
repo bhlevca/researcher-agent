@@ -186,11 +186,28 @@ def _figure_files(problems, workdir: Path) -> dict[int, str]:
     return out
 
 
+# The words printed on the sheet itself, as opposed to in the questions.
+_SHEET_WORDS = {
+    "Worksheet": {"fr": "Feuille d'exercices", "ro": "Fișă de lucru"},
+    "Answer Key": {"fr": "Corrigé", "ro": "Barem de corectare"},
+    "Name": {"fr": "Nom", "ro": "Numele"},
+    "Date": {"fr": "Date", "ro": "Data"},
+    "Answer": {"fr": "Réponse", "ro": "Răspuns"},
+}
+
+
+def _t(word: str, lang: str) -> str:
+    return _SHEET_WORDS.get(word, {}).get(lang, word)
+
+
 def _build_tex(problems, title: str, level_label: str, *,
                answers: bool, figures: dict[int, str],
-               level: str, student: str = "") -> str:
+               level: str, student: str = "", lang: str = "en") -> str:
+    from researcher.mathtutor.i18n import codes
+
     space = _WORK_SPACE.get(level, "3cm")
-    kind = "Answer Key" if answers else "Worksheet"
+    lang_label = codes(lang)[0]
+    kind = _t("Answer Key" if answers else "Worksheet", lang_label)
 
     lines = [_preamble(level)]
     lines.append(rf"\fancyhead[L]{{\small {_escape_text(title)}}}")
@@ -207,7 +224,8 @@ def _build_tex(problems, title: str, level_label: str, *,
         who = (rf"\underline{{\hspace{{1mm}}{_escape_text(student)}"
                rf"\hspace{{6cm}}}}" if student
                else r"\underline{\hspace{6cm}}")
-        lines.append(rf"Name: {who} \hfill Date: "
+        lines.append(rf"{_t('Name', lang_label)}: {who} \hfill "
+                     rf"{_t('Date', lang_label)}: "
                      rf"\underline{{\hspace{{3.5cm}}}}")
         lines.append(r"\vspace{4mm}\hrule\vspace{4mm}")
     else:
@@ -217,6 +235,12 @@ def _build_tex(problems, title: str, level_label: str, *,
     for i, p in enumerate(problems):
         lines.append(r"\item")
         lines.append(_mixed(p.question.strip()))
+        if getattr(p, "question_alt", ""):
+            # The support line, set smaller and in italics so the child's eye
+            # goes to the first language and only drops to the second if needed.
+            lines.append(r"\\[1mm]")
+            lines.append(r"{\small\itshape " + _mixed(p.question_alt.strip())
+                         + "}")
 
         if i in figures:
             lines.append(r"\\[2mm]")
@@ -226,7 +250,12 @@ def _build_tex(problems, title: str, level_label: str, *,
             lines.append(r"\\[1mm]")
             for st in p.steps:
                 lines.append(rf"{{\small {_mixed(st, display=True)}}}\\[1mm]")
-            lines.append(rf"\textbf{{Answer:}} {_mixed(p.answer, display=True)}")
+            lines.append(rf"\textbf{{{_t('Answer', lang_label)}:}} "
+                         rf"{_mixed(p.answer, display=True)}")
+            if getattr(p, "answer_alt", "") and p.answer_alt != p.answer:
+                lines.append(r"\\[1mm]")
+                lines.append(r"{\small\itshape "
+                             + _mixed(p.answer_alt, display=True) + "}")
             lines.append(r"\vspace{3mm}")
         else:
             lines.append(rf"\\[{space}]")
@@ -241,7 +270,8 @@ def latex_available() -> bool:
 
 
 def render_pdf(problems, title: str, level_label: str, level: str = "grade8",
-               answers: bool = False, student: str = "") -> bytes | None:
+               answers: bool = False, student: str = "",
+               lang: str = "en") -> bytes | None:
     """Typeset a worksheet (or its answer key) to PDF.
 
     Returns None when LaTeX is unavailable or the document fails to compile —
@@ -257,7 +287,7 @@ def render_pdf(problems, title: str, level_label: str, level: str = "grade8",
         work = Path(tmp)
         figs = _figure_files(problems, work)
         tex = _build_tex(problems, title, level_label, answers=answers,
-                         figures=figs, level=level, student=student)
+                         figures=figs, level=level, student=student, lang=lang)
         (work / "sheet.tex").write_text(tex, encoding="utf-8")
         try:
             # Twice, so \pageref and the header settle. -interaction=nonstopmode
@@ -293,6 +323,9 @@ def render_html(problems, title: str, level_label: str,
     for p in problems:
         parts.append("<li>")
         parts.append(f"<div class='q'>\\({p.question}\\)</div>")
+        if getattr(p, "question_alt", ""):
+            parts.append(f"<div class='q alt muted'><em>\\({p.question_alt}"
+                         f"\\)</em></div>")
         if p.figure:
             svg = render_figure(p.figure, fmt="svg")
             if svg:

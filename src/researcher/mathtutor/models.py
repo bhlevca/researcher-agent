@@ -19,6 +19,8 @@ class GenerateRequest(BaseModel):
     # Spread the count across the chosen topics rather than generating *count*
     # of each, which is what a mixed-review sheet wants.
     mix: bool = True
+    # "en", "fr", "ro", or a pair such as "fr+en" for a bilingual sheet.
+    lang: str = "en"
 
 
 class SaveRequest(GenerateRequest):

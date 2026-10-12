@@ -34,6 +34,7 @@ async def init_math_tables(db: aiosqlite.Connection):
             seed        INTEGER NOT NULL,
             student     TEXT NOT NULL DEFAULT '',
             notes       TEXT NOT NULL DEFAULT '',
+            lang        TEXT NOT NULL DEFAULT 'en',
             created_at  TEXT NOT NULL
         )
         """
@@ -42,6 +43,11 @@ async def init_math_tables(db: aiosqlite.Connection):
         "CREATE INDEX IF NOT EXISTS idx_math_ws_user "
         "ON math_worksheets(user_id, created_at DESC)"
     )
+    # Databases created before multilingual sheets existed lack the column.
+    cur = await db.execute("PRAGMA table_info(math_worksheets)")
+    if "lang" not in {r[1] for r in await cur.fetchall()}:
+        await db.execute("ALTER TABLE math_worksheets "
+                         "ADD COLUMN lang TEXT NOT NULL DEFAULT 'en'")
 
     # One row per marked question, so "which topics is she weak on" is a query
     # rather than a memory.
@@ -70,29 +76,31 @@ async def init_math_tables(db: aiosqlite.Connection):
 async def save_worksheet(db: aiosqlite.Connection, user_id: str, *,
                          title: str, grade: str, topics: list[str],
                          count: int, seed: int, student: str = "",
-                         notes: str = "") -> dict:
+                         notes: str = "", lang: str = "en") -> dict:
     wid = uuid.uuid4().hex[:8]
     now = datetime.now(timezone.utc).isoformat()
     await db.execute(
         "INSERT INTO math_worksheets "
-        "(id, user_id, title, grade, topics, count, seed, student, notes, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "(id, user_id, title, grade, topics, count, seed, student, notes, "
+        "lang, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (wid, user_id, title, grade, json.dumps(topics), int(count), int(seed),
-         student, notes, now),
+         student, notes, lang, now),
     )
     await db.commit()
     return {"id": wid, "title": title, "grade": grade, "topics": topics,
             "count": count, "seed": seed, "student": student, "notes": notes,
-            "created_at": now}
+            "lang": lang, "created_at": now}
 
 
 def _row(r) -> dict:
     return {"id": r[0], "title": r[1], "grade": r[2],
             "topics": json.loads(r[3] or "[]"), "count": r[4], "seed": r[5],
-            "student": r[6], "notes": r[7], "created_at": r[8]}
+            "student": r[6], "notes": r[7], "lang": r[8] or "en",
+            "created_at": r[9]}
 
 
-_COLS = "id, title, grade, topics, count, seed, student, notes, created_at"
+_COLS = ("id, title, grade, topics, count, seed, student, notes, lang, "
+         "created_at")
 
 
 async def list_worksheets(db: aiosqlite.Connection, user_id: str,

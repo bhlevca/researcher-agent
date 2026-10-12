@@ -1,10 +1,65 @@
 # TODO_Claude.md — Improvement Plan for Researcher, Tutor & Composer
 
 Generated: 2026-05-23 | Project: ai-agent v2.2.0 | Branch: developer
-Updated: 2026-10-12 for v2.12.0 — Math Tutor added; see the top session notes.
+Updated: 2026-10-12 for v2.13.0 — geometry rebuilt, multilingual sheets.
 Statuses re-verified against the code, not against previous checkboxes.
 
 ---
+
+## Session notes — 2026-10-12 (v2.13.0) — GEOMETRY AND LANGUAGES
+
+### Geometry rebuilt
+
+The weakest part of the math tutor, and the part that decides whether a
+curriculum teaches reasoning or skips it. Eight new topics, all drawn, all
+computed: circle_theorems (with the theorem stated as the reason),
+inscribed_shapes, sectors_arcs, similar_triangles, angle_rules,
+analytic_geometry, circle_equations, geometry_3d. Eight new renderers.
+53 topics now, 32 with figures.
+
+### English, French, Romanian — and pairs
+
+~150 whole sentence frames in phrases.yaml, translated once and checked in.
+Nothing is translated at run time, deliberately:
+
+- A model in the generation path breaks "a seed is a worksheet" — the French
+  wording would drift between runs, so a reprint would not match the sheet.
+- Models mangle LaTeX.
+- Terminology: fr "coefficient directeur" not "gradient", "médiatrice" not
+  "bissectrice perpendiculaire"; ro "mediatoarea", "rația", "patrulater
+  inscriptibil". A general translator gets these plausibly wrong.
+
+Frames are sentences, not words, so a translation can reorder placeholders.
+T() wraps only the literal parts in \\text{}, leaving the mathematics in math
+mode. A bilingual spec ("fr+en") renders both and generate() splits them into
+question/question_alt, so generators stay unaware of how many languages exist.
+
+Verified: pdflatex + T1 + lmodern renders ș ț ă â î and é è à correctly —
+tested by rendering, not assumed. (pdftotext extracts them badly, which is a
+red herring.)
+
+### Bugs found by printing the sheet
+
+- A literal ° reached LaTeX and printed as "45ř" — T1 maps that byte to
+  r-caron. It compiled cleanly. Now ^\\circ.
+- Math mode does not line-break, so long worded questions ran off the right
+  margin. Questions are now prose with inline mathematics.
+- SymPy writes the segment area as "-36 + 60\\pi"; exact values now lead with
+  the positive term.
+- \\documentclass[14pt] made primary type SMALLER: article silently discards
+  anything but 10/11/12pt. Fixed with extarticle.
+- fractions_unit and percentages were emitting an untranslated " of " — caught
+  by the English-leak test, not by reading.
+
+### Still to do
+
+- **Language tutor printables** — homework, tests, exams, grammar and logic
+  exercises, storytelling with summary questions, printable sheets and answer
+  keys, reusing worksheet.py. Requested twice now; still not started.
+- A marking UI (the /math/results endpoint and progress view exist, but nothing
+  posts to them yet).
+- 3D figures for vectors_3d.
+- Exam papers with marks per question and a total.
 
 ## Session notes — 2026-10-12 (v2.12.0) — MATH TUTOR
 

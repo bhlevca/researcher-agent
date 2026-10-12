@@ -97,6 +97,7 @@ function selectTopics(on) {
 function buildRequest() {
     const seedRaw = document.getElementById('math-seed').value.trim();
     return {
+        lang: document.getElementById('math-lang').value || 'en',
         grade: document.getElementById('math-grade').value,
         topics: selectedTopics(),
         count: parseInt(document.getElementById('math-count').value, 10) || 10,
@@ -285,6 +286,7 @@ function loadSaved(w) {
     document.getElementById('math-seed').value = w.seed;
     document.getElementById('math-title').value = w.title;
     document.getElementById('math-student').value = w.student || '';
+    document.getElementById('math-lang').value = w.lang || 'en';
     document.getElementById('math-side').style.display = 'none';
     generateSheet();
 }
@@ -332,6 +334,14 @@ async function loadMathCurriculum() {
     const data = await r.json();
     mathCurriculum = data.grades;
     renderGrades();
+    const langSel = document.getElementById('math-lang');
+    langSel.innerHTML = '';
+    (data.languages || [{ id: 'en', label: 'English' }]).forEach(l => {
+        const o = document.createElement('option');
+        o.value = l.id;
+        o.textContent = l.label;
+        langSel.appendChild(o);
+    });
     document.getElementById('math-grade').value = 'grade8';
     onGradeChange();
     if (!data.pdf_available) {

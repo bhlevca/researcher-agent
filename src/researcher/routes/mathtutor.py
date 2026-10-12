@@ -17,7 +17,7 @@ from fastapi.responses import Response
 
 from researcher.auth import get_current_user
 from researcher import mathtutor
-from researcher.mathtutor import generators, worksheet
+from researcher.mathtutor import generators, worksheet, i18n
 from researcher.mathtutor.models import GenerateRequest, SaveRequest, MarkRequest
 from researcher.mathtutor.storage import (
     save_worksheet,
@@ -92,10 +92,12 @@ def _build(req: GenerateRequest) -> tuple[list, int]:
         for i, t in enumerate(topics):
             n = per + (1 if i < extra else 0)
             if n:
-                problems += generators.generate(t, req.grade, n, seed=seed + i)
+                problems += generators.generate(t, req.grade, n,
+                                                seed=seed + i, lang=req.lang)
     else:
         for i, t in enumerate(topics):
-            problems += generators.generate(t, req.grade, count, seed=seed + i)
+            problems += generators.generate(t, req.grade, count,
+                                            seed=seed + i, lang=req.lang)
 
     if not problems:
         raise HTTPException(status_code=500,
@@ -143,6 +145,7 @@ def register_mathtutor_routes(app):
                 for gid, g in cur.items()
             ],
             "pdf_available": worksheet.latex_available(),
+            "languages": i18n.available_languages(),
         }
 
     @app.post("/math/generate")
@@ -169,7 +172,7 @@ def register_mathtutor_routes(app):
         problems, seed = _build(req)
         pdf = worksheet.render_pdf(problems, req.title, _label(req.grade),
                                    req.grade, answers=False,
-                                   student=req.student)
+                                   student=req.student, lang=req.lang)
         return _pdf_response(pdf, f"{req.grade}-worksheet-{seed}.pdf")
 
     @app.post("/math/answers")
@@ -178,7 +181,7 @@ def register_mathtutor_routes(app):
         await get_current_user(request)
         problems, seed = _build(req)
         pdf = worksheet.render_pdf(problems, req.title, _label(req.grade),
-                                   req.grade, answers=True)
+                                   req.grade, answers=True, lang=req.lang)
         return _pdf_response(pdf, f"{req.grade}-answers-{seed}.pdf")
 
     # -- Saved worksheets ---------------------------------------------------
@@ -191,7 +194,8 @@ def register_mathtutor_routes(app):
             request.app.state.db, user["id"], title=req.title, grade=req.grade,
             topics=req.topics or [t["id"] for t in
                                   mathtutor.curriculum()[req.grade]["topics"]],
-            count=req.count, seed=seed, student=req.student, notes=req.notes)
+            count=req.count, seed=seed, student=req.student, notes=req.notes,
+            lang=req.lang)
         rec["mix"] = req.mix
         return rec
 
@@ -209,7 +213,8 @@ def register_mathtutor_routes(app):
             raise HTTPException(status_code=404, detail="Worksheet not found")
         req = GenerateRequest(grade=rec["grade"], topics=rec["topics"],
                               count=rec["count"], seed=rec["seed"],
-                              title=rec["title"], student=rec["student"])
+                              title=rec["title"], student=rec["student"],
+                              lang=rec.get("lang", "en"))
         problems, _ = _build(req)
         rec["problems"] = [p.as_dict() for p in problems]
         rec["label"] = _label(rec["grade"])
@@ -228,11 +233,13 @@ def register_mathtutor_routes(app):
             raise HTTPException(status_code=404, detail="Worksheet not found")
         req = GenerateRequest(grade=rec["grade"], topics=rec["topics"],
                               count=rec["count"], seed=rec["seed"],
-                              title=rec["title"], student=rec["student"])
+                              title=rec["title"], student=rec["student"],
+                              lang=rec.get("lang", "en"))
         problems, _ = _build(req)
         pdf = worksheet.render_pdf(problems, rec["title"], _label(rec["grade"]),
                                    rec["grade"], answers=answers,
-                                   student="" if answers else rec["student"])
+                                   student="" if answers else rec["student"],
+                                   lang=rec.get("lang", "en"))
         kind = "answers" if answers else "worksheet"
         return _pdf_response(pdf, f"{rec['title']}-{kind}.pdf".replace(" ", "-"))
 

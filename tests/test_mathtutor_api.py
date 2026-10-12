@@ -124,6 +124,51 @@ class TestGenerate:
         assert len({p["topic"] for p in r.json()["problems"]}) > 1
 
 
+class TestLanguage:
+    def test_curriculum_lists_languages_and_pairs(self, client, headers):
+        langs = client.get("/math/curriculum", headers=headers).json()["languages"]
+        ids = [l["id"] for l in langs]
+        assert {"en", "fr", "ro"} <= set(ids)
+        assert any(l["bilingual"] for l in langs)
+
+    def test_french_sheet_is_in_french(self, client, headers):
+        body = {"grade": "grade10", "topics": ["sectors_arcs"], "count": 3,
+                "seed": 5}
+        en = client.post("/math/generate", headers=headers, json=body).json()
+        fr = client.post("/math/generate", headers=headers,
+                         json=dict(body, lang="fr")).json()
+        assert en["problems"][0]["question"] != fr["problems"][0]["question"]
+        assert "secteur" in fr["problems"][0]["question"]
+        # Translation changes the wording and nothing else.
+        assert [p["answer"] for p in en["problems"]] == \
+               [p["answer"] for p in fr["problems"]]
+
+    def test_bilingual_sheet_carries_both(self, client, headers):
+        r = client.post("/math/generate", headers=headers, json={
+            "grade": "grade10", "topics": ["circle_theorems"], "count": 2,
+            "seed": 5, "lang": "ro+en"})
+        p = r.json()["problems"][0]
+        assert p["question_alt"], "no second language"
+        assert p["question"] != p["question_alt"]
+
+    def test_saved_sheet_reprints_in_its_own_language(self, client, headers):
+        """The language is part of the recipe: a French sheet reprinted in
+        English would not be the same sheet."""
+        wid = client.post("/math/worksheets", headers=headers, json={
+            "grade": "grade10", "topics": ["sectors_arcs"], "count": 3,
+            "seed": 5, "title": "Devoir", "lang": "fr"}).json()["id"]
+        rec = client.get(f"/math/worksheets/{wid}", headers=headers).json()
+        assert rec["lang"] == "fr"
+        assert "secteur" in rec["problems"][0]["question"]
+
+    def test_unknown_language_falls_back_to_english(self, client, headers):
+        r = client.post("/math/generate", headers=headers, json={
+            "grade": "grade10", "topics": ["sectors_arcs"], "count": 2,
+            "seed": 5, "lang": "klingon"})
+        assert r.status_code == 200
+        assert "sector" in r.json()["problems"][0]["question"]
+
+
 class TestPdf:
     def test_worksheet_and_key_are_pdfs(self, client, headers):
         body = {"grade": "grade8", "topics": ["pythagoras"], "count": 4, "seed": 9}

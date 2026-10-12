@@ -23,6 +23,8 @@ import random
 import logging
 from dataclasses import dataclass, field
 
+from researcher.mathtutor.i18n import T
+
 logger = logging.getLogger(__name__)
 
 
@@ -39,12 +41,21 @@ class Problem:
     figure: dict | None = None
     # Multiple choice options when the format calls for it.
     options: list[str] = field(default_factory=list)
+    # On a bilingual sheet, the same question in the second language. Generators
+    # never set these: they call T() once per sentence and generate() splits the
+    # result, so a generator stays unaware of how many languages are in play.
+    question_alt: str = ""
+    answer_alt: str = ""
+    steps_alt: list[str] = field(default_factory=list)
+    lang: str = "en"
 
     def as_dict(self) -> dict:
         return {
             "question": self.question, "answer": self.answer,
             "steps": self.steps, "topic": self.topic, "level": self.level,
             "figure": self.figure, "options": self.options,
+            "question_alt": self.question_alt, "answer_alt": self.answer_alt,
+            "steps_alt": self.steps_alt, "lang": self.lang,
         }
 
 
@@ -92,7 +103,7 @@ def _grade(level: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-def gen_add_sub_2digit(rng: random.Random, level: str) -> Problem:
+def gen_add_sub_2digit(rng: random.Random, level: str, lang: str = "en") -> Problem:
     a, b = rng.randint(120, 899), rng.randint(110, 450)
     if rng.random() < 0.5:
         return Problem(question=f"{a} + {b}", answer=str(a + b),
@@ -102,13 +113,13 @@ def gen_add_sub_2digit(rng: random.Random, level: str) -> Problem:
                    topic="add_sub_2digit", level=level)
 
 
-def gen_times_tables(rng: random.Random, level: str) -> Problem:
+def gen_times_tables(rng: random.Random, level: str, lang: str = "en") -> Problem:
     a, b = rng.randint(3, 12), rng.randint(3, 12)
     return Problem(question=rf"{a} \times {b}", answer=str(a * b),
                    topic="times_tables", level=level)
 
 
-def gen_long_mult_div(rng: random.Random, level: str) -> Problem:
+def gen_long_mult_div(rng: random.Random, level: str, lang: str = "en") -> Problem:
     if rng.random() < 0.5:
         a, b = rng.randint(23, 99), rng.randint(12, 49)
         return Problem(question=rf"{a} \times {b}", answer=str(a * b),
@@ -121,17 +132,18 @@ def gen_long_mult_div(rng: random.Random, level: str) -> Problem:
                    topic="long_mult_div", level=level)
 
 
-def gen_fractions_unit(rng: random.Random, level: str) -> Problem:
+def gen_fractions_unit(rng: random.Random, level: str, lang: str = "en") -> Problem:
     sp = _sp()
     den = rng.choice([2, 3, 4, 5, 6, 8, 10])
     whole = den * rng.randint(2, 9)
     ans = sp.Rational(whole, den)
     return Problem(
-        question=rf"\frac{{1}}{{{den}}} \text{{ of }} {whole}",
+        question=T("fraction_of_amount", lang,
+                   frac=rf"\frac{{1}}{{{den}}}", n=whole),
         answer=_latex(ans), topic="fractions_unit", level=level)
 
 
-def gen_fractions_ops(rng: random.Random, level: str) -> Problem:
+def gen_fractions_ops(rng: random.Random, level: str, lang: str = "en") -> Problem:
     sp = _sp()
     a = sp.Rational(rng.randint(1, 5), rng.choice([2, 3, 4, 5, 6, 8]))
     b = sp.Rational(rng.randint(1, 5), rng.choice([2, 3, 4, 5, 6, 8]))
@@ -139,11 +151,11 @@ def gen_fractions_ops(rng: random.Random, level: str) -> Problem:
     return Problem(
         question=rf"{_latex(a)} {op} {_latex(b)}",
         answer=_latex(res),
-        steps=[rf"\text{{Common denominator: }} {sp.ilcm(a.q, b.q)}"],
+        steps=[T("step_common_denominator", lang, n=sp.ilcm(a.q, b.q))],
         topic="fractions_ops", level=level)
 
 
-def gen_decimals(rng: random.Random, level: str) -> Problem:
+def gen_decimals(rng: random.Random, level: str, lang: str = "en") -> Problem:
     sp = _sp()
     a = sp.Rational(rng.randint(105, 999), 100)
     b = sp.Rational(rng.randint(105, 999), 100)
@@ -153,12 +165,13 @@ def gen_decimals(rng: random.Random, level: str) -> Problem:
                    answer=f"{float(res):g}", topic="decimals", level=level)
 
 
-def gen_percentages(rng: random.Random, level: str) -> Problem:
+def gen_percentages(rng: random.Random, level: str, lang: str = "en") -> Problem:
     sp = _sp()
     pct = rng.choice([5, 10, 12.5, 15, 20, 25, 40, 60, 75])
     amount = rng.choice([40, 60, 80, 120, 150, 200, 240, 360])
     ans = sp.Rational(int(pct * 10), 1000) * amount
-    return Problem(question=rf"{pct:g}\% \text{{ of }} {amount}",
+    return Problem(question=T("percent_of_amount", lang,
+                              pct=rf"{pct:g}\%", n=amount),
                    answer=_latex(sp.nsimplify(ans)),
                    topic="percentages", level=level)
 
@@ -168,7 +181,7 @@ def gen_percentages(rng: random.Random, level: str) -> Problem:
 # ---------------------------------------------------------------------------
 
 
-def gen_integers(rng: random.Random, level: str) -> Problem:
+def gen_integers(rng: random.Random, level: str, lang: str = "en") -> Problem:
     a, b = rng.randint(-15, -2), rng.randint(2, 15)
     style = rng.randint(0, 2)
     if style == 0:
@@ -181,34 +194,34 @@ def gen_integers(rng: random.Random, level: str) -> Problem:
                    topic="integers", level=level)
 
 
-def gen_ratio_proportion(rng: random.Random, level: str) -> Problem:
+def gen_ratio_proportion(rng: random.Random, level: str, lang: str = "en") -> Problem:
     sp = _sp()
     a, b = rng.randint(2, 9), rng.randint(2, 9)
     k = rng.randint(3, 12)
     total = (a + b) * k
     return Problem(
-        question=rf"\text{{Share }} {total} \text{{ in the ratio }} {a}:{b}",
-        answer=rf"{a*k} \text{{ and }} {b*k}",
-        steps=[rf"\text{{Total parts}} = {a}+{b} = {a+b}",
-               rf"\text{{One part}} = {total} \div {a+b} = {k}"],
+        question=T("share_in_ratio", lang, total=total, ratio=f"{a}:{b}"),
+        answer=T("pair_and", lang, a=a * k, b=b * k),
+        steps=[T("step_total_parts", lang, expr=f"{a}+{b} = {a+b}"),
+               T("step_one_part", lang, expr=rf"{total} \div {a+b} = {k}")],
         topic="ratio_proportion", level=level)
 
 
-def gen_linear_simple(rng: random.Random, level: str) -> Problem:
+def gen_linear_simple(rng: random.Random, level: str, lang: str = "en") -> Problem:
     sp = _sp()
     x = sp.Symbol("x")
     a, sol = rng.randint(2, 9), rng.randint(-9, 9)
     b = rng.randint(-15, 15)
     eq = sp.Eq(a * x + b, a * sol + b)
     ans = sp.solve(eq, x)[0]
-    return Problem(question=rf"\text{{Solve }} {_latex(eq.lhs)} = {_latex(eq.rhs)}",
-                   answer=rf"x = {_latex(ans)}",
-                   steps=[rf"{_latex(a*x)} = {_latex(eq.rhs - b)}",
-                          rf"x = {_latex(ans)}"],
-                   topic="linear_simple", level=level)
+    return Problem(
+        question=T("solve", lang, eq=f"{_latex(eq.lhs)} = {_latex(eq.rhs)}"),
+        answer=rf"x = {_latex(ans)}",
+        steps=[rf"{_latex(a*x)} = {_latex(eq.rhs - b)}", rf"x = {_latex(ans)}"],
+        topic="linear_simple", level=level)
 
 
-def gen_linear_equations(rng: random.Random, level: str) -> Problem:
+def gen_linear_equations(rng: random.Random, level: str, lang: str = "en") -> Problem:
     sp = _sp()
     x = sp.Symbol("x")
     sol = sp.Rational(rng.randint(-12, 12), rng.choice([1, 1, 1, 2]))
@@ -217,14 +230,14 @@ def gen_linear_equations(rng: random.Random, level: str) -> Problem:
     rhs = c * x + (lhs.subs(x, sol) - c * sol)
     eq = sp.Eq(lhs, sp.nsimplify(rhs))
     ans = sp.solve(eq, x)[0]
-    return Problem(question=rf"\text{{Solve }} {_latex(eq.lhs)} = {_latex(eq.rhs)}",
-                   answer=rf"x = {_latex(ans)}",
-                   steps=[rf"\text{{Collect }} x \text{{ terms}}",
-                          rf"x = {_latex(ans)}"],
-                   topic="linear_equations", level=level)
+    return Problem(
+        question=T("solve", lang, eq=f"{_latex(eq.lhs)} = {_latex(eq.rhs)}"),
+        answer=rf"x = {_latex(ans)}",
+        steps=[T("step_collect_x_terms", lang, x="x"), rf"x = {_latex(ans)}"],
+        topic="linear_equations", level=level)
 
 
-def gen_simultaneous(rng: random.Random, level: str) -> Problem:
+def gen_simultaneous(rng: random.Random, level: str, lang: str = "en") -> Problem:
     sp = _sp()
     x, y = sp.symbols("x y")
     sx, sy = rng.randint(-8, 8), rng.randint(-8, 8)
@@ -234,29 +247,29 @@ def gen_simultaneous(rng: random.Random, level: str) -> Problem:
     e2 = sp.Eq(c * x + d * y, c * sx + d * sy)
     sol = sp.solve([e1, e2], [x, y])
     return Problem(
-        question=(rf"\text{{Solve simultaneously: }} "
-                  rf"{_latex(e1.lhs)} = {_latex(e1.rhs)} \text{{ and }} "
-                  rf"{_latex(e2.lhs)} = {_latex(e2.rhs)}"),
+        question=T("solve_simultaneous", lang,
+                   e1=f"{_latex(e1.lhs)} = {_latex(e1.rhs)}",
+                   e2=f"{_latex(e2.lhs)} = {_latex(e2.rhs)}"),
         answer=rf"x = {_latex(sol[x])},\ y = {_latex(sol[y])}",
         topic="simultaneous", level=level)
 
 
-def gen_indices(rng: random.Random, level: str) -> Problem:
+def gen_indices(rng: random.Random, level: str, lang: str = "en") -> Problem:
     sp = _sp()
     x = sp.Symbol("x")
     m, n = rng.randint(2, 7), rng.randint(2, 6)
     if rng.random() < 0.5:
         expr = x**m * x**n
-        return Problem(question=rf"\text{{Simplify }} {_latex(expr)}",
+        return Problem(question=T("simplify", lang, expr=_latex(expr)),
                        answer=_latex(sp.powsimp(expr, force=True)),
                        topic="indices", level=level)
     expr = (x**m) ** n
-    return Problem(question=rf"\text{{Simplify }} {_latex(expr)}",
+    return Problem(question=T("simplify", lang, expr=_latex(expr)),
                    answer=_latex(sp.powsimp(expr, force=True)),
                    topic="indices", level=level)
 
 
-def gen_quadratics(rng: random.Random, level: str) -> Problem:
+def gen_quadratics(rng: random.Random, level: str, lang: str = "en") -> Problem:
     sp = _sp()
     x = sp.Symbol("x")
     r1, r2 = rng.randint(-9, 9), rng.randint(-9, 9)
@@ -264,52 +277,51 @@ def gen_quadratics(rng: random.Random, level: str) -> Problem:
     expr = sp.expand(a * (x - r1) * (x - r2))
     roots = sorted(sp.solve(sp.Eq(expr, 0), x), key=lambda r: float(r))
     return Problem(
-        question=rf"\text{{Solve }} {_latex(expr)} = 0",
+        question=T("solve", lang, eq=f"{_latex(expr)} = 0"),
         answer=", ".join(rf"x = {_latex(r)}" for r in roots),
         steps=[rf"{_latex(sp.factor(expr))} = 0"],
         topic="quadratics", level=level)
 
 
-def gen_surds(rng: random.Random, level: str) -> Problem:
+def gen_surds(rng: random.Random, level: str, lang: str = "en") -> Problem:
     sp = _sp()
     k = rng.choice([2, 3, 5, 6, 7, 10])
     sq = rng.choice([4, 9, 16, 25, 36])
     expr = sp.sqrt(k * sq)
-    return Problem(question=rf"\text{{Simplify }} \sqrt{{{k*sq}}}",
+    return Problem(question=T("simplify", lang, expr=rf"\sqrt{{{k*sq}}}"),
                    answer=_latex(sp.sqrt(k * sq)),
                    topic="surds", level=level)
 
 
-def gen_sequences(rng: random.Random, level: str) -> Problem:
+def gen_sequences(rng: random.Random, level: str, lang: str = "en") -> Problem:
     sp = _sp()
     if rng.random() < 0.5:
         a1, d = rng.randint(-10, 15), rng.randint(2, 9)
         n = rng.randint(8, 25)
         return Problem(
-            question=(rf"\text{{An arithmetic sequence has }} u_1 = {a1} "
-                      rf"\text{{ and }} d = {d}. \text{{ Find }} u_{{{n}}}"),
+            question=T("arithmetic_sequence", lang, u1=f"u_1 = {a1}",
+                       d=f"d = {d}", un=f"u_{{{n}}}"),
             answer=str(a1 + (n - 1) * d),
             steps=[rf"u_n = u_1 + (n-1)d = {a1} + {n-1}\times{d}"],
             topic="sequences", level=level)
     a1, r = rng.randint(1, 6), rng.choice([2, 3])
     n = rng.randint(5, 10)
     return Problem(
-        question=(rf"\text{{A geometric sequence has }} u_1 = {a1} "
-                  rf"\text{{ and }} r = {r}. \text{{ Find }} u_{{{n}}}"),
+        question=T("geometric_sequence", lang, u1=f"u_1 = {a1}",
+                   r=f"r = {r}", un=f"u_{{{n}}}"),
         answer=str(a1 * r ** (n - 1)),
         steps=[rf"u_n = u_1 r^{{n-1}} = {a1}\times{r}^{{{n-1}}}"],
         topic="sequences", level=level)
 
 
-def gen_probability(rng: random.Random, level: str) -> Problem:
+def gen_probability(rng: random.Random, level: str, lang: str = "en") -> Problem:
     sp = _sp()
     red, blue = rng.randint(3, 9), rng.randint(3, 9)
     total = red + blue
     # Without replacement — the case students get wrong.
     p = sp.Rational(red, total) * sp.Rational(red - 1, total - 1)
     return Problem(
-        question=(rf"\text{{A bag holds {red} red and {blue} blue counters. Two are }}"
-                  rf"\text{{drawn without replacement. Find P(both red).}}"),
+        question=T("bag_two_without_replacement", lang, red=red, blue=blue),
         answer=_latex(p),
         steps=[rf"\frac{{{red}}}{{{total}}} \times \frac{{{red-1}}}{{{total-1}}}"],
         topic="probability", level=level)
@@ -320,7 +332,7 @@ def gen_probability(rng: random.Random, level: str) -> Problem:
 # ---------------------------------------------------------------------------
 
 
-def gen_functions(rng: random.Random, level: str) -> Problem:
+def gen_functions(rng: random.Random, level: str, lang: str = "en") -> Problem:
     sp = _sp()
     x = sp.Symbol("x")
     a, b, c = rng.randint(1, 5), rng.randint(-8, 8), rng.randint(-6, 6)
@@ -328,14 +340,14 @@ def gen_functions(rng: random.Random, level: str) -> Problem:
     g = x**2 + c
     comp = sp.expand(g.subs(x, f))
     return Problem(
-        question=(rf"\text{{Given }} f(x) = {_latex(f)} \text{{ and }} "
-                  rf"g(x) = {_latex(g)}, \text{{ find }} (g \circ f)(x)"),
+        question=T("composite_function", lang, f=f"f(x) = {_latex(f)}",
+                   g=f"g(x) = {_latex(g)}", comp=r"(g \circ f)(x)"),
         answer=_latex(comp),
         steps=[rf"g(f(x)) = ({_latex(f)})^2 + {c}"],
         topic="functions", level=level)
 
 
-def gen_differentiation(rng: random.Random, level: str) -> Problem:
+def gen_differentiation(rng: random.Random, level: str, lang: str = "en") -> Problem:
     sp = _sp()
     x = sp.Symbol("x")
     a, b, c = rng.randint(1, 6), rng.randint(-8, 8), rng.randint(-9, 9)
@@ -343,12 +355,12 @@ def gen_differentiation(rng: random.Random, level: str) -> Problem:
     expr = a * x**n + b * x + c
     d = sp.diff(expr, x)
     return Problem(
-        question=rf"\text{{Differentiate }} f(x) = {_latex(expr)}",
+        question=T("differentiate", lang, f=f"f(x) = {_latex(expr)}"),
         answer=rf"f'(x) = {_latex(d)}",
         topic="differentiation", level=level)
 
 
-def gen_integration(rng: random.Random, level: str) -> Problem:
+def gen_integration(rng: random.Random, level: str, lang: str = "en") -> Problem:
     sp = _sp()
     x = sp.Symbol("x")
     a, n = rng.randint(1, 6), rng.randint(1, 4)
@@ -357,26 +369,27 @@ def gen_integration(rng: random.Random, level: str) -> Problem:
     lo, hi = rng.randint(0, 2), rng.randint(3, 6)
     val = sp.integrate(expr, (x, lo, hi))
     return Problem(
-        question=rf"\text{{Evaluate }} \int_{{{lo}}}^{{{hi}}} \left({_latex(expr)}\right)\,dx",
+        question=T("evaluate", lang,
+                   expr=rf"\int_{{{lo}}}^{{{hi}}} \left({_latex(expr)}\right)\,dx"),
         answer=_latex(val),
         steps=[rf"\left[{_latex(sp.integrate(expr, x))}\right]_{{{lo}}}^{{{hi}}}"],
         topic="integration", level=level)
 
 
-def gen_logs_exp(rng: random.Random, level: str) -> Problem:
+def gen_logs_exp(rng: random.Random, level: str, lang: str = "en") -> Problem:
     sp = _sp()
     x = sp.Symbol("x", positive=True)
     base = rng.choice([2, 3, 5, 10])
     k = rng.randint(2, 5)
     eq = sp.Eq(base**x, base**k)
     return Problem(
-        question=rf"\text{{Solve }} {base}^{{x}} = {base**k}",
+        question=T("solve", lang, eq=rf"{base}^{{x}} = {base**k}"),
         answer=rf"x = {k}",
         steps=[rf"x = \log_{{{base}}} {base**k} = {k}"],
         topic="logs_exp", level=level)
 
 
-def gen_binomial(rng: random.Random, level: str) -> Problem:
+def gen_binomial(rng: random.Random, level: str, lang: str = "en") -> Problem:
     sp = _sp()
     x = sp.Symbol("x")
     n = rng.randint(4, 7)
@@ -384,14 +397,14 @@ def gen_binomial(rng: random.Random, level: str) -> Problem:
     expr = sp.expand((1 + x) ** n)
     coeff = sp.binomial(n, term)
     return Problem(
-        question=(rf"\text{{Find the coefficient of }} x^{{{term}}} "
-                  rf"\text{{ in the expansion of }} (1+x)^{{{n}}}"),
+        question=T("binomial_coefficient", lang, term=f"x^{{{term}}}",
+                   expr=f"(1+x)^{{{n}}}"),
         answer=str(coeff),
         steps=[rf"\binom{{{n}}}{{{term}}} = {coeff}"],
         topic="binomial", level=level)
 
 
-def gen_complex_numbers(rng: random.Random, level: str) -> Problem:
+def gen_complex_numbers(rng: random.Random, level: str, lang: str = "en") -> Problem:
     sp = _sp()
     a, b = rng.randint(-5, 5), rng.randint(1, 5)
     c, d = rng.randint(-5, 5), rng.randint(1, 5)
@@ -399,21 +412,23 @@ def gen_complex_numbers(rng: random.Random, level: str) -> Problem:
     z2 = c + d * sp.I
     prod = sp.expand(z1 * z2)
     return Problem(
-        question=rf"\text{{Given }} z_1 = {_latex(z1)} \text{{ and }} z_2 = {_latex(z2)}, \text{{ find }} z_1 z_2",
+        question=T("complex_product", lang, z1=f"z_1 = {_latex(z1)}",
+                   z2=f"z_2 = {_latex(z2)}", prod="z_1 z_2"),
         answer=_latex(prod),
         topic="complex_numbers", level=level)
 
 
-def gen_integration_parts(rng: random.Random, level: str) -> Problem:
+def gen_integration_parts(rng: random.Random, level: str, lang: str = "en") -> Problem:
     sp = _sp()
     x = sp.Symbol("x")
     a = rng.randint(1, 4)
     expr = rng.choice([x * sp.exp(a * x), x * sp.sin(a * x), x * sp.cos(a * x)])
     val = sp.integrate(expr, x)
     return Problem(
-        question=rf"\text{{Find }} \int {_latex(expr)}\,dx",
+        question=T("find_expr", lang, expr=rf"\int {_latex(expr)}\,dx"),
         answer=rf"{_latex(sp.simplify(val))} + c",
-        steps=[r"\text{Integration by parts: } \int u\,dv = uv - \int v\,du"],
+        steps=[T("step_integration_by_parts", lang,
+                 formula=r"\int u\,dv = uv - \int v\,du")],
         topic="integration_parts", level=level)
 
 
@@ -426,7 +441,7 @@ def gen_integration_parts(rng: random.Random, level: str) -> Problem:
 # ---------------------------------------------------------------------------
 
 
-def gen_number_bonds(rng: random.Random, level: str) -> Problem:
+def gen_number_bonds(rng: random.Random, level: str, lang: str = "en") -> Problem:
     """Addition and subtraction within 20 (Grade 1) or 100 (Grade 2)."""
     top = 20 if _grade(level) <= 1 else 100
     a = rng.randint(2, top - 2)
@@ -450,7 +465,7 @@ def gen_number_bonds(rng: random.Random, level: str) -> Problem:
 # ---------------------------------------------------------------------------
 
 
-def gen_quadratic_theory(rng: random.Random, level: str) -> Problem:
+def gen_quadratic_theory(rng: random.Random, level: str, lang: str = "en") -> Problem:
     """Discriminant: its value, the nature of the roots, and solving for k."""
     sp = _sp()
     x, k = sp.symbols("x k")
@@ -461,13 +476,12 @@ def gen_quadratic_theory(rng: random.Random, level: str) -> Problem:
         b = rng.randint(-9, 9)
         c = rng.randint(-6, 6)
         disc = b * b - 4 * a * c
-        nature = ("two distinct real roots" if disc > 0 else
-                  "one repeated real root" if disc == 0 else "no real roots")
+        nature_key = ("nature_two_distinct" if disc > 0 else
+                      "nature_repeated" if disc == 0 else "nature_none")
         return Problem(
-            question=(rf"\text{{Find the discriminant of }} "
-                      rf"{_latex(a * x**2 + b * x + c)} = 0 "
-                      rf"\text{{ and state the nature of the roots}}"),
-            answer=rf"\Delta = {disc}, \text{{ {nature}}}",
+            question=T("discriminant_and_nature", lang,
+                       eq=f"{_latex(a * x**2 + b * x + c)} = 0"),
+            answer=rf"\Delta = {disc}, " + T(nature_key, lang),
             steps=[rf"\Delta = b^{{2}} - 4ac = ({b})^{{2}} - 4({a})({c}) = {disc}"],
             topic="quadratic_theory", level=level)
 
@@ -475,17 +489,16 @@ def gen_quadratic_theory(rng: random.Random, level: str) -> Problem:
     if mode == "equal_roots":
         roots = sp.solve(sp.Eq(k**2 - 4 * c, 0), k)
         return Problem(
-            question=(rf"\text{{The equation }} x^{{2}} + kx + {c} = 0 "
-                      rf"\text{{ has equal roots. Find the values of }} k"),
+            question=T("equal_roots_find_k", lang,
+                       eq=rf"x^{{2}} + kx + {c} = 0", k="k"),
             answer=", \\ ".join(f"k = {_latex(r)}" for r in roots),
             steps=[rf"\Delta = k^{{2}} - 4({c}) = 0", rf"k^{{2}} = {4 * c}"],
             topic="quadratic_theory", level=level)
 
     sol = sp.solve_univariate_inequality(k**2 - 4 * c > 0, k, relational=False)
     return Problem(
-        question=(rf"\text{{Find the values of }} k \text{{ for which }} "
-                  rf"x^{{2}} + kx + {c} = 0 "
-                  rf"\text{{ has two distinct real roots}}"),
+        question=T("two_distinct_find_k", lang, k="k",
+                   eq=rf"x^{{2}} + kx + {c} = 0"),
         answer=rf"k \in {_latex(sol)}",
         steps=[rf"\Delta = k^{{2}} - 4({c}) > 0"],
         topic="quadratic_theory", level=level)
@@ -506,7 +519,7 @@ def _trig_simplify_table(sp, x):
     ]
 
 
-def gen_trig_identities(rng: random.Random, level: str) -> Problem:
+def gen_trig_identities(rng: random.Random, level: str, lang: str = "en") -> Problem:
     sp = _sp()
     x, th = sp.Symbol("x"), sp.Symbol("theta")
     mode = rng.choice(["exact_values", "solve_basic", "simplify"])
@@ -520,13 +533,13 @@ def gen_trig_identities(rng: random.Random, level: str) -> Problem:
         given, found = rng.choice([("sin", "cos"), ("cos", "sin")])
         tan = sp.simplify(val / other) if given == "sin" else sp.simplify(other / val)
         return Problem(
-            question=(rf"\text{{Given }} \{given}\theta = {_latex(val)} "
-                      rf"\text{{ and }} \theta \text{{ is acute, find }} "
-                      rf"\{found}\theta \text{{ and }} \tan\theta "
-                      rf"\text{{ in exact form}}"),
+            question=T("trig_given_acute", lang,
+                       given=rf"\{given}\theta = {_latex(val)}",
+                       theta=r"\theta",
+                       find1=rf"\{found}\theta", find2=r"\tan\theta"),
             answer=(rf"\{found}\theta = {_latex(other)}, \ "
                     rf"\tan\theta = {_latex(tan)}"),
-            steps=[rf"\sin^{{2}}\theta + \cos^{{2}}\theta = 1",
+            steps=[r"\sin^{2}\theta + \cos^{2}\theta = 1",
                    rf"\{found}\theta = \sqrt{{1 - \left({_latex(val)}\right)^{{2}}}}"],
             topic="trig_identities", level=level)
 
@@ -547,23 +560,25 @@ def gen_trig_identities(rng: random.Random, level: str) -> Problem:
             first = sp.deg(sp.atan(val))
             second = first + 180
         return Problem(
-            question=(rf"\text{{Solve }} \{fn} x = {_latex(val)} "
-                      rf"\text{{ for }} 0^\circ \le x \le 360^\circ"),
+            question=T("solve_trig_in_range", lang,
+                       eq=rf"\{fn} x = {_latex(val)}",
+                       range=r"0^\circ \le x \le 360^\circ"),
             answer=rf"x = {_latex(first)}^\circ, \ x = {_latex(second)}^\circ",
-            steps=[rf"\text{{Principal value: }} x = {_latex(first)}^\circ",
-                   rf"\text{{Second solution from the symmetry of }} \{fn}"],
+            steps=[T("step_principal_value", lang,
+                     v=rf"x = {_latex(first)}^\circ"),
+                   T("step_second_solution_symmetry", lang, fn=rf"\{fn}")],
             topic="trig_identities", level=level)
 
     expr, expected = rng.choice(_trig_simplify_table(sp, x))
     if sp.simplify(sp.expand_trig(expr) - expected) != 0:
         raise ValueError("identity table entry failed verification")
     return Problem(
-        question=rf"\text{{Simplify }} {_latex(expr)}",
+        question=T("simplify", lang, expr=_latex(expr)),
         answer=_latex(expected),
         topic="trig_identities", level=level)
 
 
-def gen_proof_induction(rng: random.Random, level: str) -> Problem:
+def gen_proof_induction(rng: random.Random, level: str, lang: str = "en") -> Problem:
     r"""Prove by induction that \sum f(r) equals a closed form.
 
     The proof itself is prose, but every piece of algebra a mark scheme wants
@@ -598,26 +613,27 @@ def gen_proof_induction(rng: random.Random, level: str) -> Problem:
         raise ValueError("inductive step failed verification")
 
     return Problem(
-        question=(rf"\text{{Prove by induction that }} "
-                  rf"\sum_{{r=1}}^{{n}} {_latex(term)} = {_latex(closed)} "
-                  rf"\text{{ for all }} n \in \mathbb{{Z}}^{{+}}"),
-        answer=(rf"\text{{Base }} n=1\colon\ {_latex(base)}. \quad "
-                rf"\text{{Step: }} {_latex(closed.subs(n, k + 1))}"),
+        question=T("prove_by_induction", lang,
+                   statement=(rf"\sum_{{r=1}}^{{n}} {_latex(term)} "
+                              rf"= {_latex(closed)}"),
+                   domain=r"n \in \mathbb{Z}^{+}"),
+        answer=T("answer_induction", lang, n1="n=1", base=_latex(base),
+                 step=_latex(closed.subs(n, k + 1))),
         steps=[
-            rf"\text{{Base case }} n = 1\colon\ \text{{LHS}} = "
-            rf"{_latex(sp.simplify(term.subs(r, 1)))} = \text{{RHS}} = {_latex(base)}",
-            rf"\text{{Assume true for }} n = k\colon\ "
-            rf"\sum_{{r=1}}^{{k}} {_latex(term)} = {_latex(closed.subs(n, k))}",
-            rf"\sum_{{r=1}}^{{k+1}} = {_latex(closed.subs(n, k))} + "
-            rf"{_latex(term.subs(r, k + 1))} = {_latex(closed.subs(n, k + 1))}",
-            rf"\text{{This is the closed form with }} n = k+1, "
-            rf"\text{{so the result holds for all }} n \ge 1 "
-            rf"\text{{by induction.}}",
+            T("step_base_case", lang, n1="n = 1",
+              lhs=_latex(sp.simplify(term.subs(r, 1))), rhs=_latex(base)),
+            T("step_assume_true", lang, nk="n = k",
+              statement=(rf"\sum_{{r=1}}^{{k}} {_latex(term)} "
+                         rf"= {_latex(closed.subs(n, k))}")),
+            (rf"\sum_{{r=1}}^{{k+1}} = {_latex(closed.subs(n, k))} + "
+             rf"{_latex(term.subs(r, k + 1))} = {_latex(closed.subs(n, k + 1))}"),
+            T("step_induction_conclusion", lang, nk1="n = k+1",
+              domain=r"n \ge 1"),
         ],
         topic="proof_induction", level=level)
 
 
-def gen_calculus_advanced(rng: random.Random, level: str) -> Problem:
+def gen_calculus_advanced(rng: random.Random, level: str, lang: str = "en") -> Problem:
     """Implicit differentiation, via SymPy's idiff."""
     sp = _sp()
     x, y = sp.symbols("x y")
@@ -635,17 +651,16 @@ def gen_calculus_advanced(rng: random.Random, level: str) -> Problem:
     ])
     dydx = sp.simplify(sp.idiff(lhs - rhs, y, x))
     return Problem(
-        question=(rf"\text{{Given }} {_latex(lhs)} = {_latex(rhs)} "
-                  rf"\text{{, find }} \dfrac{{dy}}{{dx}} "
-                  rf"\text{{ in terms of }} x \text{{ and }} y"),
+        question=T("implicit_differentiation", lang,
+                   eq=f"{_latex(lhs)} = {_latex(rhs)}",
+                   dydx=r"\dfrac{dy}{dx}", vars="x, y"),
         answer=rf"\dfrac{{dy}}{{dx}} = {_latex(dydx)}",
-        steps=[r"\text{Differentiate both sides with respect to } x, "
-               r"\text{treating } y \text{ as a function of } x",
-               r"\text{Collect the } \frac{dy}{dx} \text{ terms and factorise}"],
+        steps=[T("step_differentiate_both_sides", lang, x="x", y="y"),
+               T("step_collect_dydx", lang, dydx=r"\frac{dy}{dx}")],
         topic="calculus_advanced", level=level)
 
 
-def gen_differential_eq(rng: random.Random, level: str) -> Problem:
+def gen_differential_eq(rng: random.Random, level: str, lang: str = "en") -> Problem:
     """First-order separable equation with an initial condition.
 
     The initial condition matters: without it the answer carries an arbitrary
@@ -672,16 +687,16 @@ def gen_differential_eq(rng: random.Random, level: str) -> Problem:
     if sp.simplify(check) != 0 or sp.simplify(sol.rhs.subs(x, 0) - y0) != 0:
         raise ValueError("dsolve result failed verification")
     return Problem(
-        question=(rf"\text{{Solve }} \dfrac{{dy}}{{dx}} = "
-                  rf"{_latex(shown)} "
-                  rf"\text{{ given }} y = {y0} \text{{ when }} x = 0"),
+        question=T("solve_ode_with_condition", lang,
+                   eq=rf"\dfrac{{dy}}{{dx}} = {_latex(shown)}",
+                   ic=rf"y(0) = {y0}"),
         answer=rf"y = {_latex(sol.rhs)}",
-        steps=[r"\text{Separate the variables and integrate both sides}",
-               rf"\text{{Apply }} y(0) = {y0} \text{{ to find the constant}}"],
+        steps=[T("step_separate_variables", lang),
+               T("step_apply_condition", lang, ic=rf"y(0) = {y0}")],
         topic="differential_eq", level=level)
 
 
-def gen_vectors_3d(rng: random.Random, level: str) -> Problem:
+def gen_vectors_3d(rng: random.Random, level: str, lang: str = "en") -> Problem:
     """Scalar and vector products, magnitude, angle, and lines in space."""
     sp = _sp()
 
@@ -702,22 +717,24 @@ def gen_vectors_3d(rng: random.Random, level: str) -> Problem:
 
     if mode == "dot":
         return Problem(
-            question=(rf"\text{{Find }} \mathbf{{a}} \cdot \mathbf{{b}} "
-                      rf"\text{{ where }} \mathbf{{a}} = {col(a)} "
-                      rf"\text{{ and }} \mathbf{{b}} = {col(b)}"),
+            question=T("vector_find_where", lang,
+                       expr=r"\mathbf{a} \cdot \mathbf{b}",
+                       a=rf"\mathbf{{a}} = {col(a)}",
+                       b=rf"\mathbf{{b}} = {col(b)}"),
             answer=_latex(a.dot(b)), topic="vectors_3d", level=level)
 
     if mode == "cross":
         return Problem(
-            question=(rf"\text{{Find }} \mathbf{{a}} \times \mathbf{{b}} "
-                      rf"\text{{ where }} \mathbf{{a}} = {col(a)} "
-                      rf"\text{{ and }} \mathbf{{b}} = {col(b)}"),
+            question=T("vector_find_where", lang,
+                       expr=r"\mathbf{a} \times \mathbf{b}",
+                       a=rf"\mathbf{{a}} = {col(a)}",
+                       b=rf"\mathbf{{b}} = {col(b)}"),
             answer=col(a.cross(b)), topic="vectors_3d", level=level)
 
     if mode == "magnitude":
         return Problem(
-            question=(rf"\text{{Find }} |\mathbf{{a}}| \text{{ in exact form, "
-                      rf"where }} \mathbf{{a}} = {col(a)}"),
+            question=T("vector_magnitude_exact", lang,
+                       expr=r"|\mathbf{a}|", a=rf"\mathbf{{a}} = {col(a)}"),
             answer=_latex(sp.sqrt(sum(v**2 for v in a))),
             steps=[rf"|\mathbf{{a}}| = \sqrt{{"
                    + " + ".join(f"({v})^{{2}}" for v in a) + "}"],
@@ -729,9 +746,9 @@ def gen_vectors_3d(rng: random.Random, level: str) -> Problem:
             raise ValueError("degenerate")
         deg = sp.N(sp.deg(sp.acos(cos)), 4)
         return Problem(
-            question=(rf"\text{{Find the angle between }} \mathbf{{a}} = {col(a)} "
-                      rf"\text{{ and }} \mathbf{{b}} = {col(b)} "
-                      rf"\text{{, correct to 3 significant figures}}"),
+            question=T("vector_angle_between", lang,
+                       a=rf"\mathbf{{a}} = {col(a)}",
+                       b=rf"\mathbf{{b}} = {col(b)}"),
             answer=rf"\cos\theta = {_latex(cos)}, \ \theta = {deg}^\circ",
             steps=[r"\cos\theta = \dfrac{\mathbf{a}\cdot\mathbf{b}}"
                    r"{|\mathbf{a}||\mathbf{b}|}"],
@@ -744,18 +761,18 @@ def gen_vectors_3d(rng: random.Random, level: str) -> Problem:
         if not sol or not b[2]:
             raise ValueError("no unique t")
         return Problem(
-            question=(rf"\text{{Find }} t \text{{ such that }} {col(c)} "
-                      rf"\text{{ is perpendicular to }} {col(b)}"),
+            question=T("vector_find_t_perpendicular", lang, t="t",
+                       c=col(c), b=col(b)),
             answer=rf"t = {_latex(sol[0])}",
-            steps=[r"\text{Perpendicular vectors have scalar product } 0"],
+            steps=[T("step_perpendicular_dot_zero", lang)],
             topic="vectors_3d", level=level)
 
     if a == b:
         raise ValueError("coincident points")
     d = b - a
     return Problem(
-        question=(rf"\text{{Find a vector equation of the line through }} "
-                  rf"A{tuple(a)} \text{{ and }} B{tuple(b)}"),
+        question=T("vector_line_through", lang, A=f"A{tuple(a)}",
+                   B=f"B{tuple(b)}"),
         answer=rf"\mathbf{{r}} = {col(a)} + \lambda {col(d)}",
         steps=[rf"\overrightarrow{{AB}} = \mathbf{{b}} - \mathbf{{a}} = {col(d)}"],
         topic="vectors_3d", level=level)
@@ -774,7 +791,7 @@ def _ascending(expr, x) -> str:
     return " + ".join(parts).replace("+ -", "-")
 
 
-def gen_maclaurin(rng: random.Random, level: str) -> Problem:
+def gen_maclaurin(rng: random.Random, level: str, lang: str = "en") -> Problem:
     sp = _sp()
     x = sp.Symbol("x")
     a = rng.randint(1, 3)
@@ -789,8 +806,8 @@ def gen_maclaurin(rng: random.Random, level: str) -> Problem:
     if ser == 0:
         raise ValueError("series vanished")
     return Problem(
-        question=(rf"\text{{Find the Maclaurin series for }} f(x) = {_latex(f)} "
-                  rf"\text{{ up to and including the term in }} x^{{{n}}}"),
+        question=T("maclaurin_series", lang, f=f"f(x) = {_latex(f)}",
+                   term=f"x^{{{n}}}"),
         answer=_ascending(ser, x),
         steps=[rf"f(x) = \sum_{{k=0}}^{{{n}}} "
                rf"\dfrac{{f^{{(k)}}(0)}}{{k!}} x^{{k}}"],
@@ -840,8 +857,8 @@ def available_topics() -> list[str]:
     return sorted(set(GENERATORS) | set(geometry.GEOMETRY_GENERATORS))
 
 
-def generate(topic: str, level: str = "MYP3", count: int = 10,
-             seed: int | None = None) -> list[Problem]:
+def generate(topic: str, level: str = "grade8", count: int = 10,
+             seed: int | None = None, lang: str = "en") -> list[Problem]:
     """Generate *count* problems for *topic*.
 
     A seed makes a worksheet reproducible, so the same sheet can be reprinted
@@ -856,6 +873,8 @@ def generate(topic: str, level: str = "MYP3", count: int = 10,
     if fn is None:
         raise ValueError(f"No generator for topic '{topic}'")
 
+    from researcher.mathtutor.i18n import split_alt
+
     rng = random.Random(seed)
     out: list[Problem] = []
     seen: set[str] = set()
@@ -863,10 +882,18 @@ def generate(topic: str, level: str = "MYP3", count: int = 10,
     while len(out) < count and attempts < count * 40:
         attempts += 1
         try:
-            p = fn(rng, level)
+            p = fn(rng, level, lang)
         except Exception as e:                      # a generator bug must not
             logger.warning("[math] %s failed: %s", topic, e)   # kill the sheet
             continue
+        # Separate the two renderings a bilingual language spec produced.
+        p.lang = lang
+        p.question, p.question_alt = split_alt(p.question)
+        p.answer, p.answer_alt = split_alt(p.answer)
+        if p.steps:
+            pairs = [split_alt(st) for st in p.steps]
+            p.steps = [a for a, _ in pairs]
+            p.steps_alt = [b for _, b in pairs if b]
         # Geometry problems share one question text ("Find the hypotenuse") and
         # differ only in the FIGURE, so keying the duplicate check on text alone
         # discarded almost every one of them. The answer is included too: two

@@ -1397,3 +1397,90 @@ async def delete_passage(
     )
     await db.commit()
     return cursor.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Printable sheets
+# ---------------------------------------------------------------------------
+#
+# Stored as a RECIPE (language, level, kind, sections, seed), never as the
+# finished exercises. The generators are deterministic, so the recipe rebuilds
+# the identical sheet whenever it is needed: a test printed in March can have
+# its answer key reprinted in June and the two still match.
+
+
+async def init_sheet_tables(db: aiosqlite.Connection):
+    await db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS tutor_sheets (
+            id          TEXT PRIMARY KEY,
+            user_id     TEXT NOT NULL DEFAULT '',
+            title       TEXT NOT NULL,
+            language    TEXT NOT NULL,
+            level       TEXT NOT NULL DEFAULT 'A1',
+            kind        TEXT NOT NULL DEFAULT 'homework',
+            sections    TEXT NOT NULL DEFAULT '[]',
+            seed        INTEGER NOT NULL,
+            student     TEXT NOT NULL DEFAULT '',
+            notes       TEXT NOT NULL DEFAULT '',
+            created_at  TEXT NOT NULL
+        )
+        """
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tutor_sheets_user "
+        "ON tutor_sheets(user_id, created_at DESC)"
+    )
+    await db.commit()
+
+
+_SHEET_COLS = ("id, title, language, level, kind, sections, seed, student, "
+               "notes, created_at")
+
+
+def _sheet_row(r) -> dict:
+    return {"id": r[0], "title": r[1], "language": r[2], "level": r[3],
+            "kind": r[4], "sections": json.loads(r[5] or "[]"), "seed": r[6],
+            "student": r[7], "notes": r[8], "created_at": r[9]}
+
+
+async def save_sheet(db: aiosqlite.Connection, user_id: str, *, title: str,
+                     language: str, level: str, kind: str, sections: list,
+                     seed: int, student: str = "", notes: str = "") -> dict:
+    sid = uuid.uuid4().hex[:8]
+    now = datetime.now(timezone.utc).isoformat()
+    await db.execute(
+        "INSERT INTO tutor_sheets (id, user_id, title, language, level, kind, "
+        "sections, seed, student, notes, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (sid, user_id, title, language, level, kind, json.dumps(sections),
+         int(seed), student, notes, now))
+    await db.commit()
+    return {"id": sid, "title": title, "language": language, "level": level,
+            "kind": kind, "sections": sections, "seed": seed,
+            "student": student, "notes": notes, "created_at": now}
+
+
+async def list_sheets(db: aiosqlite.Connection, user_id: str,
+                      limit: int = 100) -> list[dict]:
+    cur = await db.execute(
+        f"SELECT {_SHEET_COLS} FROM tutor_sheets WHERE user_id = ? "
+        "ORDER BY created_at DESC LIMIT ?", (user_id, int(limit)))
+    return [_sheet_row(r) for r in await cur.fetchall()]
+
+
+async def get_sheet(db: aiosqlite.Connection, user_id: str,
+                    sid: str) -> dict | None:
+    cur = await db.execute(
+        f"SELECT {_SHEET_COLS} FROM tutor_sheets WHERE id = ? AND user_id = ?",
+        (sid, user_id))
+    row = await cur.fetchone()
+    return _sheet_row(row) if row else None
+
+
+async def delete_sheet(db: aiosqlite.Connection, user_id: str,
+                       sid: str) -> bool:
+    cur = await db.execute(
+        "DELETE FROM tutor_sheets WHERE id = ? AND user_id = ?", (sid, user_id))
+    await db.commit()
+    return cur.rowcount > 0

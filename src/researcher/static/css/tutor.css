@@ -420,3 +420,145 @@
 .th-time { color: #475569; }
 .th-source { color: #94a3b8; margin-top: 0.15rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .th-target { color: #e94560; margin-top: 0.1rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+
+/* ---- Printable sheets ------------------------------------------------- */
+
+.sheets-overlay {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 60;
+}
+
+.sheets-panel {
+    display: none;
+    position: fixed;
+    top: 3vh; left: 4vw; right: 4vw; bottom: 3vh;
+    background: #16213e;
+    border: 1px solid #1a3a6e;
+    border-radius: 0.75rem;
+    z-index: 61;
+    overflow: hidden;
+}
+
+.sheets-panel.open { display: grid; grid-template-columns: 330px 1fr; }
+
+.sheets-build {
+    padding: 0.9rem;
+    overflow-y: auto;
+    border-right: 1px solid #1a3a6e;
+}
+
+.sheets-head { display: flex; align-items: center; margin-bottom: 0.6rem; }
+.sheets-head h3 {
+    margin: 0; flex: 1;
+    font-size: 0.85rem; color: #60a5fa;
+    text-transform: uppercase; letter-spacing: 0.05em;
+}
+.sheets-head button {
+    background: none; border: 0; color: #94a3b8;
+    cursor: pointer; font-size: 1rem;
+}
+
+.sheets-build label {
+    display: block;
+    font-size: 0.75rem; color: #94a3b8;
+    margin: 0.5rem 0 0.2rem;
+}
+
+.sheets-build select,
+.sheets-build input[type="text"] {
+    width: 100%; box-sizing: border-box;
+    background: #0f3460; color: #e2e8f0;
+    border: 1px solid #1a3a6e; border-radius: 0.4rem;
+    padding: 0.35rem 0.5rem; font-size: 0.82rem;
+}
+
+.sheets-row { display: flex; gap: 0.5rem; }
+.sheets-row > label { flex: 1; }
+
+.sheets-note {
+    font-size: 0.7rem; color: #64748b;
+    line-height: 1.4; margin-top: 0.25rem;
+}
+
+#sheets-skills {
+    border: 1px solid #1a3a6e; border-radius: 0.4rem;
+    background: #0f3460; padding: 0.35rem;
+    max-height: 230px; overflow-y: auto;
+}
+
+.sheets-skill {
+    display: flex; align-items: center; gap: 0.35rem;
+    padding: 0.15rem 0;
+}
+.sheets-skill label {
+    flex: 1; margin: 0; display: flex;
+    align-items: center; gap: 0.35rem;
+    font-size: 0.78rem; color: #cbd5e1; cursor: pointer;
+}
+.sheets-skill input[type="number"] {
+    width: 3rem; background: #16213e; color: #e2e8f0;
+    border: 1px solid #1a3a6e; border-radius: 0.3rem;
+    padding: 0.15rem 0.3rem; font-size: 0.72rem;
+}
+
+.sheets-actions {
+    display: flex; flex-wrap: wrap;
+    gap: 0.35rem; margin-top: 0.7rem;
+}
+.sheets-actions button {
+    flex: 1 1 45%;
+    background: #0f3460; color: #e2e8f0;
+    border: 1px solid #1a3a6e; border-radius: 0.45rem;
+    padding: 0.4rem; font-size: 0.76rem; cursor: pointer;
+}
+.sheets-actions button:hover:not(:disabled) { background: #1a3a6e; }
+.sheets-actions button:disabled { opacity: 0.5; cursor: default; }
+.sheets-actions button.primary {
+    background: #2563eb; border-color: #3b82f6; color: #fff;
+}
+
+.sheets-preview { display: flex; flex-direction: column; overflow: hidden; }
+
+.sheets-tabs {
+    display: flex; gap: 0.4rem;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid #1a3a6e;
+}
+.sheets-tabs button {
+    background: #0f3460; color: #94a3b8;
+    border: 1px solid #1a3a6e; border-radius: 0.4rem;
+    padding: 0.25rem 0.6rem; font-size: 0.74rem; cursor: pointer;
+}
+.sheets-tabs button.on {
+    background: #2563eb; color: #fff; border-color: #3b82f6;
+}
+
+#sheets-frame { flex: 1; width: 100%; border: 0; background: #475569; }
+
+.sheets-empty {
+    flex: 1; display: flex;
+    align-items: center; justify-content: center;
+    color: #64748b; font-size: 0.9rem;
+    text-align: center; padding: 2rem; line-height: 1.6;
+}
+
+.sheets-saved-item {
+    border: 1px solid #1a3a6e; border-radius: 0.45rem;
+    padding: 0.45rem; margin-bottom: 0.35rem;
+    font-size: 0.76rem; color: #cbd5e1;
+}
+.sheets-saved-item .meta { color: #64748b; font-size: 0.68rem; margin-top: 0.1rem; }
+.sheets-saved-item .btns { display: flex; gap: 0.25rem; margin-top: 0.3rem; }
+.sheets-saved-item .btns button {
+    background: #0f3460; color: #94a3b8;
+    border: 1px solid #1a3a6e; border-radius: 0.3rem;
+    padding: 0.15rem 0.4rem; font-size: 0.68rem; cursor: pointer;
+}
+
+@media (max-width: 900px) {
+    .sheets-panel.open { grid-template-columns: 1fr; }
+    .sheets-build { border-right: 0; border-bottom: 1px solid #1a3a6e; }
+}

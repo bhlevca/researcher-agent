@@ -2,7 +2,7 @@
 
 A CrewAI-powered research agent with a browser-based chat UI, voice dialog, image generation, and session management. Runs locally using Ollama — the **client only needs a web browser**.
 
-**Version 2.13.0**
+**Version 2.14.0**
 
 ## Architecture
 
@@ -477,6 +477,58 @@ hundred bytes.
 Marked sheets can be recorded per question, and `/math/progress` reports
 accuracy per topic with the weakest first — so "which topics is she actually
 getting wrong" is a query rather than a memory.
+
+## Language Tutor — printable sheets
+
+Open `/tutor` and press **🖨️ Sheets**. Generates homework, tests, exams and
+quick challenges with matching answer keys, for **French, German and Romanian**.
+
+Everything that already existed is untouched: chat, lessons, passages, quizzes,
+vocabulary with FSRS, scenarios, translation, appraisal, pronunciation scoring,
+voice and TTS. The sheets are additive.
+
+### Why the answers are trustworthy
+
+Grammar is rule-governed, so **no model produces an exercise or its answer**.
+Every answer is read out of a checked-in language pack
+([`tutor/langpacks/*.yaml`](src/researcher/tutor/langpacks)) or derived from a
+table in one. A child marked wrong on a correct answer learns something false
+and is then told it twice — once by the sheet and once by whoever marks it.
+
+The packs are data, so a form that reads wrong to a speaker is fixed by editing
+YAML, and a language is extended by adding entries.
+
+### What each language drills
+
+The packs are shaped by the language, not copied from one another:
+
+| | |
+|---|---|
+| **French** | Conjugation across four tenses, elision (`l'ami`, `j'ai`), prenominal adjectives (`le petit livre`), the `bel`/`vieil`/`nouvel` pre-vowel forms, and *être* agreement in the compound past (`nous sommes partis`) |
+| **German** | Four cases, plurals, and adjective endings **derived from the weak/mixed/strong tables** rather than transcribed — so none of the 48 endings can be mistyped into a key |
+| **Romanian** | The enclitic definite article (`masă → masa`, `câine → câinele`), three genders including neuter, and the compound past and future |
+
+### Sheet types
+
+`homework` and `challenge` print questions with writing space. `test` and `exam`
+add marks in the right margin, a per-section subtotal and a total box — which is
+what makes a test a test. The math tutor will borrow the mark scheme later.
+
+Typesetting is shared with the math tutor
+([`researcher/latex.py`](src/researcher/latex.py)), so both produce the same
+paper and a fix lands in both. The preview is the real PDF in an iframe: what
+you see is what prints.
+
+### A seed is a sheet
+
+Only the recipe is stored — language, level, kind, sections, seed — so a test
+printed in March reprints identically in June and its key cannot drift.
+
+### Not covered
+
+The tutor converses in ten languages; sheets exist for three. Asking for a sheet
+in another language returns a clear refusal rather than a worse sheet.
+Pronunciation and diction stay on screen, where the markings are the point.
 
 ## File Ingestion & Export
 

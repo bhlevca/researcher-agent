@@ -1,0 +1,171 @@
+# Romanian language pack.
+#
+# Romanian is not French with different words, and the pack shape reflects that:
+#   - the definite article is ENCLITIC (a suffix): masă -> masa, câine -> câinele.
+#     So it lives on each noun as def_sg/def_pl rather than in a table of
+#     le/la/les. Forcing the French shape onto Romanian would produce exercises
+#     that teach a structure the language does not have.
+#   - there are three genders; neuter behaves as masculine in the singular and
+#     feminine in the plural, which is exactly what makes it worth drilling.
+#   - the imperfect has identical 1sg and 1pl forms (eu vorbeam / noi vorbeam).
+#     That is correct, not a copy-paste slip.
+
+meta:
+  name: Romanian
+  code: ro
+  article_position: enclitic
+  genders: [m, f, n]
+
+articles:
+  indefinite: {m: "un", f: "o", n: "un"}
+
+pronouns: ["eu", "tu", "el", "noi", "voi", "ei"]
+
+# Auxiliary for the compound past (perfect compus).
+perfect_aux: {eu: "am", tu: "ai", el: "a", noi: "am", voi: "ați", ei: "au"}
+# Future auxiliary, which takes the bare infinitive.
+future_aux: {eu: "voi", tu: "vei", el: "va", noi: "vom", voi: "veți", ei: "vor"}
+
+verbs:
+  - inf: a vorbi
+    gloss: to speak
+    level: A1
+    present: {eu: vorbesc, tu: vorbești, el: vorbește, noi: vorbim, voi: vorbiți, ei: vorbesc}
+    imperfect: {eu: vorbeam, tu: vorbeai, el: vorbea, noi: vorbeam, voi: vorbeați, ei: vorbeau}
+    participle: vorbit
+    bare_inf: vorbi
+  - inf: a fi
+    gloss: to be
+    level: A1
+    present: {eu: sunt, tu: ești, el: este, noi: suntem, voi: sunteți, ei: sunt}
+    imperfect: {eu: eram, tu: erai, el: era, noi: eram, voi: erați, ei: erau}
+    participle: fost
+    bare_inf: fi
+  - inf: a avea
+    gloss: to have
+    level: A1
+    present: {eu: am, tu: ai, el: are, noi: avem, voi: aveți, ei: au}
+    imperfect: {eu: aveam, tu: aveai, el: avea, noi: aveam, voi: aveați, ei: aveau}
+    participle: avut
+    bare_inf: avea
+  - inf: a merge
+    gloss: to go
+    level: A1
+    present: {eu: merg, tu: mergi, el: merge, noi: mergem, voi: mergeți, ei: merg}
+    imperfect: {eu: mergeam, tu: mergeai, el: mergea, noi: mergeam, voi: mergeați, ei: mergeau}
+    participle: mers
+    bare_inf: merge
+  - inf: a face
+    gloss: to do, to make
+    level: A1
+    present: {eu: fac, tu: faci, el: face, noi: facem, voi: faceți, ei: fac}
+    imperfect: {eu: făceam, tu: făceai, el: făcea, noi: făceam, voi: făceați, ei: făceau}
+    participle: făcut
+    bare_inf: face
+  - inf: a lucra
+    gloss: to work
+    level: A1
+    present: {eu: lucrez, tu: lucrezi, el: lucrează, noi: lucrăm, voi: lucrați, ei: lucrează}
+    imperfect: {eu: lucram, tu: lucrai, el: lucra, noi: lucram, voi: lucrați, ei: lucrau}
+    participle: lucrat
+    bare_inf: lucra
+  - inf: a citi
+    gloss: to read
+    level: A1
+    present: {eu: citesc, tu: citești, el: citește, noi: citim, voi: citiți, ei: citesc}
+    imperfect: {eu: citeam, tu: citeai, el: citea, noi: citeam, voi: citeați, ei: citeau}
+    participle: citit
+    bare_inf: citi
+  - inf: a scrie
+    gloss: to write
+    level: A2
+    present: {eu: scriu, tu: scrii, el: scrie, noi: scriem, voi: scrieți, ei: scriu}
+    imperfect: {eu: scriam, tu: scriai, el: scria, noi: scriam, voi: scriați, ei: scriau}
+    participle: scris
+    bare_inf: scrie
+  - inf: a mânca
+    gloss: to eat
+    level: A1
+    present: {eu: mănânc, tu: mănânci, el: mănâncă, noi: mâncăm, voi: mâncați, ei: mănâncă}
+    imperfect: {eu: mâncam, tu: mâncai, el: mânca, noi: mâncam, voi: mâncați, ei: mâncau}
+    participle: mâncat
+    bare_inf: mânca
+  - inf: a bea
+    gloss: to drink
+    level: A2
+    present: {eu: beau, tu: bei, el: bea, noi: bem, voi: beți, ei: beau}
+    imperfect: {eu: beam, tu: beai, el: bea, noi: beam, voi: beați, ei: beau}
+    participle: băut
+    bare_inf: bea
+  - inf: a vedea
+    gloss: to see
+    level: A2
+    present: {eu: văd, tu: vezi, el: vede, noi: vedem, voi: vedeți, ei: văd}
+    imperfect: {eu: vedeam, tu: vedeai, el: vedea, noi: vedeam, voi: vedeați, ei: vedeau}
+    participle: văzut
+    bare_inf: vedea
+  - inf: a putea
+    gloss: to be able to
+    level: A2
+    present: {eu: pot, tu: poți, el: poate, noi: putem, voi: puteți, ei: pot}
+    imperfect: {eu: puteam, tu: puteai, el: putea, noi: puteam, voi: puteați, ei: puteau}
+    participle: putut
+    bare_inf: putea
+  - inf: a vrea
+    gloss: to want
+    level: A2
+    present: {eu: vreau, tu: vrei, el: vrea, noi: vrem, voi: vreți, ei: vor}
+    imperfect: {eu: voiam, tu: voiai, el: voia, noi: voiam, voi: voiați, ei: voiau}
+    participle: vrut
+    bare_inf: vrea
+  - inf: a veni
+    gloss: to come
+    level: A2
+    present: {eu: vin, tu: vii, el: vine, noi: venim, voi: veniți, ei: vin}
+    imperfect: {eu: veneam, tu: veneai, el: venea, noi: veneam, voi: veneați, ei: veneau}
+    participle: venit
+    bare_inf: veni
+  - inf: a dormi
+    gloss: to sleep
+    level: A2
+    present: {eu: dorm, tu: dormi, el: doarme, noi: dormim, voi: dormiți, ei: dorm}
+    imperfect: {eu: dormeam, tu: dormeai, el: dormea, noi: dormeam, voi: dormeați, ei: dormeau}
+    participle: dormit
+    bare_inf: dormi
+
+# def_sg / def_pl are the forms WITH the enclitic definite article.
+nouns:
+  - {word: masă,     gloss: table,     gender: f, plural: mese,    def_sg: masa,      def_pl: mesele,     level: A1}
+  - {word: carte,    gloss: book,      gender: f, plural: cărți,   def_sg: cartea,    def_pl: cărțile,    level: A1}
+  - {word: casă,     gloss: house,     gender: f, plural: case,    def_sg: casa,      def_pl: casele,     level: A1}
+  - {word: câine,    gloss: dog,       gender: m, plural: câini,   def_sg: câinele,   def_pl: câinii,     level: A1}
+  - {word: pisică,   gloss: cat,       gender: f, plural: pisici,  def_sg: pisica,    def_pl: pisicile,   level: A1}
+  - {word: mașină,   gloss: car,       gender: f, plural: mașini,  def_sg: mașina,    def_pl: mașinile,   level: A1}
+  - {word: școală,   gloss: school,    gender: f, plural: școli,   def_sg: școala,    def_pl: școlile,    level: A1}
+  - {word: prieten,  gloss: friend,    gender: m, plural: prieteni, def_sg: prietenul, def_pl: prietenii, level: A1}
+  - {word: fereastră, gloss: window,   gender: f, plural: ferestre, def_sg: fereastra, def_pl: ferestrele, level: A1}
+  - {word: copac,    gloss: tree,      gender: m, plural: copaci,  def_sg: copacul,   def_pl: copacii,    level: A1}
+  - {word: copil,    gloss: child,     gender: m, plural: copii,   def_sg: copilul,   def_pl: copiii,     level: A1}
+  - {word: oraș,     gloss: town,      gender: n, plural: orașe,   def_sg: orașul,    def_pl: orașele,    level: A2}
+  - {word: ziar,     gloss: newspaper, gender: n, plural: ziare,   def_sg: ziarul,    def_pl: ziarele,    level: A2}
+  - {word: cal,      gloss: horse,     gender: m, plural: cai,     def_sg: calul,     def_pl: caii,       level: A2}
+  - {word: pasăre,   gloss: bird,      gender: f, plural: păsări,  def_sg: pasărea,   def_pl: păsările,   level: A2}
+  - {word: apă,      gloss: water,     gender: f, plural: ape,     def_sg: apa,       def_pl: apele,      level: A1}
+  - {word: pâine,    gloss: bread,     gender: f, plural: pâini,   def_sg: pâinea,    def_pl: pâinile,    level: A1}
+  - {word: lucru,    gloss: thing,     gender: n, plural: lucruri, def_sg: lucrul,    def_pl: lucrurile,  level: A2}
+  - {word: băiat,    gloss: boy,       gender: m, plural: băieți,  def_sg: băiatul,   def_pl: băieții,    level: A1}
+  - {word: scaun,    gloss: chair,     gender: n, plural: scaune,  def_sg: scaunul,   def_pl: scaunele,   level: A1}
+
+adjectives:
+  - {word: mare,     gloss: big,       f: mare,     mpl: mari,     fpl: mari,     level: A1}
+  - {word: mic,      gloss: small,     f: mică,     mpl: mici,     fpl: mici,     level: A1}
+  - {word: verde,    gloss: green,     f: verde,    mpl: verzi,    fpl: verzi,    level: A1}
+  - {word: albastru, gloss: blue,      f: albastră, mpl: albaștri, fpl: albastre, level: A1}
+  - {word: fericit,  gloss: happy,     f: fericită, mpl: fericiți, fpl: fericite, level: A2}
+  - {word: frumos,   gloss: beautiful, f: frumoasă, mpl: frumoși,  fpl: frumoase, level: A2}
+  - {word: bătrân,   gloss: old,       f: bătrână,  mpl: bătrâni,  fpl: bătrâne,  level: A2}
+  - {word: nou,      gloss: new,       f: nouă,     mpl: noi,      fpl: noi,      level: A2}
+  - {word: alb,      gloss: white,     f: albă,     mpl: albi,     fpl: albe,     level: A2}
+  - {word: lung,     gloss: long,      f: lungă,    mpl: lungi,    fpl: lungi,    level: B1}
+  - {word: ușor,     gloss: easy,      f: ușoară,   mpl: ușori,    fpl: ușoare,   level: A2}
+  - {word: roșu,     gloss: red,       f: roșie,    mpl: roșii,    fpl: roșii,    level: A1}

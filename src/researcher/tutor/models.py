@@ -1,6 +1,6 @@
 """Pydantic models for the Language Tutor feature."""
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 # --- Request models ---
@@ -74,3 +74,38 @@ class QuizSubmitRequest(BaseModel):
 class AppraisalRequest(BaseModel):
     """Request an appraisal of student progress."""
     session_id: str
+
+
+# ---------------------------------------------------------------------------
+# Printable sheets
+# ---------------------------------------------------------------------------
+
+
+class SheetSection(BaseModel):
+    """One part of a printable sheet."""
+
+    skill: str
+    count: int = 5
+    marks_each: int = 1
+    title: str = ""
+    instruction: str = ""
+
+
+class SheetRequest(BaseModel):
+    """Generate (or regenerate) a printable sheet.
+
+    *seed* is optional on the way in and always returned: a sheet cannot be
+    reprinted or marked without it.
+    """
+
+    language: str = "French"
+    level: str = "A1"
+    kind: str = "homework"              # homework | test | exam | challenge
+    title: str = ""
+    student: str = ""
+    seed: int | None = None
+    sections: list[SheetSection] = Field(default_factory=list)
+
+
+class SheetSaveRequest(SheetRequest):
+    notes: str = ""

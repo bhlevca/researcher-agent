@@ -20,7 +20,7 @@ import aiosqlite
 
 from researcher.image import generate_ai_image, preload_sd, preload_zimage, preload_ernie, preload_flux
 from researcher.config import STATIC_DIR, DB_PATH
-from researcher.tutor.storage import init_tutor_tables
+from researcher.tutor.storage import init_tutor_tables, init_sheet_tables
 from researcher.composer.storage import init_composer_tables
 from researcher.mathtutor.storage import init_math_tables
 
@@ -39,6 +39,7 @@ from researcher.routes.sessions import register_session_routes
 from researcher.routes.models import register_model_routes
 from researcher.routes.speech import register_speech_routes
 from researcher.routes.tutor import register_tutor_routes
+from researcher.routes.tutor_sheets import register_tutor_sheet_routes
 from researcher.routes.composer import register_composer_routes
 from researcher.routes.mathtutor import register_mathtutor_routes
 from researcher.routes.proxy import register_proxy_routes
@@ -131,6 +132,7 @@ async def lifespan(app: FastAPI):
 
     # Tutor tables
     await init_tutor_tables(db)
+    await init_sheet_tables(db)
 
     # Composer tables
     await init_composer_tables(db)
@@ -210,6 +212,7 @@ register_session_routes(app)
 register_model_routes(app)
 register_speech_routes(app)
 register_tutor_routes(app)
+register_tutor_sheet_routes(app)
 register_composer_routes(app)
 register_mathtutor_routes(app)
 register_proxy_routes(app)

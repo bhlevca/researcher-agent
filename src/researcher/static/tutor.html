@@ -88,6 +88,7 @@
             <button onclick="createTutorSession()" title="New tutor session">🗒️ New</button>
             <button onclick="saveTutorSession()" title="Save session">💾 Save</button>
             <button onclick="openTutorSessionsPanel()" title="Saved tutor sessions">📂 Sessions</button>
+            <button onclick="openSheetsPanel()" title="Printable homework, tests and exams">🖨️ Sheets</button>
             <a href="/" class="nav-link" title="Back to Research Agent">🔬 Research</a>
             <a href="/composer" class="nav-link" title="Music Composer">🎼 Composer</a>
             <a href="/math" class="nav-link" title="Math Tutor">📐 Math</a>
@@ -118,6 +119,69 @@
     </div>
 
     <!-- Tutor sessions panel (overlay, slides from right like research sessions) -->
+    <!-- Printable sheets -->
+    <div class="sheets-overlay" id="sheets-overlay" onclick="closeSheetsPanel()"></div>
+    <div class="sheets-panel" id="sheets-panel">
+        <div class="sheets-build">
+            <div class="sheets-head">
+                <h3>Printable sheets</h3>
+                <button onclick="closeSheetsPanel()" title="Close">✕</button>
+            </div>
+
+            <label>Language
+                <select id="sheets-language" onchange="loadSheetSkills()">
+                    <option value="French">French</option>
+                </select>
+            </label>
+            <div class="sheets-note">Exercises and answers come from a checked-in
+                language pack — no model is involved, so the key is correct by
+                construction. Available for French, German and Romanian.</div>
+
+            <div class="sheets-row">
+                <label>Level <select id="sheets-level"></select></label>
+                <label>Type
+                    <select id="sheets-kind">
+                        <option value="homework">Homework</option>
+                        <option value="test">Test (with marks)</option>
+                        <option value="exam">Exam (with marks)</option>
+                        <option value="challenge">Challenge</option>
+                    </select>
+                </label>
+            </div>
+
+            <label>Skills <span class="sheets-note">questions · marks each</span></label>
+            <div id="sheets-skills"></div>
+
+            <div class="sheets-row">
+                <label>Seed <input type="text" id="sheets-seed" placeholder="random"></label>
+                <label>Student <input type="text" id="sheets-student" placeholder="optional"></label>
+            </div>
+            <label>Title <input type="text" id="sheets-title" placeholder="auto"></label>
+
+            <div class="sheets-actions">
+                <button class="primary" id="sheets-go" onclick="previewSheet()">Preview</button>
+                <button onclick="downloadSheet(false)">⬇ Sheet</button>
+                <button onclick="downloadSheet(true)">⬇ Answer key</button>
+                <button onclick="saveSheet()">💾 Save</button>
+                <button onclick="listSavedSheets()">📂 Saved</button>
+            </div>
+            <div class="sheets-note" id="sheets-status"></div>
+            <div id="sheets-saved" style="display:none;margin-top:0.6rem"></div>
+        </div>
+
+        <div class="sheets-preview">
+            <div class="sheets-tabs">
+                <button id="sheets-tab-sheet" class="on" onclick="showSheetPdf(false)">Sheet</button>
+                <button id="sheets-tab-key" onclick="showSheetPdf(true)">Answer key</button>
+            </div>
+            <iframe id="sheets-frame" style="display:none" title="Sheet preview"></iframe>
+            <div class="sheets-empty" id="sheets-empty">
+                Choose skills and press <strong>Preview</strong>.<br>
+                What you see here is exactly what prints.
+            </div>
+        </div>
+    </div>
+
     <div class="tutor-sessions-overlay" id="tutor-sessions-overlay" onclick="closeTutorSessionsPanel()"></div>
     <div class="tutor-sessions-panel" id="tutor-sessions-panel">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
@@ -452,6 +516,7 @@
     <script src="/static/js/tutor-stats.js"></script>
     <script src="/static/js/tutor-scenarios.js"></script>
     <script src="/static/js/tutor-curriculum.js"></script>
+    <script src="/static/js/tutor-sheets.js?v=1"></script>
 
     <!-- Tutor init -->
     <script>

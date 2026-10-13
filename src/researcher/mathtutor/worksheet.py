@@ -22,7 +22,15 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-LATEX_CMD = os.getenv("LATEX_CMD", "pdflatex")
+# Typesetting primitives are shared with the language tutor; see latex.py.
+from researcher.latex import (          # noqa: E402
+    LATEX_CMD,
+    latex_available,
+    compile_pdf,
+    escape_text as _escape_text,
+    mixed as _mixed,
+    preamble as _base_preamble,
+)
 
 # Space left under each question for working. Primary needs less; a DP
 # integration question needs half a page or the child writes in the margin.
@@ -35,138 +43,12 @@ _WORK_SPACE = {
 
 # Younger children need larger type: 11pt is the adult default and is too small
 # for a child still learning to decode numerals.
-#
-# article only accepts 10, 11 and 12pt — it silently DISCARDS anything else and
-# falls back to 10pt, so asking it for 14pt makes the sheet smaller, not bigger.
-# extarticle (texlive-extsizes) accepts 8-20pt and is otherwise a drop-in.
 _FONT_PT = {1: 14, 2: 14, 3: 12, 4: 12, 5: 12}
 
 
-def _has_extarticle() -> bool:
-    global _EXTARTICLE
-    if _EXTARTICLE is None:
-        try:
-            _EXTARTICLE = subprocess.run(
-                ["kpsewhich", "extarticle.cls"], capture_output=True,
-                text=True, timeout=10).returncode == 0
-        except Exception:
-            _EXTARTICLE = False
-    return _EXTARTICLE
-
-
-_EXTARTICLE: bool | None = None
-
-
 def _preamble(level: str) -> str:
-    import re as _re
-
-    m = _re.search(r"(\d+)", level or "")
-    pt = _FONT_PT.get(int(m.group(1)) if m else 99, 11)
-    if pt <= 12:
-        return _PREAMBLE.replace("[11pt,", f"[{pt}pt,")
-    if _has_extarticle():
-        return _PREAMBLE.replace("[11pt,a4paper]{article}",
-                                 f"[{pt}pt,a4paper]{{extarticle}}")
-    # Without extsizes, 12pt is the largest article will honour.
-    return _PREAMBLE.replace("[11pt,", "[12pt,")
-
-
-_PREAMBLE = r"""\documentclass[11pt,a4paper]{article}
-\usepackage[margin=2cm,top=1.8cm,bottom=1.8cm]{geometry}
-\usepackage{amsmath,amssymb}
-\usepackage{graphicx}
-\usepackage{enumitem}
-\usepackage{fancyhdr}
-\usepackage[T1]{fontenc}
-\usepackage{lmodern}
-\pagestyle{fancy}
-\fancyhf{}
-\renewcommand{\headrulewidth}{0.4pt}
-\setlength{\parindent}{0pt}
-"""
-
-
-def _escape_text(s: str) -> str:
-    """Escape characters that would break LaTeX in plain-text fields."""
-    for a, b in (("\\", r"\textbackslash{}"), ("&", r"\&"), ("%", r"\%"),
-                 ("$", r"\$"), ("#", r"\#"), ("_", r"\_"), ("{", r"\{"),
-                 ("}", r"\}"), ("~", r"\textasciitilde{}"),
-                 ("^", r"\textasciicircum{}")):
-        s = s.replace(a, b)
-    return s
-
-
-# LaTeX spacing commands, which are not mathematics and must not be left
-# stranded inside dollar signs.
-_SPACE = r"(?:\\[,;:!]|\\q?quad|\\ |~|\s)"
-
-
-def _mixed(latex: str, display: bool = False) -> str:
-    r"""Turn a question written entirely in math mode into wrappable prose.
-
-    Generators write a question as one math expression with the words inside
-    \text{...}. That is correct LaTeX, but **math mode does not line-break**, so
-    a long worded question ran off the right edge of the page instead of
-    wrapping. Here the \text{...} parts become real text and only the
-    mathematics stays between dollar signs, which is what lets a paragraph wrap.
-    """
-    out: list[str] = []
-    i, n = 0, len(latex)
-    buf: list[str] = []
-
-    def flush_math():
-        raw = "".join(buf)
-        buf.clear()
-        # A fragment that is only LaTeX spacing (\, \; \quad \ ) carries no
-        # mathematics; left between dollar signs it compiles to "$\$".
-        if re.fullmatch(_SPACE + "*", raw):
-            if raw:
-                out.append(" ")
-            return
-        chunk = re.sub(_SPACE + "+$", "", re.sub("^" + _SPACE + "+", "", raw))
-        # Trailing punctuation belongs to the sentence, not to the formula.
-        tail = ""
-        while chunk and chunk[-1] in ".,;:?":
-            tail = chunk[-1] + tail
-            chunk = re.sub(_SPACE + "+$", "", chunk[:-1])
-        if chunk:
-            out.append(rf"$\displaystyle {chunk}$" if display else f"${chunk}$")
-        if tail:
-            # The space that followed the punctuation was consumed above; put
-            # one back, or "(6, 5), radius 7" sets as "(6, 5),radius 7". A
-            # trailing one is harmless — the join below trims it.
-            out.append(tail + " ")
-
-    def close_brace(start: int) -> int:
-        """Index just past the brace group opening at *start*."""
-        j, depth = start, 1
-        while j < n and depth:
-            if latex[j] == "{":
-                depth += 1
-            elif latex[j] == "}":
-                depth -= 1
-            j += 1
-        return j
-
-    while i < n:
-        if latex.startswith(r"\text{", i):
-            j = close_brace(i + 6)
-            # A unit carrying an exponent — \text{cm}^{2} — must stay in math
-            # mode, or the exponent is orphaned from what it belongs to.
-            if j < n and latex[j] in "^_":
-                k = close_brace(j + 2) if latex[j + 1:j + 2] == "{" else j + 2
-                buf.append(latex[i:k])
-                i = k
-                continue
-            flush_math()
-            out.append(latex[i + 6:j - 1])
-            i = j
-        else:
-            buf.append(latex[i])
-            i += 1
-    flush_math()
-    # Collapse the double spaces left where a \text{} abutted a formula.
-    return " ".join("".join(out).split()) or latex
+    m = re.search(r"(\d+)", level or "")
+    return _base_preamble(_FONT_PT.get(int(m.group(1)) if m else 99, 11))
 
 
 def _figure_files(problems, workdir: Path) -> dict[int, str]:
@@ -277,37 +159,23 @@ def render_pdf(problems, title: str, level_label: str, level: str = "grade8",
     Returns None when LaTeX is unavailable or the document fails to compile —
     the caller falls back to the HTML preview rather than failing the request.
     """
-    if not shutil.which(LATEX_CMD):
-        logger.info("[math] %s not installed; PDF unavailable", LATEX_CMD)
-        return None
     if not problems:
         return None
+    figures = {}
+    files = {}
+    from researcher.mathtutor.geometry import render_figure
 
-    with tempfile.TemporaryDirectory() as tmp:
-        work = Path(tmp)
-        figs = _figure_files(problems, work)
-        tex = _build_tex(problems, title, level_label, answers=answers,
-                         figures=figs, level=level, student=student, lang=lang)
-        (work / "sheet.tex").write_text(tex, encoding="utf-8")
-        try:
-            # Twice, so \pageref and the header settle. -interaction=nonstopmode
-            # keeps a single bad glyph from hanging the request forever.
-            for _ in range(2):
-                proc = subprocess.run(
-                    [LATEX_CMD, "-interaction=nonstopmode", "-halt-on-error",
-                     "sheet.tex"],
-                    cwd=work, capture_output=True, text=True, timeout=120)
-            pdf = work / "sheet.pdf"
-            if not pdf.is_file():
-                tail = (proc.stdout or "")[-700:]
-                logger.warning("[math] LaTeX produced no PDF: %s", tail)
-                return None
-            return pdf.read_bytes()
-        except subprocess.TimeoutExpired:
-            logger.warning("[math] LaTeX timed out")
-        except Exception as e:
-            logger.warning("[math] LaTeX failed: %s", e)
-    return None
+    for i, p in enumerate(problems):
+        if not p.figure:
+            continue
+        data = render_figure(p.figure, fmt="pdf")
+        if data:
+            files[f"fig{i}.pdf"] = data
+            figures[i] = f"fig{i}.pdf"
+
+    tex = _build_tex(problems, title, level_label, answers=answers,
+                     figures=figures, level=level, student=student, lang=lang)
+    return compile_pdf(tex, files, tag="math")
 
 
 def render_html(problems, title: str, level_label: str,

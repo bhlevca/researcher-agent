@@ -2,7 +2,7 @@
 
 A CrewAI-powered research agent with a browser-based chat UI, voice dialog, image generation, and session management. Runs locally using Ollama — the **client only needs a web browser**.
 
-**Version 2.15.0**
+**Version 2.16.0**
 
 ## Architecture
 
@@ -542,6 +542,26 @@ Two consequences, both deliberate rather than compromises:
 
 A response the model mangles is reported rather than printed — an empty
 question is worse than an error.
+
+### Lesson sheets
+
+A lesson is a full teaching document — objectives, grammar explanation, a
+vocabulary table, dialogues and practice exercises. These were previously
+exportable only as Markdown or DOCX, which is something a teacher reads rather
+than something a child writes on.
+
+In the **Lesson** tab you can either write a new one or print a lesson saved
+earlier. Printing a saved lesson makes no model call at all.
+
+The answer key costs nothing extra: the model is already told to end a lesson
+with a **Solutions** section, so the sheet is everything before it and the key
+is the section itself. They are the same document cut in half, which is why
+they cannot disagree. A lesson with no Solutions section reports that there is
+no key rather than printing the sheet again under an "Answer key" heading.
+
+Markdown renders to LaTeX directly — headings, bold, italic, bullet and
+numbered lists, and tables with wrapped cells — and numbered practice exercises
+get writing space beneath them.
 
 ### Sheet types
 

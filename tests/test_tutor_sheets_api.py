@@ -375,3 +375,131 @@ class TestStoryParsing:
 
         with pytest.raises(ValueError):
             parse_story('{"title": "T"}')
+
+
+_LESSON_MD = """# Lesson: Daily routines
+
+## 1. Objectives
+- Describe a daily routine
+- Use reflexive verbs
+
+## 2. Grammar
+The pattern is **se + verb**.
+
+| Person | Pronoun | se lever |
+|--------|---------|----------|
+| je | me | je me lève |
+| tu | te | tu te lèves |
+
+## 3. Practice Exercises
+1. Complete: Je ______ (se lever).
+2. Translate: She wakes up early.
+
+## 4. Solutions
+1. Je **me lève**.
+2. Elle se réveille tôt.
+"""
+
+
+class TestLessonSheets:
+    """A lesson already ends with Solutions, so the sheet and key are the same
+    document cut in half — no second model call, and they cannot disagree."""
+
+    def test_split_finds_the_solutions_section(self):
+        from researcher.tutor.markdown_tex import split_solutions
+
+        body, sol = split_solutions(_LESSON_MD)
+        assert "Objectives" in body and "Solutions" not in body
+        assert "me lève" in sol
+
+    @pytest.mark.parametrize("heading", [
+        "## Solutions", "## 7. Solutions", "# Answer Key",
+        "## Solutions to the exercises", "## Answers", "## Corrigé",
+    ])
+    def test_split_accepts_the_headings_models_actually_write(self, heading):
+        from researcher.tutor.markdown_tex import split_solutions
+
+        body, sol = split_solutions(f"# L\n\nBody text\n\n{heading}\n\n1. A")
+        assert "Body text" in body
+        assert "1. A" in sol
+
+    def test_a_lesson_without_solutions_yields_no_key(self):
+        from researcher.tutor import printing
+
+        md = "# Lesson\n\n## Grammar\nSome text.\n"
+        assert not printing.lesson_has_answers(md)
+        assert printing.render_lesson_pdf(md, title="T", subtitle="S",
+                                          answers=True) is None
+
+    def test_sheet_and_key_compile(self, client, headers):
+        body = {"markdown": _LESSON_MD, "title": "Daily routines",
+                "language": "French", "level": "A2"}
+        sheet = client.post("/tutor/sheets/lesson/pdf", headers=headers, json=body)
+        key = client.post("/tutor/sheets/lesson/answers", headers=headers, json=body)
+        if sheet.status_code == 503:
+            pytest.skip("pdflatex not installed")
+        assert sheet.content[:4] == b"%PDF"
+        assert key.content[:4] == b"%PDF"
+        assert sheet.content != key.content
+
+    def test_asking_for_a_key_that_does_not_exist_says_so(self, client, headers):
+        """422 with an explanation beats a PDF that silently repeats the sheet."""
+        r = client.post("/tutor/sheets/lesson/answers", headers=headers,
+                        json={"markdown": "# Lesson\n\nNo solutions here.",
+                              "language": "French", "level": "A2"})
+        assert r.status_code == 422
+        assert "Solutions" in r.json()["detail"]
+
+    def test_markdown_tables_and_markup_survive(self):
+        from researcher.tutor.markdown_tex import to_latex
+
+        tex = to_latex(_LESSON_MD)
+        assert r"\begin{tabular}" in tex
+        assert tex.count(r"\hline") >= 3      # top, under header, bottom
+        assert r"\textbf{se + verb}" in tex
+        assert r"\begin{itemize}" in tex and r"\begin{enumerate}" in tex
+
+    def test_latex_specials_in_a_lesson_are_escaped(self):
+        """A model writing "50% of verbs" or "a_b" must not break the compile."""
+        from researcher.tutor import printing
+
+        md = ("# L\n\n100% of verbs & more_things #1 {braces} ~tilde^ $5\n\n"
+              "## Solutions\n\n1. 50% done\n")
+        pdf = printing.render_lesson_pdf(md, title="T", subtitle="S")
+        if not printing.latex_available():
+            pytest.skip("pdflatex not installed")
+        assert pdf and pdf[:4] == b"%PDF"
+
+    def test_a_ragged_table_still_prints(self):
+        """A model that drops a cell should cost a blank box, not the sheet."""
+        from researcher.tutor.markdown_tex import to_latex
+
+        tex = to_latex("| a | b | c |\n|---|---|---|\n| 1 | 2 |\n")
+        assert r"\begin{tabular}" in tex
+
+    def test_printing_a_saved_lesson_needs_no_model(self, client, headers,
+                                                    monkeypatch):
+        """The whole point of printing what was saved earlier."""
+        from researcher.tutor import storage
+
+        async def fake_get(db, lesson_id, user_id):
+            return {"title": "Daily routines", "target_lang": "French",
+                    "level": "A2", "content": {"markdown": _LESSON_MD}}
+
+        monkeypatch.setattr("researcher.routes.tutor_sheets.get_lesson_plan",
+                            fake_get)
+        r = client.get("/tutor/lessons/abc/sheet", headers=headers)
+        if r.status_code == 503:
+            pytest.skip("pdflatex not installed")
+        assert r.content[:4] == b"%PDF"
+        k = client.get("/tutor/lessons/abc/sheet?answers=true", headers=headers)
+        assert k.content[:4] == b"%PDF"
+
+    def test_missing_saved_lesson_is_404(self, client, headers, monkeypatch):
+        async def fake_get(db, lesson_id, user_id):
+            return None
+
+        monkeypatch.setattr("researcher.routes.tutor_sheets.get_lesson_plan",
+                            fake_get)
+        assert client.get("/tutor/lessons/nope/sheet",
+                          headers=headers).status_code == 404

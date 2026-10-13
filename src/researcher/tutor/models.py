@@ -137,3 +137,15 @@ class StorySheetRequest(BaseModel):
     title: str = ""
     student: str = ""
     notes: str = ""
+
+
+class LessonSheetRequest(BaseModel):
+    """Print a Markdown lesson as a sheet or as its answer key."""
+
+    markdown: str
+    title: str = ""
+    language: str = ""
+    level: str = ""
+    student: str = ""
+    # Leave writing space after each numbered exercise.
+    practice_space: bool = True

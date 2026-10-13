@@ -217,4 +217,54 @@ def render_html(sections: list[Section], *, title: str, subtitle: str,
     return "\n".join(parts)
 
 
-__all__ = ["Section", "render_pdf", "render_html", "latex_available"]
+__all__ = ["Section", "render_pdf", "render_html", "latex_available",
+           "render_lesson_pdf", "lesson_has_answers"]
+
+
+def render_lesson_pdf(markdown: str, *, title: str, subtitle: str,
+                      answers: bool = False, student: str = "",
+                      practice_space: bool = True) -> bytes | None:
+    """Print a Markdown lesson as a sheet, or as its answer key.
+
+    The lesson the model writes already ends with a Solutions section, so the
+    key needs no second model call: the sheet is everything before Solutions,
+    and the key is the Solutions section. That also guarantees the two agree —
+    they are the same document, cut in half.
+    """
+    from researcher.tutor.markdown_tex import split_solutions, to_latex
+
+    body, solutions = split_solutions(markdown or "")
+    if answers:
+        if not solutions:
+            return None          # no Solutions section: say so, do not invent
+        content = to_latex(solutions)
+    else:
+        content = to_latex(body, blank_lines=practice_space)
+
+    lines = [preamble(11)]
+    lines.append(rf"\fancyhead[L]{{\small {escape_text(title)}}}")
+    lines.append(rf"\fancyhead[R]{{\small {escape_text(subtitle)}}}")
+    lines.append(r"\fancyfoot[C]{\small\thepage}")
+    lines.append(r"\begin{document}")
+    kind = _WORDS["Answer Key"] if answers else "Lesson"
+    lines.append(rf"\begin{{center}}\Large\textbf{{{escape_text(title)}}}\\[2pt]")
+    lines.append(rf"\normalsize {escape_text(subtitle)} \quad"
+                 rf"\textbf{{{kind}}}\end{{center}}")
+    if not answers:
+        lines.append(r"\vspace{2mm}")
+        who = (rf"\underline{{\hspace{{1mm}}{escape_text(student)}"
+               rf"\hspace{{6cm}}}}" if student
+               else r"\underline{\hspace{6cm}}")
+        lines.append(rf"{_WORDS['Name']}: {who} \hfill {_WORDS['Date']}: "
+                     rf"\underline{{\hspace{{3.5cm}}}}")
+        lines.append(r"\vspace{3mm}\hrule")
+    lines.append(content)
+    lines.append(r"\end{document}")
+    return compile_pdf("\n".join(lines), tag="tutor")
+
+
+def lesson_has_answers(markdown: str) -> bool:
+    """Whether a lesson carries a Solutions section to print as a key."""
+    from researcher.tutor.markdown_tex import split_solutions
+
+    return bool(split_solutions(markdown or "")[1])

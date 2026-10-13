@@ -21,11 +21,13 @@ from researcher.tutor import printing
 from researcher.tutor import story as story_mod
 from researcher.tutor.crew import TutorCrew
 from researcher.tutor.models import (
+    LessonSheetRequest,
     SheetRequest,
     SheetSaveRequest,
     StoryRequest,
     StorySheetRequest,
 )
+from researcher.tutor.storage import get_lesson_plan
 from researcher.tutor.storage import (
     save_sheet,
     list_sheets,
@@ -272,6 +274,85 @@ def register_tutor_sheet_routes(app):
             language=req.language, level=req.level, kind=req.kind,
             sections=[], seed=0, student=req.student, notes=req.notes,
             content=story_mod._clean(req.content))
+
+    # -- Lesson sheets ------------------------------------------------------
+    #
+    # A lesson is written by the model as Markdown and already ends with a
+    # Solutions section, so the sheet and its key are the same document cut in
+    # half. That is why no second model call is needed, and why the two cannot
+    # disagree.
+
+    @app.post("/tutor/sheets/lesson")
+    async def make_lesson(req: StoryRequest, request: Request):
+        """Write a new lesson, returning its Markdown."""
+        user = await get_current_user(request)
+        tutor = _tutor_crew(request, user["id"])
+        crew = tutor.build_lesson_crew(
+            topic=req.topic.strip() or "everyday life",
+            lesson_type="grammar",
+            target_lang=req.language,
+            native_lang="English",
+            level=req.level)
+        timeout = (tutor.get_llm_params() or {}).get("crew_timeout_sec") or 900
+        loop = asyncio.get_running_loop()
+        try:
+            markdown = await asyncio.wait_for(
+                loop.run_in_executor(None, lambda: str(crew.kickoff())),
+                timeout=timeout)
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=504,
+                                detail=f"The model did not answer within {timeout}s")
+        except Exception as e:
+            logger.warning("[tutor] lesson generation failed: %s", e)
+            raise HTTPException(status_code=502, detail=f"Lesson failed: {e}")
+        return {"markdown": markdown, "language": req.language,
+                "level": req.level,
+                "has_answers": printing.lesson_has_answers(markdown)}
+
+    def _lesson_pdf(req: LessonSheetRequest, answers: bool) -> Response:
+        title = req.title or f"{req.language} — Lesson"
+        pdf = printing.render_lesson_pdf(
+            req.markdown, title=title,
+            subtitle=f"Level {req.level} · {req.language}",
+            answers=answers, student="" if answers else req.student,
+            practice_space=req.practice_space)
+        if pdf is None and answers:
+            raise HTTPException(
+                status_code=422,
+                detail="This lesson has no Solutions section, so there is "
+                       "nothing to print as an answer key.")
+        kind = "answers" if answers else "lesson"
+        return _pdf_response(pdf, f"{title}-{kind}.pdf".replace(" ", "-"))
+
+    @app.post("/tutor/sheets/lesson/pdf")
+    async def lesson_pdf(req: LessonSheetRequest, request: Request):
+        await get_current_user(request)
+        return _lesson_pdf(req, answers=False)
+
+    @app.post("/tutor/sheets/lesson/answers")
+    async def lesson_answers(req: LessonSheetRequest, request: Request):
+        await get_current_user(request)
+        return _lesson_pdf(req, answers=True)
+
+    @app.get("/tutor/lessons/{lesson_id}/sheet")
+    async def saved_lesson_sheet(lesson_id: str, request: Request,
+                                 answers: bool = False):
+        """Print a lesson that was saved earlier, with no model call."""
+        user = await get_current_user(request)
+        lesson = await get_lesson_plan(request.app.state.db, lesson_id,
+                                       user["id"])
+        if not lesson:
+            raise HTTPException(status_code=404, detail="Lesson not found")
+        content = lesson.get("content") or {}
+        markdown = (content.get("markdown", "") if isinstance(content, dict)
+                    else str(content))
+        if not markdown.strip():
+            raise HTTPException(status_code=422, detail="This lesson is empty")
+        req = LessonSheetRequest(
+            markdown=markdown, title=lesson.get("title") or "Lesson",
+            language=lesson.get("target_lang") or "",
+            level=lesson.get("level") or "")
+        return _lesson_pdf(req, answers=answers)
 
     # -- Saved sheets -------------------------------------------------------
 

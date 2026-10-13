@@ -11,6 +11,7 @@ let sheetShowingKey = false;
 let sheetLastRequest = null;
 let sheetMode = 'grammar';
 let storyContent = null;      // the generated story, carried back for printing
+let lessonMarkdown = null;    // the generated lesson, likewise
 
 function openSheetsPanel() {
     document.getElementById('sheets-overlay').style.display = 'block';
@@ -126,6 +127,11 @@ async function fetchSheetPdf(req, answers) {
 }
 
 async function previewSheet() {
+    if (sheetMode === 'lesson') {
+        if (!lessonMarkdown) { sheetStatus('Write or load a lesson first.', true); return; }
+        try { await previewLesson(); } catch (e) { sheetStatus(e.message, true); }
+        return;
+    }
     if (sheetMode === 'story') {
         if (!storyContent) { sheetStatus('Write the story first.', true); return; }
         try { await previewStory(); } catch (e) { sheetStatus(e.message, true); }
@@ -174,6 +180,7 @@ function showSheetPdf(key) {
 }
 
 async function downloadSheet(answers) {
+    if (sheetMode === 'lesson') return downloadLesson(answers);
     if (sheetMode === 'story') return downloadStory(answers);
     const req = sheetLastRequest || sheetRequest();
     if (!req.sections.length) { sheetStatus('Choose at least one skill.', true); return; }
@@ -194,6 +201,10 @@ async function downloadSheet(answers) {
 }
 
 async function saveSheet() {
+    if (sheetMode === 'lesson') {
+        sheetStatus('Lessons are saved from the Lessons panel, not here.', true);
+        return;
+    }
     if (sheetMode === 'story') return saveStory();
     const req = sheetLastRequest || sheetRequest();
     if (!req.sections.length) { sheetStatus('Choose at least one skill.', true); return; }
@@ -265,12 +276,11 @@ async function downloadSaved(id, answers) {
 
 function setSheetMode(mode) {
     sheetMode = mode;
-    document.getElementById('sheets-mode-grammar').classList.toggle('on', mode === 'grammar');
-    document.getElementById('sheets-mode-story').classList.toggle('on', mode === 'story');
-    document.getElementById('sheets-grammar-pane').style.display =
-        mode === 'grammar' ? 'block' : 'none';
-    document.getElementById('sheets-story-pane').style.display =
-        mode === 'story' ? 'block' : 'none';
+    ['grammar', 'story', 'lesson'].forEach(m => {
+        document.getElementById('sheets-mode-' + m).classList.toggle('on', m === mode);
+        document.getElementById('sheets-' + m + '-pane').style.display =
+            m === mode ? 'block' : 'none';
+    });
     sheetStatus('');
 }
 
@@ -365,4 +375,146 @@ async function saveStory() {
     } catch (e) {
         sheetStatus(e.message, true);
     }
+}
+
+
+/* ---- Lesson sheets ---------------------------------------------------- */
+
+function lessonBody() {
+    return {
+        markdown: lessonMarkdown,
+        title: document.getElementById('sheets-title').value.trim(),
+        language: document.getElementById('sheets-language').value,
+        level: document.getElementById('sheets-level').value,
+        student: document.getElementById('sheets-student').value.trim(),
+        practice_space: true,
+    };
+}
+
+async function fetchLessonPdf(answers) {
+    const r = await fetch(answers ? '/tutor/sheets/lesson/answers' : '/tutor/sheets/lesson/pdf', {
+        method: 'POST', headers: jsonAuthHeaders(), body: JSON.stringify(lessonBody()),
+    });
+    if (!r.ok) {
+        let detail = r.statusText;
+        try { detail = (await r.json()).detail || detail; } catch (e) { /* keep */ }
+        throw new Error(detail);
+    }
+    return URL.createObjectURL(await r.blob());
+}
+
+async function previewLesson() {
+    ['sheet', 'key'].forEach(k => {
+        if (sheetPdfUrls[k]) URL.revokeObjectURL(sheetPdfUrls[k]);
+        sheetPdfUrls[k] = null;
+    });
+    sheetPdfUrls.sheet = await fetchLessonPdf(false);
+    try {
+        sheetPdfUrls.key = await fetchLessonPdf(true);
+    } catch (e) {
+        // A lesson without a Solutions section has no key; say so rather than
+        // showing the sheet again under an "Answer key" tab.
+        sheetPdfUrls.key = null;
+        sheetStatus(e.message, true);
+    }
+    document.getElementById('sheets-empty').style.display = 'none';
+    document.getElementById('sheets-frame').style.display = 'block';
+    showSheetPdf(sheetShowingKey && !!sheetPdfUrls.key);
+}
+
+async function generateLesson() {
+    const btn = document.getElementById('lesson-go');
+    btn.disabled = true;
+    sheetStatus('Writing the lesson… this uses the model and takes a minute or two.');
+    try {
+        const r = await fetch('/tutor/sheets/lesson', {
+            method: 'POST', headers: jsonAuthHeaders(),
+            body: JSON.stringify({
+                language: document.getElementById('sheets-language').value,
+                level: document.getElementById('sheets-level').value,
+                topic: document.getElementById('lesson-topic').value.trim(),
+            }),
+        });
+        if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
+        const d = await r.json();
+        lessonMarkdown = d.markdown;
+        await previewLesson();
+        sheetStatus(d.has_answers
+            ? 'Ready — the lesson includes solutions, so the answer key works.'
+            : 'Ready, but the lesson has no Solutions section: no answer key.');
+    } catch (e) {
+        sheetStatus(e.message, true);
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+async function downloadLesson(answers) {
+    if (!lessonMarkdown) { sheetStatus('Write or load a lesson first.', true); return; }
+    try {
+        const url = await fetchLessonPdf(answers);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `lesson${answers ? '-answers' : ''}.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+        sheetStatus('Downloaded.');
+    } catch (e) {
+        sheetStatus(e.message, true);
+    }
+}
+
+/* Lessons saved earlier print with no model call at all. */
+async function listSavedLessons() {
+    const box = document.getElementById('lesson-saved');
+    box.style.display = 'block';
+    box.innerHTML = '<div style="color:#64748b;font-size:0.8rem">Loading…</div>';
+    try {
+        const r = await fetch('/tutor/lessons', { headers: authHeaders() });
+        const data = await r.json();
+        const lessons = data.lessons || data || [];
+        if (!lessons.length) {
+            box.innerHTML = '<div style="color:#64748b;font-size:0.8rem">'
+                + 'No saved lessons yet — create one from the Lessons panel.</div>';
+            return;
+        }
+        box.innerHTML = '';
+        lessons.forEach(l => {
+            const div = document.createElement('div');
+            div.className = 'sheets-saved-item';
+            div.innerHTML = '<div><strong></strong></div><div class="meta"></div>' +
+                '<div class="btns"><button data-a="sheet">⬇ Sheet</button>' +
+                '<button data-a="key">⬇ Key</button></div>';
+            div.querySelector('strong').textContent = l.title || l.topic || 'Lesson';
+            div.querySelector('.meta').textContent =
+                `${l.target_lang || ''} · ${l.level || ''}`;
+            div.querySelector('[data-a="sheet"]').onclick = () => downloadSavedLesson(l.id, false);
+            div.querySelector('[data-a="key"]').onclick = () => downloadSavedLesson(l.id, true);
+            box.appendChild(div);
+        });
+    } catch (e) {
+        box.innerHTML = `<div style="color:#f87171;font-size:0.8rem">${e.message}</div>`;
+    }
+}
+
+async function downloadSavedLesson(id, answers) {
+    const r = await fetch(`/tutor/lessons/${id}/sheet?answers=${answers}`,
+                          { headers: authHeaders() });
+    if (!r.ok) {
+        let detail = r.statusText;
+        try { detail = (await r.json()).detail || detail; } catch (e) { /* keep */ }
+        sheetStatus(detail, true);
+        return;
+    }
+    const url = URL.createObjectURL(await r.blob());
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `lesson-${id}${answers ? '-answers' : ''}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    sheetStatus('Downloaded.');
 }

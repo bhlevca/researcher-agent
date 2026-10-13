@@ -153,12 +153,27 @@
                 <button type="button" id="sheets-mode-grammar" class="on"
                         onclick="setSheetMode('grammar')">Grammar</button>
                 <button type="button" id="sheets-mode-story"
-                        onclick="setSheetMode('story')">Story + summary</button>
+                        onclick="setSheetMode('story')">Story</button>
+                <button type="button" id="sheets-mode-lesson"
+                        onclick="setSheetMode('lesson')">Lesson</button>
             </div>
 
             <div id="sheets-grammar-pane">
                 <label>Skills <span class="sheets-note">questions · marks each</span></label>
                 <div id="sheets-skills"></div>
+            </div>
+
+            <div id="sheets-lesson-pane" style="display:none">
+                <label>Topic <input type="text" id="lesson-topic" placeholder="e.g. daily routines"></label>
+                <div class="sheets-note">A full lesson — objectives, grammar,
+                    a vocabulary table, dialogues and practice. The model writes
+                    it with a Solutions section, so the sheet and its answer key
+                    are the same document cut in half and cannot disagree.</div>
+                <button class="primary" style="width:100%;margin-top:0.5rem"
+                        id="lesson-go" onclick="generateLesson()">📘 Write the lesson</button>
+                <button style="width:100%;margin-top:0.35rem;background:#0f3460;color:#e2e8f0;border:1px solid #1a3a6e;border-radius:0.45rem;padding:0.4rem;font-size:0.76rem;cursor:pointer"
+                        onclick="listSavedLessons()">📂 Print a saved lesson</button>
+                <div id="lesson-saved" style="display:none;margin-top:0.5rem"></div>
             </div>
 
             <div id="sheets-story-pane" style="display:none">

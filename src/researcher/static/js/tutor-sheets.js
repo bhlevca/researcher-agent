@@ -9,6 +9,8 @@ let sheetSkills = [];
 let sheetPdfUrls = { sheet: null, key: null };
 let sheetShowingKey = false;
 let sheetLastRequest = null;
+let sheetMode = 'grammar';
+let storyContent = null;      // the generated story, carried back for printing
 
 function openSheetsPanel() {
     document.getElementById('sheets-overlay').style.display = 'block';
@@ -124,6 +126,11 @@ async function fetchSheetPdf(req, answers) {
 }
 
 async function previewSheet() {
+    if (sheetMode === 'story') {
+        if (!storyContent) { sheetStatus('Write the story first.', true); return; }
+        try { await previewStory(); } catch (e) { sheetStatus(e.message, true); }
+        return;
+    }
     const req = sheetRequest();
     if (!req.sections.length) { sheetStatus('Choose at least one skill.', true); return; }
     const btn = document.getElementById('sheets-go');
@@ -167,6 +174,7 @@ function showSheetPdf(key) {
 }
 
 async function downloadSheet(answers) {
+    if (sheetMode === 'story') return downloadStory(answers);
     const req = sheetLastRequest || sheetRequest();
     if (!req.sections.length) { sheetStatus('Choose at least one skill.', true); return; }
     sheetStatus('Building PDF…');
@@ -186,6 +194,7 @@ async function downloadSheet(answers) {
 }
 
 async function saveSheet() {
+    if (sheetMode === 'story') return saveStory();
     const req = sheetLastRequest || sheetRequest();
     if (!req.sections.length) { sheetStatus('Choose at least one skill.', true); return; }
     try {
@@ -249,4 +258,111 @@ async function downloadSaved(id, answers) {
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+
+/* ---- Story sheets ----------------------------------------------------- */
+
+function setSheetMode(mode) {
+    sheetMode = mode;
+    document.getElementById('sheets-mode-grammar').classList.toggle('on', mode === 'grammar');
+    document.getElementById('sheets-mode-story').classList.toggle('on', mode === 'story');
+    document.getElementById('sheets-grammar-pane').style.display =
+        mode === 'grammar' ? 'block' : 'none';
+    document.getElementById('sheets-story-pane').style.display =
+        mode === 'story' ? 'block' : 'none';
+    sheetStatus('');
+}
+
+function storyBody() {
+    return {
+        content: storyContent,
+        language: document.getElementById('sheets-language').value,
+        level: document.getElementById('sheets-level').value,
+        kind: document.getElementById('sheets-kind').value,
+        title: document.getElementById('sheets-title').value.trim(),
+        student: document.getElementById('sheets-student').value.trim(),
+    };
+}
+
+async function generateStory() {
+    const btn = document.getElementById('story-go');
+    btn.disabled = true;
+    sheetStatus('Writing the story… this uses the model and can take a minute.');
+    try {
+        const r = await fetch('/tutor/sheets/story', {
+            method: 'POST', headers: jsonAuthHeaders(),
+            body: JSON.stringify({
+                language: document.getElementById('sheets-language').value,
+                level: document.getElementById('sheets-level').value,
+                topic: document.getElementById('story-topic').value.trim(),
+                num_questions: parseInt(document.getElementById('story-questions').value, 10) || 5,
+                word_count: parseInt(document.getElementById('story-words').value, 10) || 200,
+                summary_words: parseInt(document.getElementById('story-summary').value, 10) || 40,
+            }),
+        });
+        if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
+        storyContent = (await r.json()).content;
+        await previewStory();
+        sheetStatus(`"${storyContent.title}" — ${storyContent.questions.length} questions.`);
+    } catch (e) {
+        sheetStatus(e.message, true);
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+async function fetchStoryPdf(answers) {
+    const r = await fetch(answers ? '/tutor/sheets/story/answers' : '/tutor/sheets/story/pdf', {
+        method: 'POST', headers: jsonAuthHeaders(), body: JSON.stringify(storyBody()),
+    });
+    if (!r.ok) {
+        let detail = r.statusText;
+        try { detail = (await r.json()).detail || detail; } catch (e) { /* keep */ }
+        throw new Error(detail);
+    }
+    return URL.createObjectURL(await r.blob());
+}
+
+async function previewStory() {
+    ['sheet', 'key'].forEach(k => {
+        if (sheetPdfUrls[k]) URL.revokeObjectURL(sheetPdfUrls[k]);
+        sheetPdfUrls[k] = null;
+    });
+    sheetPdfUrls.sheet = await fetchStoryPdf(false);
+    sheetPdfUrls.key = await fetchStoryPdf(true);
+    document.getElementById('sheets-empty').style.display = 'none';
+    document.getElementById('sheets-frame').style.display = 'block';
+    showSheetPdf(sheetShowingKey);
+}
+
+async function downloadStory(answers) {
+    if (!storyContent) { sheetStatus('Write the story first.', true); return; }
+    try {
+        const url = await fetchStoryPdf(answers);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${storyContent.title || 'story'}${answers ? '-answers' : ''}.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+        sheetStatus('Downloaded.');
+    } catch (e) {
+        sheetStatus(e.message, true);
+    }
+}
+
+async function saveStory() {
+    if (!storyContent) { sheetStatus('Write the story first.', true); return; }
+    try {
+        const r = await fetch('/tutor/sheets/story/save', {
+            method: 'POST', headers: jsonAuthHeaders(),
+            body: JSON.stringify({ ...storyBody(), notes: '' }),
+        });
+        if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
+        sheetStatus('Saved — the story is stored as written, so a reprint matches.');
+    } catch (e) {
+        sheetStatus(e.message, true);
+    }
 }

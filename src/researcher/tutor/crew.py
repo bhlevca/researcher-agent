@@ -508,6 +508,46 @@ class TutorCrew:
             verbose=True,
         )
 
+    def build_story_sheet_crew(
+        self,
+        topic: str,
+        target_lang: str,
+        native_lang: str,
+        level: str,
+        num_questions: int = 5,
+        word_count: int = 200,
+        summary_words: int = 40,
+    ) -> Crew:
+        """Build a Crew that writes a story plus comprehension and summary tasks.
+
+        Unlike the grammar sheets, this one genuinely needs a model: a story
+        cannot be derived from a table. The consequence is that its answers are
+        MODEL answers, printed as such, and that the generated text must be
+        stored rather than regenerated — a second run would produce a different
+        story, so a reprint would not match the sheet the child was given.
+        """
+        agent = self._build_agent(target_lang, native_lang, level, tools=[])
+        desc, exp = self._render_task(
+            "story_sheet_task",
+            {
+                "topic": topic,
+                "target_lang": target_lang,
+                "native_lang": native_lang,
+                "level": level,
+                "num_questions": str(num_questions),
+                "word_count": str(word_count),
+                "summary_words": str(summary_words),
+            },
+        )
+        task = Task(description=desc, expected_output=exp, agent=agent, context=[])
+        return Crew(
+            agents=[agent],
+            tasks=[task],
+            process=Process.sequential,
+            memory=False,
+            verbose=True,
+        )
+
     def build_quiz_crew(
         self,
         quiz_type: str,

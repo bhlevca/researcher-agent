@@ -109,3 +109,31 @@ class SheetRequest(BaseModel):
 
 class SheetSaveRequest(SheetRequest):
     notes: str = ""
+
+
+class StoryRequest(BaseModel):
+    """Ask the model for a story with comprehension and summary tasks."""
+
+    language: str = "French"
+    level: str = "A1"
+    topic: str = ""
+    num_questions: int = 5
+    word_count: int = 200
+    summary_words: int = 40
+
+
+class StorySheetRequest(BaseModel):
+    """Print a story that has already been generated.
+
+    The content is passed back in rather than regenerated: a second model call
+    writes a different story, so regenerating would print a sheet that does not
+    match the one the child was given.
+    """
+
+    content: dict
+    language: str = "French"
+    level: str = "A1"
+    kind: str = "homework"
+    title: str = ""
+    student: str = ""
+    notes: str = ""

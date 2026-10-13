@@ -67,6 +67,117 @@ class TestPacks:
                     assert row.get(g), f"{kind}/{case}/{g} missing"
 
 
+class TestPackIntegrity:
+    """Catch silent corruption of the YAML.
+
+    An unquoted comma inside a flow mapping — ``{gloss: to like, to love,
+    level: A1}`` — splits the entry into bogus keys, and a careless repair can
+    swallow the *next* key into the gloss. Both load without error and both
+    produce wrong sheets, so the shape is checked rather than assumed.
+    """
+
+    def test_no_gloss_has_swallowed_a_key(self, packs):
+        import re
+
+        for code, pack in packs.items():
+            for item in pack["verbs"] + pack["nouns"] + pack["adjectives"]:
+                gloss = str(item.get("gloss", ""))
+                assert not re.search(r"\w+:\s", gloss), \
+                    f"{code}: {item.get('inf') or item['word']} gloss={gloss!r}"
+
+    def test_every_entry_has_a_level_and_a_gloss(self, packs):
+        for code, pack in packs.items():
+            for group in ("verbs", "nouns", "adjectives"):
+                for item in pack[group]:
+                    name = item.get("inf") or item.get("word")
+                    assert item.get("gloss"), f"{code}/{group}/{name}: no gloss"
+                    assert item.get("level"), f"{code}/{group}/{name}: no level"
+
+    def test_nouns_and_adjectives_keep_their_inflections(self, packs):
+        for code, pack in packs.items():
+            for n in pack["nouns"]:
+                assert n.get("gender") and n.get("plural"), f"{code}: {n}"
+            for a in pack["adjectives"]:
+                if code == "de":
+                    continue      # German endings are derived, not stored
+                for key in ("f", "mpl", "fpl"):
+                    assert a.get(key), f"{code}: {a['word']} has no {key}"
+
+    def test_packs_are_large_enough_to_vary(self, packs):
+        """A sheet of 20 questions from 12 words repeats itself."""
+        for code, pack in packs.items():
+            assert len(pack["verbs"]) >= 40, code
+            assert len(pack["nouns"]) >= 40, code
+            assert len(pack["adjectives"]) >= 25, code
+
+
+class TestDerivedParadigms:
+    """The rule-based expansion must reproduce the hand-written tables.
+
+    This is what makes a one-line verb entry trustworthy: the derivation is
+    checked against known-good data rather than against nobody.
+    """
+
+    @pytest.mark.parametrize("code,inf,cls", [
+        ("fr", "parler", "er"), ("fr", "finir", "ir"), ("fr", "vendre", "re"),
+        ("fr", "manger", "ger"),
+        ("de", "machen", "weak"), ("de", "arbeiten", "weak"),
+        ("ro", "a lucra", "ez"), ("ro", "a citi", "esc"), ("ro", "a vorbi", "esc"),
+    ])
+    def test_expansion_matches_the_hand_written_entry(self, packs, code, inf, cls):
+        from researcher.tutor.conjugator import EXPANDERS
+
+        hand = next(v for v in packs[code]["verbs"] if v["inf"] == inf)
+        got = EXPANDERS[code]({"inf": inf, "gloss": hand["gloss"],
+                               "level": hand["level"], "class": cls})
+        for field, value in got.items():
+            if field in ("inf", "gloss", "level"):
+                continue
+            assert value == hand.get(field), f"{inf}.{field}"
+
+    @pytest.mark.parametrize("inf,tense,person,want", [
+        # Orthographic subclasses: the forms everyone gets wrong.
+        ("commencer", "present", "nous", "commençons"),
+        ("commencer", "imparfait", "je", "commençais"),
+        ("commencer", "imparfait", "nous", "commencions"),
+        ("nager", "present", "nous", "nageons"),
+        ("nager", "imparfait", "nous", "nagions"),
+        ("acheter", "present", "je", "achète"),
+        ("acheter", "present", "nous", "achetons"),
+        ("acheter", "futur", "je", "achèterai"),
+        ("appeler", "present", "je", "appelle"),
+        ("appeler", "present", "nous", "appelons"),
+        ("préférer", "present", "je", "préfère"),
+        ("préférer", "present", "nous", "préférons"),
+        ("attendre", "present", "il", "attend"),
+    ])
+    def test_french_orthographic_subclasses(self, packs, inf, tense, person, want):
+        verb = next(v for v in packs["fr"]["verbs"] if v["inf"] == inf)
+        assert verb[tense][person] == want
+
+    @pytest.mark.parametrize("inf,want", [
+        ("besuchen", "besucht"),      # inseparable prefix: no ge-
+        ("bezahlen", "bezahlt"),
+        ("verkaufen", "verkauft"),
+        ("erklären", "erklärt"),
+        ("studieren", "studiert"),    # -ieren: no ge-
+        ("wandern", "gewandert"),     # -ern keeps the -er- in the stem
+        ("öffnen", "geöffnet"),       # consonant cluster takes a linking -e-
+        ("warten", "gewartet"),
+    ])
+    def test_german_participle_prefixes(self, packs, inf, want):
+        verb = next(v for v in packs["de"]["verbs"] if v["inf"] == inf)
+        assert verb["perfekt"]["pp"] == want
+
+    def test_french_etre_verbs_are_marked(self, packs):
+        etre = {v["inf"] for v in packs["fr"]["verbs"]
+                if v["passe_compose"]["aux"] == "être"}
+        # Movement and state-change verbs take être; getting this wrong makes
+        # every compound-past answer for them wrong.
+        assert {"aller", "venir", "rester", "entrer", "tomber", "arriver",
+                "sortir", "devenir", "partir"} <= etre
+
+
 class TestAnswersAreCorrect:
     """Check each answer against the pack, not against the generator."""
 
@@ -120,13 +231,25 @@ class TestAnswersAreCorrect:
 class TestFrenchGrammar:
     """The rules a generated French sheet gets wrong first."""
 
-    def test_definite_article_elides_before_a_vowel(self):
-        for ex in X.generate("gender_article", "French", "B2", 40, seed=1):
+    def test_definite_article_elides_before_a_vowel_or_mute_h(self, packs):
+        """l'ami, and also l'hôpital — French elides before mute h too."""
+        vowels = packs["fr"]["meta"]["vowels"]
+        aspirate = set(packs["fr"]["meta"].get("aspirate_h") or ())
+        for ex in X.generate("gender_article", "French", "B2", 60, seed=1):
             noun = ex.answer.split("'")[-1].split()[-1]
-            if noun[0].lower() in "aeiouâàéèêëîïôûùüœ":
+            if noun[0].lower() in vowels and noun not in aspirate:
                 assert ex.answer.startswith("l'"), ex.answer
             else:
                 assert ex.answer.startswith(("le ", "la ")), ex.answer
+
+    def test_aspirate_h_would_not_elide(self, packs):
+        """Guards the mechanism, since the pack currently lists no such word."""
+        from researcher.tutor.exercises import _fr_elide
+
+        pack = dict(packs["fr"])
+        pack["meta"] = dict(pack["meta"], aspirate_h=["haricot"])
+        assert _fr_elide("le", "haricot", pack) == "le "
+        assert _fr_elide("le", "homme", pack) == "l\'"
 
     def test_prenominal_adjectives_go_before_the_noun(self, packs):
         """"le livre petit" is not French. petit, grand, beau, vieux and

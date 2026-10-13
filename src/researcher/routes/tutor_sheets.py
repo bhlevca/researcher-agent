@@ -8,6 +8,7 @@ path or pronunciation scoring; this is additive.
 Sheets are stored as a recipe and rebuilt on demand, so a seed is a sheet.
 """
 
+import asyncio
 import random
 import logging
 
@@ -17,7 +18,14 @@ from fastapi.responses import Response
 from researcher.auth import get_current_user
 from researcher.tutor import exercises as X
 from researcher.tutor import printing
-from researcher.tutor.models import SheetRequest, SheetSaveRequest
+from researcher.tutor import story as story_mod
+from researcher.tutor.crew import TutorCrew
+from researcher.tutor.models import (
+    SheetRequest,
+    SheetSaveRequest,
+    StoryRequest,
+    StorySheetRequest,
+)
 from researcher.tutor.storage import (
     save_sheet,
     list_sheets,
@@ -88,6 +96,16 @@ def _title(req: SheetRequest) -> str:
     if req.title:
         return req.title
     return f"{req.language} — {req.kind.title()}"
+
+
+def _tutor_crew(request: Request, uid: str) -> TutorCrew:
+    """The per-user TutorCrew, shared with the conversational routes."""
+    crews = getattr(request.app.state, "tutor_crews", None)
+    if crews is None:
+        crews = request.app.state.tutor_crews = {}
+    if uid not in crews:
+        crews[uid] = TutorCrew(model=request.app.state.current_model)
+    return crews[uid]
 
 
 def _pdf_response(pdf: bytes | None, filename: str) -> Response:
@@ -164,6 +182,97 @@ def register_tutor_sheet_routes(app):
                                   answers=True)
         return _pdf_response(pdf, f"{req.language}-{req.kind}-answers-{seed}.pdf")
 
+    # -- Story sheets -------------------------------------------------------
+    #
+    # The one part of the language tutor that genuinely needs a model: a story
+    # cannot be derived from a table. Two consequences, both deliberate — the
+    # key prints "Model answer", and the generated text is carried back by the
+    # client rather than regenerated, because a second call writes a different
+    # story and the reprint would no longer match the paper.
+
+    @app.post("/tutor/sheets/story")
+    async def make_story(req: StoryRequest, request: Request):
+        """Generate a story, comprehension questions and a summary task."""
+        user = await get_current_user(request)
+        tutor = _tutor_crew(request, user["id"])
+
+        crew = tutor.build_story_sheet_crew(
+            topic=req.topic.strip() or "everyday life",
+            target_lang=req.language,
+            native_lang="English",
+            level=req.level,
+            num_questions=max(1, min(int(req.num_questions), 12)),
+            word_count=max(60, min(int(req.word_count), 600)),
+            summary_words=max(20, min(int(req.summary_words), 150)))
+
+        timeout = (tutor.get_llm_params() or {}).get("crew_timeout_sec") or 600
+        loop = asyncio.get_running_loop()
+        try:
+            raw = await asyncio.wait_for(
+                loop.run_in_executor(None, lambda: str(crew.kickoff())),
+                timeout=timeout)
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=504,
+                                detail=f"The model did not answer within "
+                                       f"{timeout}s")
+        except Exception as e:
+            logger.warning("[tutor] story generation failed: %s", e)
+            raise HTTPException(status_code=502,
+                                detail=f"Story generation failed: {e}")
+
+        try:
+            content = story_mod.parse_story(raw)
+        except ValueError as e:
+            # Better to say so than to print a sheet with empty questions.
+            raise HTTPException(status_code=502, detail=str(e))
+        return {"content": content, "language": req.language,
+                "level": req.level}
+
+    def _story_sections(req: StorySheetRequest):
+        try:
+            content = story_mod._clean(req.content)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Bad story: {e}")
+        if not content.get("questions") and not content.get("story"):
+            raise HTTPException(status_code=400, detail="Empty story")
+        code = X.pack_code(req.language) or req.language[:2].lower()
+        return story_mod.to_sections(content, level=req.level, lang=code)
+
+    def _story_titles(req: StorySheetRequest) -> tuple[str, str]:
+        title = req.title or req.content.get("title") or f"{req.language} — Reading"
+        return title, f"Level {req.level} · {req.language}"
+
+    @app.post("/tutor/sheets/story/pdf")
+    async def story_pdf(req: StorySheetRequest, request: Request):
+        await get_current_user(request)
+        sections = _story_sections(req)
+        title, subtitle = _story_titles(req)
+        pdf = printing.render_pdf(sections, title=title, subtitle=subtitle,
+                                  kind=req.kind, answers=False,
+                                  student=req.student)
+        return _pdf_response(pdf, f"{req.language}-story.pdf")
+
+    @app.post("/tutor/sheets/story/answers")
+    async def story_answers(req: StorySheetRequest, request: Request):
+        await get_current_user(request)
+        sections = _story_sections(req)
+        title, subtitle = _story_titles(req)
+        pdf = printing.render_pdf(sections, title=title, subtitle=subtitle,
+                                  kind=req.kind, answers=True)
+        return _pdf_response(pdf, f"{req.language}-story-answers.pdf")
+
+    @app.post("/tutor/sheets/story/save")
+    async def story_save(req: StorySheetRequest, request: Request):
+        """Store the story verbatim, so a reprint is the same paper."""
+        user = await get_current_user(request)
+        _story_sections(req)                  # validate before storing
+        title, _ = _story_titles(req)
+        return await save_sheet(
+            request.app.state.db, user["id"], title=title,
+            language=req.language, level=req.level, kind=req.kind,
+            sections=[], seed=0, student=req.student, notes=req.notes,
+            content=story_mod._clean(req.content))
+
     # -- Saved sheets -------------------------------------------------------
 
     @app.post("/tutor/sheets")
@@ -193,6 +302,8 @@ def register_tutor_sheet_routes(app):
         rec = await get_sheet(request.app.state.db, user["id"], sid)
         if not rec:
             raise HTTPException(status_code=404, detail="Sheet not found")
+        if rec.get("content"):
+            return rec                       # a story sheet carries its own text
         req = _req_from(rec)
         sections, _ = _build(req)
         rec["exercises"] = [
@@ -210,10 +321,18 @@ def register_tutor_sheet_routes(app):
         rec = await get_sheet(request.app.state.db, user["id"], sid)
         if not rec:
             raise HTTPException(status_code=404, detail="Sheet not found")
-        req = _req_from(rec)
-        sections, _ = _build(req)
+        if rec.get("content"):
+            # A story sheet: reprint the stored text, never regenerate it.
+            code = X.pack_code(rec["language"]) or rec["language"][:2].lower()
+            sections = story_mod.to_sections(rec["content"],
+                                             level=rec["level"], lang=code)
+            subtitle = f"Level {rec['level']} · {rec['language']}"
+        else:
+            req = _req_from(rec)
+            sections, _ = _build(req)
+            subtitle = _subtitle(req)
         pdf = printing.render_pdf(sections, title=rec["title"],
-                                  subtitle=_subtitle(req), kind=rec["kind"],
+                                  subtitle=subtitle, kind=rec["kind"],
                                   answers=answers,
                                   student="" if answers else rec["student"])
         kind = "answers" if answers else "sheet"

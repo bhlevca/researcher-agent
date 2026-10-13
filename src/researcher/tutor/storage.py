@@ -1423,10 +1423,17 @@ async def init_sheet_tables(db: aiosqlite.Connection):
             seed        INTEGER NOT NULL,
             student     TEXT NOT NULL DEFAULT '',
             notes       TEXT NOT NULL DEFAULT '',
+            content     TEXT NOT NULL DEFAULT '',
             created_at  TEXT NOT NULL
         )
         """
     )
+    # A story sheet cannot be rebuilt from a seed — a second model call writes a
+    # different story — so its generated text is stored verbatim.
+    cur = await db.execute("PRAGMA table_info(tutor_sheets)")
+    if "content" not in {r[1] for r in await cur.fetchall()}:
+        await db.execute("ALTER TABLE tutor_sheets "
+                         "ADD COLUMN content TEXT NOT NULL DEFAULT ''")
     await db.execute(
         "CREATE INDEX IF NOT EXISTS idx_tutor_sheets_user "
         "ON tutor_sheets(user_id, created_at DESC)"
@@ -1435,30 +1442,35 @@ async def init_sheet_tables(db: aiosqlite.Connection):
 
 
 _SHEET_COLS = ("id, title, language, level, kind, sections, seed, student, "
-               "notes, created_at")
+               "notes, content, created_at")
 
 
 def _sheet_row(r) -> dict:
     return {"id": r[0], "title": r[1], "language": r[2], "level": r[3],
             "kind": r[4], "sections": json.loads(r[5] or "[]"), "seed": r[6],
-            "student": r[7], "notes": r[8], "created_at": r[9]}
+            "student": r[7], "notes": r[8],
+            "content": json.loads(r[9]) if r[9] else None,
+            "created_at": r[10]}
 
 
 async def save_sheet(db: aiosqlite.Connection, user_id: str, *, title: str,
                      language: str, level: str, kind: str, sections: list,
-                     seed: int, student: str = "", notes: str = "") -> dict:
+                     seed: int, student: str = "", notes: str = "",
+                     content: dict | None = None) -> dict:
     sid = uuid.uuid4().hex[:8]
     now = datetime.now(timezone.utc).isoformat()
     await db.execute(
         "INSERT INTO tutor_sheets (id, user_id, title, language, level, kind, "
-        "sections, seed, student, notes, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "sections, seed, student, notes, content, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (sid, user_id, title, language, level, kind, json.dumps(sections),
-         int(seed), student, notes, now))
+         int(seed), student, notes,
+         json.dumps(content, ensure_ascii=False) if content else "", now))
     await db.commit()
     return {"id": sid, "title": title, "language": language, "level": level,
             "kind": kind, "sections": sections, "seed": seed,
-            "student": student, "notes": notes, "created_at": now}
+            "student": student, "notes": notes, "content": content,
+            "created_at": now}
 
 
 async def list_sheets(db: aiosqlite.Connection, user_id: str,

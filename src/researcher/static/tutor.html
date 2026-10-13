@@ -149,8 +149,32 @@
                 </label>
             </div>
 
-            <label>Skills <span class="sheets-note">questions · marks each</span></label>
-            <div id="sheets-skills"></div>
+            <div class="sheets-mode">
+                <button type="button" id="sheets-mode-grammar" class="on"
+                        onclick="setSheetMode('grammar')">Grammar</button>
+                <button type="button" id="sheets-mode-story"
+                        onclick="setSheetMode('story')">Story + summary</button>
+            </div>
+
+            <div id="sheets-grammar-pane">
+                <label>Skills <span class="sheets-note">questions · marks each</span></label>
+                <div id="sheets-skills"></div>
+            </div>
+
+            <div id="sheets-story-pane" style="display:none">
+                <label>Topic <input type="text" id="story-topic" placeholder="e.g. a lost cat"></label>
+                <div class="sheets-row">
+                    <label>Words <input type="text" id="story-words" value="200"></label>
+                    <label>Questions <input type="text" id="story-questions" value="5"></label>
+                </div>
+                <label>Summary length <input type="text" id="story-summary" value="40"></label>
+                <div class="sheets-note">Written by the model, so the key prints
+                    <strong>Model answer</strong> — one acceptable answer, not
+                    the only one. The story is stored as written, so a reprint
+                    is the same paper.</div>
+                <button class="primary" style="width:100%;margin-top:0.5rem"
+                        id="story-go" onclick="generateStory()">✍️ Write the story</button>
+            </div>
 
             <div class="sheets-row">
                 <label>Seed <input type="text" id="sheets-seed" placeholder="random"></label>

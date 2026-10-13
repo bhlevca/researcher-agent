@@ -272,3 +272,48 @@ passage_task:
     followed by a short glossary and exactly 3 comprehension questions.
     No grammar drills, no exercises, no explanations.
   agent: language_tutor
+
+story_sheet_task:
+  agent: language_tutor
+  description: >
+    Write a short STORY in {target_lang} for a {level}-level learner (native
+    language: {native_lang}), together with comprehension questions and a
+    summary task, to be PRINTED on a worksheet.
+
+    Topic: {topic}
+
+    LENGTH: about {word_count} words of connected prose.
+
+    LEVEL DISCIPLINE — the most important rule. Write so that roughly 90% of the
+    words are ones a {level} learner already knows. Short sentences at A1/A2;
+    subordinate clauses only from B1. If unsure whether a word is above {level},
+    use a simpler one.
+
+    IT MUST BE A STORY: something happens, to someone, and it ends. Not a
+    description, not a list of facts, not a dialogue exercise. A child should
+    want to know what happens next.
+
+    Write {num_questions} comprehension questions in {target_lang}, each
+    answerable from the text, ordered from literal to inferential. Give a model
+    answer for each, in {target_lang}, as a full sentence.
+
+    Then write ONE summary task: ask the learner to summarise the story in
+    {summary_words} words, in {target_lang}. Give a model summary of about that
+    length.
+
+    Finally list up to 6 words from the story that a {level} learner is likely
+    NOT to know, each with a short {native_lang} gloss.
+
+    OUTPUT: a single JSON object and nothing else — no preamble, no code fence,
+    no commentary. Use exactly these keys:
+
+    {{"title": "...", "story": "paragraph one\n\nparagraph two",
+      "questions": [{{"q": "...", "a": "..."}}],
+      "summary_prompt": "...", "summary_answer": "...",
+      "glossary": [{{"word": "...", "gloss": "..."}}]}}
+
+    The story field uses \n\n between paragraphs. Every piece of text except
+    the glossary glosses is in {target_lang}.
+  expected_output: >
+    A single valid JSON object with the keys title, story, questions,
+    summary_prompt, summary_answer and glossary. No text outside the JSON.

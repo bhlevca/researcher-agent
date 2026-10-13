@@ -240,3 +240,138 @@ class TestExistingTutorStillWorks:
         assert client.get("/tutor/curriculum", headers=headers).status_code == 200
         assert client.get("/tutor/sessions", headers=headers).status_code == 200
         assert client.get("/tutor/scenarios", headers=headers).status_code == 200
+
+
+_STORY_JSON = '''```json
+{"title": "Le chat perdu",
+ "story": "Madame Blanc habite près de la forêt.\\n\\nUn jour, le chat ne revient pas.",
+ "questions": [{"q": "Où habite Madame Blanc ?", "a": "Près de la forêt."},
+               {"q": "Que se passe-t-il ?", "a": "Le chat ne revient pas."}],
+ "summary_prompt": "Résumez l'histoire en 40 mots.",
+ "summary_answer": "Le chat de Madame Blanc disparaît.",
+ "glossary": [{"word": "la forêt", "gloss": "forest"}]}
+```'''
+
+
+class TestStorySheets:
+    """The model-written half. Its answers are MODEL answers, and its text is
+    stored rather than regenerated — a second call writes a different story."""
+
+    @pytest.fixture
+    def mock_story(self, monkeypatch):
+        """Stand in for the model, so the test needs no Ollama."""
+        crew = MagicMock()
+        crew.kickoff.return_value = _STORY_JSON
+        tutor = MagicMock()
+        tutor.build_story_sheet_crew.return_value = crew
+        tutor.get_llm_params.return_value = {"crew_timeout_sec": 30}
+        monkeypatch.setattr("researcher.routes.tutor_sheets._tutor_crew",
+                            lambda request, uid: tutor)
+        return tutor
+
+    def test_generate_parses_a_fenced_response(self, client, headers, mock_story):
+        r = client.post("/tutor/sheets/story", headers=headers,
+                        json={"language": "French", "level": "A2",
+                              "topic": "a lost cat"})
+        assert r.status_code == 200
+        c = r.json()["content"]
+        assert c["title"] == "Le chat perdu"
+        assert len(c["questions"]) == 2
+        assert c["summary_answer"]
+
+    def test_a_bad_model_response_is_reported_not_printed(
+            self, client, headers, mock_story):
+        """An empty sheet is worse than an error."""
+        mock_story.build_story_sheet_crew.return_value.kickoff.return_value = \
+            "I'm sorry, I can't do that."
+        r = client.post("/tutor/sheets/story", headers=headers,
+                        json={"language": "French", "level": "A2"})
+        assert r.status_code == 502
+
+    def test_sheet_and_key_compile(self, client, headers, mock_story):
+        content = client.post("/tutor/sheets/story", headers=headers,
+                              json={"language": "French", "level": "A2"}
+                              ).json()["content"]
+        body = {"content": content, "language": "French", "level": "A2",
+                "kind": "homework"}
+        sheet = client.post("/tutor/sheets/story/pdf", headers=headers, json=body)
+        key = client.post("/tutor/sheets/story/answers", headers=headers, json=body)
+        if sheet.status_code == 503:
+            pytest.skip("pdflatex not installed")
+        assert sheet.content[:4] == b"%PDF"
+        assert key.content[:4] == b"%PDF"
+        assert sheet.content != key.content
+
+    def test_printing_does_not_call_the_model(self, client, headers, mock_story):
+        """The client carries the story back; printing must never regenerate."""
+        content = client.post("/tutor/sheets/story", headers=headers,
+                              json={"language": "French", "level": "A2"}
+                              ).json()["content"]
+        before = mock_story.build_story_sheet_crew.call_count
+        client.post("/tutor/sheets/story/pdf", headers=headers,
+                    json={"content": content, "language": "French", "level": "A2"})
+        assert mock_story.build_story_sheet_crew.call_count == before
+
+    def test_saved_story_reprints_the_same_text(self, client, headers, mock_story):
+        content = client.post("/tutor/sheets/story", headers=headers,
+                              json={"language": "French", "level": "A2"}
+                              ).json()["content"]
+        sid = client.post("/tutor/sheets/story/save", headers=headers, json={
+            "content": content, "language": "French", "level": "A2",
+            "kind": "homework"}).json()["id"]
+        rec = client.get(f"/tutor/sheets/{sid}", headers=headers).json()
+        assert rec["content"]["story"] == content["story"]
+        assert rec["content"]["questions"] == content["questions"]
+        pdf = client.get(f"/tutor/sheets/{sid}/pdf", headers=headers)
+        if pdf.status_code == 503:
+            pytest.skip("pdflatex not installed")
+        assert pdf.content[:4] == b"%PDF"
+
+    def test_empty_story_is_refused(self, client, headers, mock_story):
+        r = client.post("/tutor/sheets/story/pdf", headers=headers, json={
+            "content": {"title": "", "story": "", "questions": []},
+            "language": "French", "level": "A2"})
+        assert r.status_code == 400
+
+
+class TestStoryParsing:
+    """parse_story must cope with how models actually reply."""
+
+    @pytest.mark.parametrize("wrapper", [
+        "{body}",
+        "```json\n{body}\n```",
+        "```\n{body}\n```",
+        "Here you go:\n\n{body}\n\nHope that helps!",
+    ])
+    def test_handles_fences_and_surrounding_prose(self, wrapper):
+        from researcher.tutor.story import parse_story
+
+        body = ('{"title":"T","story":"S","questions":[{"q":"Q","a":"A"}],'
+                '"summary_prompt":"P","summary_answer":"M","glossary":[]}')
+        got = parse_story(wrapper.format(body=body))
+        assert got["title"] == "T" and got["questions"][0]["q"] == "Q"
+
+    def test_repairs_a_trailing_comma(self):
+        from researcher.tutor.story import parse_story
+
+        got = parse_story('{"title":"T","story":"S",'
+                          '"questions":[{"q":"Q","a":"A"},],}')
+        assert got["questions"][0]["a"] == "A"
+
+    def test_questions_given_as_bare_strings_still_work(self):
+        from researcher.tutor.story import parse_story
+
+        got = parse_story('{"title":"T","story":"S","questions":["Q1","Q2"]}')
+        assert [q["q"] for q in got["questions"]] == ["Q1", "Q2"]
+
+    def test_a_response_with_no_json_raises(self):
+        from researcher.tutor.story import parse_story
+
+        with pytest.raises(ValueError):
+            parse_story("I cannot help with that.")
+
+    def test_missing_required_keys_raises(self):
+        from researcher.tutor.story import parse_story
+
+        with pytest.raises(ValueError):
+            parse_story('{"title": "T"}')

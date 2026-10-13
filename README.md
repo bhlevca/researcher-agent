@@ -2,7 +2,7 @@
 
 A CrewAI-powered research agent with a browser-based chat UI, voice dialog, image generation, and session management. Runs locally using Ollama — the **client only needs a web browser**.
 
-**Version 2.14.0**
+**Version 2.15.0**
 
 ## Architecture
 
@@ -507,6 +507,41 @@ The packs are shaped by the language, not copied from one another:
 | **French** | Conjugation across four tenses, elision (`l'ami`, `j'ai`), prenominal adjectives (`le petit livre`), the `bel`/`vieil`/`nouvel` pre-vowel forms, and *être* agreement in the compound past (`nous sommes partis`) |
 | **German** | Four cases, plurals, and adjective endings **derived from the weak/mixed/strong tables** rather than transcribed — so none of the 48 endings can be mistyped into a key |
 | **Romanian** | The enclitic definite article (`masă → masa`, `câine → câinele`), three genders including neuter, and the compound past and future |
+
+### Vocabulary
+
+Each pack now carries roughly 60 verbs, 60 nouns and 30 adjectives across
+A1–B2 — enough that a 20-question sheet does not repeat itself.
+
+Regular verbs are **one line**: `{inf: donner, gloss: to give, class: er}`. The
+paradigm is derived by [`conjugator.py`](src/researcher/tutor/conjugator.py),
+which handles the subclasses that trip people up — `commençons`/`commencions`,
+`mangeons`/`mangions`, `achète`/`achetons`/`achèterai`, German's missing `ge-`
+on `besucht` and `studiert`, the linking `-e-` in `gearbeitet`. Irregular verbs
+keep explicit tables.
+
+That derivation is not taken on trust: a test expands the verbs the packs *also*
+spell out by hand and requires the two to agree, so the rules are checked
+against known-good data. Adding a verb is one line; adding a language is a new
+YAML file.
+
+### Stories and summaries
+
+The one part that genuinely needs a model — a story cannot be derived from a
+table. Press **Story + summary**, give a topic, and the model writes a levelled
+story with comprehension questions, a summary task and a short glossary.
+
+Two consequences, both deliberate rather than compromises:
+
+- **The key prints "Model answer"**, not "Answer". A comprehension answer is
+  one acceptable answer; printing it as *the* answer invites an adult to mark a
+  better one wrong.
+- **The story is stored verbatim, not as a seed.** For grammar a seed rebuilds
+  the sheet exactly; a second model call writes a *different* story, so a
+  reprint would no longer match the paper the child was given.
+
+A response the model mangles is reported rather than printed — an empty
+question is worse than an error.
 
 ### Sheet types
 

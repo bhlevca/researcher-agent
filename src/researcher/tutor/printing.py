@@ -52,6 +52,9 @@ _WORDS = {
     "Marks": "Marks", "Total": "Total", "Model answer": "Model answer",
 }
 
+# Marks a paragraph as the vocabulary glossary rather than story prose.
+_GLOSSARY_MARK = "\x01gloss"
+
 _KIND_TITLE = {"homework": "Homework", "test": "Test", "exam": "Exam",
                "challenge": "Challenge", "worksheet": "Worksheet"}
 
@@ -129,18 +132,27 @@ def _build_tex(sections: list[Section], *, title: str, subtitle: str,
         if sec.title or len(sections) > 1:
             head = sec.title or f"Part {n}"
             marks = (rf" \hfill {{\small [{sec.marks} {_WORDS['Marks'].lower()}]}}"
-                     if show_marks else "")
+                     if show_marks and sec.marks else "")
             lines.append(rf"\vspace{{1mm}}{{\large\bfseries {escape_text(head)}}}"
                          rf"{marks}\\[1mm]")
         if sec.instruction:
             lines.append(rf"{{\itshape {escape_text(sec.instruction)}}}\\[2mm]")
         if sec.passage:
-            # A reading text is set in a framed block so it reads as source
+            # A reading text is set in a quote block so it reads as source
             # material rather than as another question.
             lines.append(r"\begin{quote}")
             for para in sec.passage.split("\n\n"):
-                if para.strip():
-                    lines.append(escape_text(para.strip()) + r"\\[2mm]")
+                para = para.strip()
+                if not para:
+                    continue
+                if para.startswith(_GLOSSARY_MARK):
+                    # Vocabulary help, set small and apart from the prose.
+                    body = para[len(_GLOSSARY_MARK):].strip()
+                    entries = r" \quad ".join(
+                        escape_text(e.strip()) for e in body.split("|") if e.strip())
+                    lines.append(r"\vspace{1mm}{\small " + entries + "}")
+                else:
+                    lines.append(escape_text(para) + r"\\[2mm]")
             lines.append(r"\end{quote}\vspace{2mm}")
         if not sec.exercises:
             continue

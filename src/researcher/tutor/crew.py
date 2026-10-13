@@ -508,6 +508,40 @@ class TutorCrew:
             verbose=True,
         )
 
+    def build_lesson_sheet_crew(
+        self,
+        topic: str,
+        target_lang: str,
+        native_lang: str,
+        level: str,
+    ) -> Crew:
+        """A compact lesson sized for one printed sheet.
+
+        The full lesson_task is a teacher's scheme of work — 15-20 vocabulary
+        items, three dialogues, five exercise types — and takes about four
+        minutes to write. That is the right thing for the Lessons panel and the
+        wrong thing for someone waiting at a Print button, so printable sheets
+        get their own, shorter task.
+        """
+        agent = self._build_agent(target_lang, native_lang, level, tools=[])
+        desc, exp = self._render_task(
+            "lesson_sheet_task",
+            {
+                "topic": topic,
+                "target_lang": target_lang,
+                "native_lang": native_lang,
+                "level": level,
+            },
+        )
+        task = Task(description=desc, expected_output=exp, agent=agent, context=[])
+        return Crew(
+            agents=[agent],
+            tasks=[task],
+            process=Process.sequential,
+            memory=False,
+            verbose=True,
+        )
+
     def build_story_sheet_crew(
         self,
         topic: str,

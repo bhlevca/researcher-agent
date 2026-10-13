@@ -503,3 +503,158 @@ class TestLessonSheets:
                             fake_get)
         assert client.get("/tutor/lessons/nope/sheet",
                           headers=headers).status_code == 404
+
+    def test_saved_lessons_list_is_not_shadowed_by_the_id_route(
+            self, client, headers):
+        """/tutor/sheets/lessons must not be read as a sheet with id
+        'lessons' — both are registered, so order decides."""
+        r = client.get("/tutor/sheets/lessons", headers=headers)
+        assert r.status_code == 200
+        assert "lessons" in r.json()
+
+    def test_saved_lessons_lists_across_sessions(self, client, headers,
+                                                 monkeypatch):
+        """The sheets panel has no tutor session, so the per-session listing
+        cannot serve it — this route must span sessions."""
+        async def fake_list(db, user_id, limit=200):
+            return [{"id": "a", "title": "From session A", "target_lang": "French",
+                     "level": "A2"},
+                    {"id": "b", "title": "From session B", "target_lang": "German",
+                     "level": "A1"}]
+
+        monkeypatch.setattr(
+            "researcher.routes.tutor_sheets.list_all_lesson_plans", fake_list)
+        got = client.get("/tutor/sheets/lessons", headers=headers).json()["lessons"]
+        assert [l["title"] for l in got] == ["From session A", "From session B"]
+
+    def test_listing_lessons_requires_login(self, client):
+        assert client.get("/tutor/sheets/lessons").status_code == 401
+
+
+class TestLatexSubprocess:
+    """pdflatex's own output is not necessarily UTF-8."""
+
+    def test_a_pdf_survives_undecodable_compiler_output(self, monkeypatch):
+        r"""pdflatex echoes source lines in overfull-box warnings using its own
+        encoding, so an accented word in a long line emits a byte that is not
+        valid UTF-8. Decoding that with no error handler raised inside the
+        compile step and threw away a PDF that had built perfectly well — the
+        sheet came back empty while the answer key, whose log happened to be
+        clean, worked.
+        """
+        import subprocess
+
+        from researcher import latex
+
+        real_run = subprocess.run
+        seen = {}
+
+        def fake_run(cmd, **kw):
+            seen.update(kw)
+            return real_run(cmd, **kw)
+
+        monkeypatch.setattr(latex.subprocess, "run", fake_run)
+        if not latex.latex_available():
+            pytest.skip("pdflatex not installed")
+        tex = (latex.preamble(11) + r"\begin{document}"
+               + ("Une très longue ligne accentuée qui déborde de la marge "
+                  "pour provoquer un avertissement de pdflatex " * 6)
+               + r"\end{document}")
+        pdf = latex.compile_pdf(tex, tag="test")
+        assert pdf and pdf[:4] == b"%PDF"
+        # The decode must be forgiving, or this class of failure returns.
+        assert seen.get("errors") == "replace"
+
+    def test_accented_lesson_compiles(self):
+        """The case that actually broke: a French lesson with long lines."""
+        from researcher.tutor import printing
+
+        if not printing.latex_available():
+            pytest.skip("pdflatex not installed")
+        md = ("# Leçon\n\n## Grammaire\n"
+              + "Les verbes réguliers en -er suivent un schéma cohérent et "
+                "régulier à toutes les personnes du présent de l'indicatif. " * 5
+              + "\n\n## Solutions\n\n1. Je parle français.\n")
+        assert printing.render_lesson_pdf(md, title="Leçon",
+                                          subtitle="A2 · French")[:4] == b"%PDF"
+
+
+class TestLevelGuard:
+    """An empty level produced a lesson "for a -level student"."""
+
+    @pytest.mark.parametrize("level", ["", "   ", "Z9", "beginner"])
+    def test_a_bad_level_is_refused_before_the_model_runs(
+            self, client, headers, level, monkeypatch):
+        """The dropdown had not finished loading, so the page sent "" and the
+        model spent minutes writing for a "-level student"."""
+        called = []
+        monkeypatch.setattr("researcher.routes.tutor_sheets._tutor_crew",
+                            lambda *a, **k: called.append(1))
+        r = client.post("/tutor/sheets/lesson", headers=headers,
+                        json={"language": "French", "level": level, "topic": "x"})
+        assert r.status_code == 400
+        assert "level" in r.json()["detail"].lower()
+        assert not called, "the model was started despite a bad level"
+
+    def test_omitting_the_level_falls_back_to_the_default(self, client, headers,
+                                                          monkeypatch):
+        """Omitting the field is not the same as sending an empty one."""
+        from unittest.mock import MagicMock
+
+        crew = MagicMock(); crew.kickoff.return_value = _LESSON_MD
+        tutor = MagicMock()
+        tutor.build_lesson_sheet_crew.return_value = crew
+        tutor.get_llm_params.return_value = {"crew_timeout_sec": 30}
+        monkeypatch.setattr("researcher.routes.tutor_sheets._tutor_crew",
+                            lambda *a, **k: tutor)
+        r = client.post("/tutor/sheets/lesson", headers=headers,
+                        json={"language": "French"})
+        assert r.status_code == 200
+        assert r.json()["level"] == "A1"
+
+    def test_story_has_the_same_guard(self, client, headers, monkeypatch):
+        called = []
+        monkeypatch.setattr("researcher.routes.tutor_sheets._tutor_crew",
+                            lambda *a, **k: called.append(1))
+        r = client.post("/tutor/sheets/story", headers=headers,
+                        json={"language": "French", "level": ""})
+        assert r.status_code == 400
+        assert not called
+
+    def test_a_good_level_is_normalised(self, client, headers, monkeypatch):
+        from unittest.mock import MagicMock
+
+        crew = MagicMock()
+        crew.kickoff.return_value = _LESSON_MD
+        tutor = MagicMock()
+        tutor.build_lesson_sheet_crew.return_value = crew
+        tutor.get_llm_params.return_value = {"crew_timeout_sec": 30}
+        monkeypatch.setattr("researcher.routes.tutor_sheets._tutor_crew",
+                            lambda *a, **k: tutor)
+        r = client.post("/tutor/sheets/lesson", headers=headers,
+                        json={"language": "french", "level": "a2"})
+        assert r.status_code == 200
+        assert r.json()["level"] == "A2"
+        assert r.json()["language"] == "French"
+        # The level must reach the model, not an empty string.
+        assert tutor.build_lesson_sheet_crew.call_args.kwargs["level"] == "A2"
+
+    def test_the_compact_lesson_is_the_default(self, client, headers, monkeypatch):
+        """Four minutes behind a Print button is the wrong default."""
+        from unittest.mock import MagicMock
+
+        crew = MagicMock(); crew.kickoff.return_value = _LESSON_MD
+        tutor = MagicMock()
+        tutor.build_lesson_sheet_crew.return_value = crew
+        tutor.build_lesson_crew.return_value = crew
+        tutor.get_llm_params.return_value = {"crew_timeout_sec": 30}
+        monkeypatch.setattr("researcher.routes.tutor_sheets._tutor_crew",
+                            lambda *a, **k: tutor)
+        client.post("/tutor/sheets/lesson", headers=headers,
+                    json={"language": "French", "level": "A2"})
+        assert tutor.build_lesson_sheet_crew.called
+        assert not tutor.build_lesson_crew.called
+
+        client.post("/tutor/sheets/lesson", headers=headers,
+                    json={"language": "French", "level": "A2", "full": True})
+        assert tutor.build_lesson_crew.called

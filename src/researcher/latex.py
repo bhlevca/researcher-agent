@@ -179,7 +179,13 @@ def compile_pdf(tex: str, extra_files: dict[str, bytes] | None = None,
                 proc = subprocess.run(
                     [LATEX_CMD, "-interaction=nonstopmode", "-halt-on-error",
                      "sheet.tex"],
-                    cwd=work, capture_output=True, text=True, timeout=120)
+                    cwd=work, capture_output=True, timeout=120,
+                    # pdflatex echoes source lines in its overfull-box warnings
+                    # using its own encoding, so an accented word in a long line
+                    # emits a byte that is not valid UTF-8. With text=True and
+                    # no error handler that raises here and throws away a PDF
+                    # that built perfectly well.
+                    text=True, encoding="utf-8", errors="replace")
             pdf = work / "sheet.pdf"
             if not pdf.is_file():
                 tail = ((proc.stdout if proc else "") or "")[-700:]

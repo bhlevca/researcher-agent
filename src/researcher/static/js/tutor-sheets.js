@@ -12,16 +12,86 @@ let sheetLastRequest = null;
 let sheetMode = 'grammar';
 let storyContent = null;      // the generated story, carried back for printing
 let lessonMarkdown = null;    // the generated lesson, likewise
+let sheetBusy = false;
+let sheetTimer = null;
+
+/* A model call takes a minute or two. Without this the action buttons stay
+   live, and pressing Preview mid-generation answered "Write a lesson first" —
+   which is both wrong and the opposite of reassuring. */
+function setSheetBusy(on, label, hint) {
+    sheetBusy = on;
+    document.querySelectorAll('.sheets-actions button').forEach(b => {
+        b.disabled = on;
+    });
+    document.querySelectorAll('#sheets-lesson-pane button, #sheets-story-pane button')
+        .forEach(b => { b.disabled = on; });
+    clearInterval(sheetTimer);
+
+    const panel = document.getElementById('sheets-working');
+    const frame = document.getElementById('sheets-frame');
+    const empty = document.getElementById('sheets-empty');
+    if (on) {
+        document.getElementById('sheets-working-what').textContent = label;
+        document.getElementById('sheets-working-hint').textContent = hint || '';
+        panel.style.display = 'flex';
+        frame.style.display = 'none';
+        empty.style.display = 'none';
+        const t0 = Date.now();
+        const tick = () => {
+            const s = Math.round((Date.now() - t0) / 1000);
+            const mm = Math.floor(s / 60), ss = String(s % 60).padStart(2, '0');
+            document.getElementById('sheets-working-time').textContent =
+                mm ? `${mm}:${ss}` : `${s}s`;
+        };
+        tick();
+        sheetTimer = setInterval(tick, 1000);
+        sheetStatus('');
+    } else {
+        panel.style.display = 'none';
+        // Whichever of the two was showing before is restored by the caller.
+        if (!sheetPdfUrls.sheet) empty.style.display = 'flex';
+    }
+}
+
+/* The primary button does the obvious thing for the current mode, so there is
+   never a second "real" button competing with it. */
+function syncSheetButton() {
+    const btn = document.getElementById('sheets-go');
+    if (!btn) return;
+    if (sheetMode === 'lesson') {
+        btn.textContent = lessonMarkdown ? '↻ Rewrite lesson' : '📘 Write the lesson';
+    } else if (sheetMode === 'story') {
+        btn.textContent = storyContent ? '↻ Rewrite story' : '✍️ Write the story';
+    } else {
+        btn.textContent = 'Preview';
+    }
+}
 
 function openSheetsPanel() {
     document.getElementById('sheets-overlay').style.display = 'block';
     document.getElementById('sheets-panel').classList.add('open');
-    if (!sheetSkills.length) loadSheetSkills();
+    ensureSkillsLoaded();
+}
+
+/* loadSheetSkills fills the Level dropdown, and it is async. Generating before
+   it resolves sent level:"" — the model was then asked to write for a
+   "-level student". Every generate awaits this first. */
+let sheetSkillsPromise = null;
+function ensureSkillsLoaded() {
+    if (!sheetSkillsPromise) sheetSkillsPromise = loadSheetSkills();
+    return sheetSkillsPromise;
 }
 
 function closeSheetsPanel() {
     document.getElementById('sheets-overlay').style.display = 'none';
     document.getElementById('sheets-panel').classList.remove('open');
+}
+
+function sheetLevel() {
+    /* Never return "" — the server rejects it, and a lesson pitched at no
+       level is four wasted minutes. */
+    const el = document.getElementById('sheets-level');
+    return (el && el.value) || 'A2';
 }
 
 function sheetStatus(msg, bad) {
@@ -32,7 +102,7 @@ function sheetStatus(msg, bad) {
 }
 
 async function loadSheetSkills() {
-    const lang = document.getElementById('sheets-language').value;
+    const lang = document.getElementById('sheets-language').value || 'French';
     try {
         const r = await fetch('/tutor/sheets/skills?language=' + encodeURIComponent(lang),
                               { headers: authHeaders() });
@@ -105,7 +175,7 @@ function sheetRequest() {
     const seedRaw = document.getElementById('sheets-seed').value.trim();
     return {
         language: document.getElementById('sheets-language').value,
-        level: document.getElementById('sheets-level').value,
+        level: sheetLevel(),
         kind: document.getElementById('sheets-kind').value,
         title: document.getElementById('sheets-title').value.trim(),
         student: document.getElementById('sheets-student').value.trim(),
@@ -127,16 +197,11 @@ async function fetchSheetPdf(req, answers) {
 }
 
 async function previewSheet() {
-    if (sheetMode === 'lesson') {
-        if (!lessonMarkdown) { sheetStatus('Write or load a lesson first.', true); return; }
-        try { await previewLesson(); } catch (e) { sheetStatus(e.message, true); }
-        return;
-    }
-    if (sheetMode === 'story') {
-        if (!storyContent) { sheetStatus('Write the story first.', true); return; }
-        try { await previewStory(); } catch (e) { sheetStatus(e.message, true); }
-        return;
-    }
+    if (sheetBusy) return;
+    // In the model-backed modes the primary button writes the thing — pressing
+    // it is the user asking for a lesson, not asking why there isn't one.
+    if (sheetMode === 'lesson') return generateLesson();
+    if (sheetMode === 'story') return generateStory();
     const req = sheetRequest();
     if (!req.sections.length) { sheetStatus('Choose at least one skill.', true); return; }
     const btn = document.getElementById('sheets-go');
@@ -282,13 +347,14 @@ function setSheetMode(mode) {
             m === mode ? 'block' : 'none';
     });
     sheetStatus('');
+    syncSheetButton();
 }
 
 function storyBody() {
     return {
         content: storyContent,
         language: document.getElementById('sheets-language').value,
-        level: document.getElementById('sheets-level').value,
+        level: sheetLevel(),
         kind: document.getElementById('sheets-kind').value,
         title: document.getElementById('sheets-title').value.trim(),
         student: document.getElementById('sheets-student').value.trim(),
@@ -296,15 +362,14 @@ function storyBody() {
 }
 
 async function generateStory() {
-    const btn = document.getElementById('story-go');
-    btn.disabled = true;
-    sheetStatus('Writing the story… this uses the model and can take a minute.');
+    await ensureSkillsLoaded();
+    setSheetBusy(true, 'Writing the story…', 'Usually under a minute.');
     try {
         const r = await fetch('/tutor/sheets/story', {
             method: 'POST', headers: jsonAuthHeaders(),
             body: JSON.stringify({
                 language: document.getElementById('sheets-language').value,
-                level: document.getElementById('sheets-level').value,
+                level: sheetLevel(),
                 topic: document.getElementById('story-topic').value.trim(),
                 num_questions: parseInt(document.getElementById('story-questions').value, 10) || 5,
                 word_count: parseInt(document.getElementById('story-words').value, 10) || 200,
@@ -316,9 +381,12 @@ async function generateStory() {
         await previewStory();
         sheetStatus(`"${storyContent.title}" — ${storyContent.questions.length} questions.`);
     } catch (e) {
+        setSheetBusy(false);
         sheetStatus(e.message, true);
+        return;
     } finally {
-        btn.disabled = false;
+        setSheetBusy(false);
+        syncSheetButton();
     }
 }
 
@@ -347,7 +415,7 @@ async function previewStory() {
 }
 
 async function downloadStory(answers) {
-    if (!storyContent) { sheetStatus('Write the story first.', true); return; }
+    if (!storyContent) { sheetStatus('Press "Write the story" first.', true); return; }
     try {
         const url = await fetchStoryPdf(answers);
         const a = document.createElement('a');
@@ -364,7 +432,7 @@ async function downloadStory(answers) {
 }
 
 async function saveStory() {
-    if (!storyContent) { sheetStatus('Write the story first.', true); return; }
+    if (!storyContent) { sheetStatus('Press "Write the story" first.', true); return; }
     try {
         const r = await fetch('/tutor/sheets/story/save', {
             method: 'POST', headers: jsonAuthHeaders(),
@@ -385,7 +453,7 @@ function lessonBody() {
         markdown: lessonMarkdown,
         title: document.getElementById('sheets-title').value.trim(),
         language: document.getElementById('sheets-language').value,
-        level: document.getElementById('sheets-level').value,
+        level: sheetLevel(),
         student: document.getElementById('sheets-student').value.trim(),
         practice_space: true,
     };
@@ -423,16 +491,19 @@ async function previewLesson() {
 }
 
 async function generateLesson() {
-    const btn = document.getElementById('lesson-go');
-    btn.disabled = true;
-    sheetStatus('Writing the lesson… this uses the model and takes a minute or two.');
+    const full = document.getElementById('lesson-full').checked;
+    await ensureSkillsLoaded();
+    setSheetBusy(true, 'Writing the lesson…',
+                 full ? 'A full lesson takes about four minutes.'
+                      : 'Usually under two minutes.');
     try {
         const r = await fetch('/tutor/sheets/lesson', {
             method: 'POST', headers: jsonAuthHeaders(),
             body: JSON.stringify({
                 language: document.getElementById('sheets-language').value,
-                level: document.getElementById('sheets-level').value,
+                level: sheetLevel(),
                 topic: document.getElementById('lesson-topic').value.trim(),
+                full: full,
             }),
         });
         if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
@@ -443,14 +514,17 @@ async function generateLesson() {
             ? 'Ready — the lesson includes solutions, so the answer key works.'
             : 'Ready, but the lesson has no Solutions section: no answer key.');
     } catch (e) {
+        setSheetBusy(false);
         sheetStatus(e.message, true);
+        return;
     } finally {
-        btn.disabled = false;
+        setSheetBusy(false);
+        syncSheetButton();
     }
 }
 
 async function downloadLesson(answers) {
-    if (!lessonMarkdown) { sheetStatus('Write or load a lesson first.', true); return; }
+    if (!lessonMarkdown) { sheetStatus('Press "Write the lesson" first.', true); return; }
     try {
         const url = await fetchLessonPdf(answers);
         const a = document.createElement('a');
@@ -472,9 +546,9 @@ async function listSavedLessons() {
     box.style.display = 'block';
     box.innerHTML = '<div style="color:#64748b;font-size:0.8rem">Loading…</div>';
     try {
-        const r = await fetch('/tutor/lessons', { headers: authHeaders() });
-        const data = await r.json();
-        const lessons = data.lessons || data || [];
+        const r = await fetch('/tutor/sheets/lessons', { headers: authHeaders() });
+        if (!r.ok) throw new Error('Could not list saved lessons');
+        const lessons = (await r.json()).lessons || [];
         if (!lessons.length) {
             box.innerHTML = '<div style="color:#64748b;font-size:0.8rem">'
                 + 'No saved lessons yet — create one from the Lessons panel.</div>';
@@ -485,11 +559,13 @@ async function listSavedLessons() {
             const div = document.createElement('div');
             div.className = 'sheets-saved-item';
             div.innerHTML = '<div><strong></strong></div><div class="meta"></div>' +
-                '<div class="btns"><button data-a="sheet">⬇ Sheet</button>' +
+                '<div class="btns"><button data-a="open">👁 Open</button>' +
+                '<button data-a="sheet">⬇ Sheet</button>' +
                 '<button data-a="key">⬇ Key</button></div>';
             div.querySelector('strong').textContent = l.title || l.topic || 'Lesson';
             div.querySelector('.meta').textContent =
                 `${l.target_lang || ''} · ${l.level || ''}`;
+            div.querySelector('[data-a="open"]').onclick = () => loadSavedLesson(l.id);
             div.querySelector('[data-a="sheet"]').onclick = () => downloadSavedLesson(l.id, false);
             div.querySelector('[data-a="key"]').onclick = () => downloadSavedLesson(l.id, true);
             box.appendChild(div);
@@ -497,6 +573,23 @@ async function listSavedLessons() {
     } catch (e) {
         box.innerHTML = `<div style="color:#f87171;font-size:0.8rem">${e.message}</div>`;
     }
+}
+
+async function loadSavedLesson(id) {
+    /* Pull a saved lesson into the preview, so Preview/download/Save all work
+       on it exactly as on a freshly written one. */
+    const r = await fetch(`/tutor/lessons/${id}`, { headers: authHeaders() });
+    if (!r.ok) { sheetStatus('Could not load that lesson.', true); return; }
+    const l = await r.json();
+    const content = l.content || {};
+    lessonMarkdown = typeof content === 'string' ? content : (content.markdown || '');
+    if (!lessonMarkdown) { sheetStatus('That lesson is empty.', true); return; }
+    document.getElementById('sheets-title').value = l.title || '';
+    syncSheetButton();
+    try {
+        await previewLesson();
+        sheetStatus('Loaded. Preview, download or print the answer key.');
+    } catch (e) { sheetStatus(e.message, true); }
 }
 
 async function downloadSavedLesson(id, answers) {

@@ -165,14 +165,16 @@
 
             <div id="sheets-lesson-pane" style="display:none">
                 <label>Topic <input type="text" id="lesson-topic" placeholder="e.g. daily routines"></label>
+                <label style="display:flex;align-items:center;gap:0.4rem;margin-top:0.4rem">
+                    <input type="checkbox" id="lesson-full" style="width:auto">
+                    <span>Full lesson (slower — about 4 minutes)</span>
+                </label>
                 <div class="sheets-note">A full lesson — objectives, grammar,
                     a vocabulary table, dialogues and practice. The model writes
                     it with a Solutions section, so the sheet and its answer key
                     are the same document cut in half and cannot disagree.</div>
-                <button class="primary" style="width:100%;margin-top:0.5rem"
-                        id="lesson-go" onclick="generateLesson()">📘 Write the lesson</button>
-                <button style="width:100%;margin-top:0.35rem;background:#0f3460;color:#e2e8f0;border:1px solid #1a3a6e;border-radius:0.45rem;padding:0.4rem;font-size:0.76rem;cursor:pointer"
-                        onclick="listSavedLessons()">📂 Print a saved lesson</button>
+                <button style="width:100%;margin-top:0.5rem;background:#0f3460;color:#e2e8f0;border:1px solid #1a3a6e;border-radius:0.45rem;padding:0.4rem;font-size:0.76rem;cursor:pointer"
+                        onclick="listSavedLessons()">📂 Print a saved lesson (instant)</button>
                 <div id="lesson-saved" style="display:none;margin-top:0.5rem"></div>
             </div>
 
@@ -187,8 +189,7 @@
                     <strong>Model answer</strong> — one acceptable answer, not
                     the only one. The story is stored as written, so a reprint
                     is the same paper.</div>
-                <button class="primary" style="width:100%;margin-top:0.5rem"
-                        id="story-go" onclick="generateStory()">✍️ Write the story</button>
+
             </div>
 
             <div class="sheets-row">
@@ -214,6 +215,12 @@
                 <button id="sheets-tab-key" onclick="showSheetPdf(true)">Answer key</button>
             </div>
             <iframe id="sheets-frame" style="display:none" title="Sheet preview"></iframe>
+            <div class="sheets-working" id="sheets-working" style="display:none">
+                <div class="spinner"></div>
+                <div class="what" id="sheets-working-what">Working…</div>
+                <div class="elapsed" id="sheets-working-time">0s</div>
+                <div class="hint" id="sheets-working-hint"></div>
+            </div>
             <div class="sheets-empty" id="sheets-empty">
                 Choose skills and press <strong>Preview</strong>.<br>
                 What you see here is exactly what prints.
@@ -555,7 +562,7 @@
     <script src="/static/js/tutor-stats.js"></script>
     <script src="/static/js/tutor-scenarios.js"></script>
     <script src="/static/js/tutor-curriculum.js"></script>
-    <script src="/static/js/tutor-sheets.js?v=1"></script>
+    <script src="/static/js/tutor-sheets.js?v=4"></script>
 
     <!-- Tutor init -->
     <script>

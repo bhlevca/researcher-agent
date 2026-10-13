@@ -149,3 +149,17 @@ class LessonSheetRequest(BaseModel):
     student: str = ""
     # Leave writing space after each numbered exercise.
     practice_space: bool = True
+
+
+class LessonRequest(BaseModel):
+    """Ask the model for a lesson.
+
+    *full* selects the teacher's scheme of work — thorough, and about four
+    minutes to write. The default is the compact version sized for one printed
+    sheet, which is what someone waiting at a Print button wants.
+    """
+
+    language: str = "French"
+    level: str = "A1"
+    topic: str = ""
+    full: bool = False

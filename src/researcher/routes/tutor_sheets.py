@@ -11,23 +11,26 @@ Sheets are stored as a recipe and rebuilt on demand, so a seed is a sheet.
 import asyncio
 import random
 import logging
+import time
 
 from fastapi import HTTPException, Request
 from fastapi.responses import Response
 
 from researcher.auth import get_current_user
+from researcher.downloads import content_disposition
 from researcher.tutor import exercises as X
 from researcher.tutor import printing
 from researcher.tutor import story as story_mod
 from researcher.tutor.crew import TutorCrew
 from researcher.tutor.models import (
+    LessonRequest,
     LessonSheetRequest,
     SheetRequest,
     SheetSaveRequest,
     StoryRequest,
     StorySheetRequest,
 )
-from researcher.tutor.storage import get_lesson_plan
+from researcher.tutor.storage import get_lesson_plan, list_all_lesson_plans
 from researcher.tutor.storage import (
     save_sheet,
     list_sheets,
@@ -100,6 +103,32 @@ def _title(req: SheetRequest) -> str:
     return f"{req.language} — {req.kind.title()}"
 
 
+_LEVELS = ("A1", "A2", "B1", "B2", "C1", "C2")
+
+
+def _check_level(level: str) -> str:
+    """A model told to write for a "-level student" writes for nobody.
+
+    The level arrives from a dropdown, so an empty one means the page asked
+    before it had finished loading. Refusing is better than spending four
+    minutes producing a lesson pitched at no level at all.
+    """
+    lvl = (level or "").strip().upper()
+    if lvl not in _LEVELS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Missing or invalid level '{level}'. Expected one of "
+                   f"{', '.join(_LEVELS)}.")
+    return lvl
+
+
+def _check_language(language: str) -> str:
+    lang = (language or "").strip().title()
+    if not lang:
+        raise HTTPException(status_code=400, detail="No language given")
+    return lang
+
+
 def _tutor_crew(request: Request, uid: str) -> TutorCrew:
     """The per-user TutorCrew, shared with the conversational routes."""
     crews = getattr(request.app.state, "tutor_crews", None)
@@ -118,7 +147,7 @@ def _pdf_response(pdf: bytes | None, filename: str) -> Response:
                    "The on-screen preview still works.")
     return Response(
         content=pdf, media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+        headers=content_disposition(filename))
 
 
 def register_tutor_sheet_routes(app):
@@ -196,13 +225,17 @@ def register_tutor_sheet_routes(app):
     async def make_story(req: StoryRequest, request: Request):
         """Generate a story, comprehension questions and a summary task."""
         user = await get_current_user(request)
+        level = _check_level(req.level)
+        language = _check_language(req.language)
         tutor = _tutor_crew(request, user["id"])
+        started = time.monotonic()
+        logger.info("[tutor] story: lang=%s level=%s", language, level)
 
         crew = tutor.build_story_sheet_crew(
             topic=req.topic.strip() or "everyday life",
-            target_lang=req.language,
+            target_lang=language,
             native_lang="English",
-            level=req.level,
+            level=level,
             num_questions=max(1, min(int(req.num_questions), 12)),
             word_count=max(60, min(int(req.word_count), 600)),
             summary_words=max(20, min(int(req.summary_words), 150)))
@@ -227,8 +260,9 @@ def register_tutor_sheet_routes(app):
         except ValueError as e:
             # Better to say so than to print a sheet with empty questions.
             raise HTTPException(status_code=502, detail=str(e))
-        return {"content": content, "language": req.language,
-                "level": req.level}
+        logger.info("[tutor] story done in %.0fs: %d questions",
+                    time.monotonic() - started, len(content["questions"]))
+        return {"content": content, "language": language, "level": level}
 
     def _story_sections(req: StorySheetRequest):
         try:
@@ -283,16 +317,25 @@ def register_tutor_sheet_routes(app):
     # disagree.
 
     @app.post("/tutor/sheets/lesson")
-    async def make_lesson(req: StoryRequest, request: Request):
+    async def make_lesson(req: LessonRequest, request: Request):
         """Write a new lesson, returning its Markdown."""
         user = await get_current_user(request)
+        level = _check_level(req.level)
+        language = _check_language(req.language)
         tutor = _tutor_crew(request, user["id"])
-        crew = tutor.build_lesson_crew(
-            topic=req.topic.strip() or "everyday life",
-            lesson_type="grammar",
-            target_lang=req.language,
-            native_lang="English",
-            level=req.level)
+        topic = req.topic.strip() or "everyday life"
+        started = time.monotonic()
+        logger.info("[tutor] lesson: lang=%s level=%s full=%s topic=%r",
+                    language, level, req.full, topic)
+        if req.full:
+            # The teacher's scheme of work: thorough, and about four minutes.
+            crew = tutor.build_lesson_crew(
+                topic=topic, lesson_type="grammar", target_lang=language,
+                native_lang="English", level=level)
+        else:
+            crew = tutor.build_lesson_sheet_crew(
+                topic=topic, target_lang=language,
+                native_lang="English", level=level)
         timeout = (tutor.get_llm_params() or {}).get("crew_timeout_sec") or 900
         loop = asyncio.get_running_loop()
         try:
@@ -305,12 +348,14 @@ def register_tutor_sheet_routes(app):
         except Exception as e:
             logger.warning("[tutor] lesson generation failed: %s", e)
             raise HTTPException(status_code=502, detail=f"Lesson failed: {e}")
-        return {"markdown": markdown, "language": req.language,
-                "level": req.level,
-                "has_answers": printing.lesson_has_answers(markdown)}
+        has = printing.lesson_has_answers(markdown)
+        logger.info("[tutor] lesson done in %.0fs: %d chars, answers=%s",
+                    time.monotonic() - started, len(markdown), has)
+        return {"markdown": markdown, "language": language, "level": level,
+                "has_answers": has}
 
     def _lesson_pdf(req: LessonSheetRequest, answers: bool) -> Response:
-        title = req.title or f"{req.language} — Lesson"
+        title = req.title or f"{req.language} Lesson"
         pdf = printing.render_lesson_pdf(
             req.markdown, title=title,
             subtitle=f"Level {req.level} · {req.language}",
@@ -333,6 +378,17 @@ def register_tutor_sheet_routes(app):
     async def lesson_answers(req: LessonSheetRequest, request: Request):
         await get_current_user(request)
         return _lesson_pdf(req, answers=True)
+
+    @app.get("/tutor/sheets/lessons")
+    async def saved_lessons(request: Request):
+        """Every saved lesson, across sessions.
+
+        The sheets panel is not bound to a tutor session, and the existing
+        listing route is per-session, so it cannot be used here.
+        """
+        user = await get_current_user(request)
+        lessons = await list_all_lesson_plans(request.app.state.db, user["id"])
+        return {"lessons": lessons}
 
     @app.get("/tutor/lessons/{lesson_id}/sheet")
     async def saved_lesson_sheet(lesson_id: str, request: Request,

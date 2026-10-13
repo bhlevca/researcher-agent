@@ -317,3 +317,38 @@ story_sheet_task:
   expected_output: >
     A single valid JSON object with the keys title, story, questions,
     summary_prompt, summary_answer and glossary. No text outside the JSON.
+
+lesson_sheet_task:
+  agent: language_tutor
+  description: >
+    Create a COMPACT lesson for a {level}-level student learning {target_lang}
+    (native language: {native_lang}), to be PRINTED on a worksheet.
+
+    Topic: {topic}
+
+    This is a sheet a child works through in one sitting, not a teacher's full
+    scheme of work. Keep it tight — a long lesson is a slow lesson, and a child
+    will not read three dialogues.
+
+    Include exactly these sections, in this order, using markdown:
+
+    1. **Objectives** — three bullets, what the student will be able to do.
+    2. **Grammar** — one clear rule with a short conjugation or pattern table.
+       Explain in {native_lang}; give the examples in {target_lang}.
+    3. **Vocabulary** — a table of exactly 10 items:
+       | {target_lang} | {native_lang} | Example sentence |
+    4. **Dialogue** — ONE short exchange, 6 to 8 lines, using the grammar and
+       vocabulary above.
+    5. **Practice** — exactly 8 numbered exercises: four fill-in-the-blank,
+       two translation, one sentence construction, one error correction.
+    6. **Solutions** — the answer to every one of the 8 exercises, numbered to
+       match.
+
+    LEVEL DISCIPLINE: at {level}, keep sentences short and vocabulary common.
+    Do not use grammar the student has not met.
+
+    The Solutions heading must be written exactly as "## Solutions" so it can
+    be separated from the worksheet.
+  expected_output: >
+    A markdown lesson with the six sections above and a "## Solutions" heading
+    before the answers. No preamble or commentary outside the lesson.

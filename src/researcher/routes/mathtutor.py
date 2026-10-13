@@ -16,6 +16,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import Response
 
 from researcher.auth import get_current_user
+from researcher.downloads import content_disposition
 from researcher import mathtutor
 from researcher.mathtutor import generators, worksheet, i18n
 from researcher.mathtutor.models import GenerateRequest, SaveRequest, MarkRequest
@@ -122,7 +123,7 @@ def _pdf_response(pdf: bytes | None, filename: str) -> Response:
                    "The on-screen preview still works.")
     return Response(
         content=pdf, media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+        headers=content_disposition(filename))
 
 
 def register_mathtutor_routes(app):

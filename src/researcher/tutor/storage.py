@@ -822,6 +822,26 @@ async def save_lesson_plan(
     return {"id": lid, "title": title, "topic": topic, "created_at": now}
 
 
+async def list_all_lesson_plans(
+    db: aiosqlite.Connection, user_id: str, limit: int = 200
+) -> list[dict]:
+    """Every lesson this user has saved, across all sessions.
+
+    The printable-sheets panel is not tied to a tutor session, so it needs the
+    whole list; list_lesson_plans is per-session and cannot serve it.
+    """
+    cursor = await db.execute(
+        "SELECT id, title, topic, lesson_type, target_lang, level, created_at "
+        "FROM lesson_plans WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+        (user_id, int(limit)),
+    )
+    return [
+        {"id": r[0], "title": r[1], "topic": r[2], "lesson_type": r[3],
+         "target_lang": r[4], "level": r[5], "created_at": r[6]}
+        for r in await cursor.fetchall()
+    ]
+
+
 async def list_lesson_plans(
     db: aiosqlite.Connection, user_id: str, session_id: str
 ) -> list[dict]:

@@ -1,8 +1,101 @@
 # TODO_Claude.md — Improvement Plan for Researcher, Tutor & Composer
 
 Generated: 2026-05-23 | Project: ai-agent v2.2.0 | Branch: developer
-Updated: 2026-10-12 for v2.15.0 — both tutors complete; see STATE OF PLAY.
+Updated: 2026-10-13 — see TOMORROW at the top; sheet generation needs streaming.
 Statuses re-verified against the code, not against previous checkboxes.
+
+---
+
+## ▶ TOMORROW — START HERE (2026-10-13)
+
+### The one real task: make sheet generation stream
+
+**Symptom:** pressing "Write the lesson" shows nothing in the page. The thinking
+appears only in the server terminal, and so does the result.
+
+**Cause, confirmed:** `/tutor/sheets/lesson` and `/tutor/sheets/story` are
+blocking POSTs. CrewAI's `verbose=True` writes progress to the server's
+**stdout**, not into the HTTP response, so the browser sees nothing until the
+call returns 30-240s later. Every other model-backed tutor feature — chat,
+`/tutor/lessons`, `/tutor/passages`, quizzes — goes through
+`_stream_tutor_crew` in `routes/tutor.py`, which captures stdout with
+`config._QueueWriter` and emits SSE. The sheet routes bypass all of it.
+
+**Fix:** reuse that machinery.
+1. Read `_stream_tutor_crew` and `_QueueWriter` (routes/tutor.py ~line 100-200).
+2. Give the sheet routes an SSE variant that streams the same thinking events
+   and ends with a `result` event carrying the markdown / story JSON.
+3. In `js/tutor-sheets.js`, consume the stream and show it where the spinner is
+   now (`#sheets-working`), then build the PDF from the final payload.
+4. Keep the blocking routes as they are — the tests use them, and they are the
+   right shape for a scripted call.
+
+Do not start by rewriting the UI. The streaming path is the whole problem.
+
+### What was fixed today and IS verified
+
+All verified end to end against the real model (mistral-small-abliterated),
+not mocked:
+
+- **Content-Disposition crashed on non-ASCII filenames.** HTTP headers are
+  latin-1; the default lesson title was `f"{language} — Lesson"` and that em
+  dash is U+2014. Starlette raised *after* the PDF was built, so a good
+  response became a 500. Grammar sheets were named `French-homework-21.pdf`
+  (ASCII) which is exactly why they worked and lessons did not.
+  Fixed with RFC 6266 in `researcher/downloads.py`: ASCII fallback in
+  `filename`, real name percent-encoded in `filename*`.
+  **This was my bug, introduced in v2.12.0 and v2.14.0** — the pre-existing
+  code in `ingestion.py` sanitises filenames properly and was never affected.
+- **The math tutor had the same latent fault** and is fixed by the same change
+  (one line in `_pdf_response`). A saved worksheet titled "Contrôle — Théorème
+  de Pythagore" now downloads; before it raised UnicodeEncodeError.
+- **pdflatex stdout is not always UTF-8.** It echoes source lines in
+  overfull-box warnings in its own encoding, so an accented French word in a
+  long line made `subprocess` raise, and `compile_pdf` threw away a PDF that
+  had built fine. Now `errors="replace"`.
+- **Empty level.** `loadSheetSkills()` is async and was not awaited, so
+  generating straight after opening the panel sent `level:""` and the model
+  spent minutes writing for a "-level student". Guarded on both sides: the
+  client awaits the dropdowns, the server rejects a bad level with 400 before
+  starting the model.
+- **A lesson took 241s.** The full `lesson_task` is a teacher's scheme of work.
+  Added `lesson_sheet_task` — compact, **37s** — now the default, with a
+  "Full lesson" checkbox for the thorough one.
+
+Full browser sequence, timed, with an accented title:
+`write 200 (33s) -> sheet PDF 200 (105 KB) -> answer key 200 (79 KB)`.
+
+### NOT verified
+
+Whether any of this renders in Bogdan's browser. He has not yet confirmed a
+PDF appearing in the preview pane. The backend is proven; the front end is not.
+**Ask him to confirm before assuming the UI half works.**
+
+### Standing instruction
+
+Do not commit UI work until Bogdan has clicked it. A green suite is not
+evidence — 763 tests passed while the Lesson tab was completely broken,
+because none of them pressed a button.
+
+### The lesson I kept re-learning
+
+Three encoding bugs in a row, each treated as a one-off: the `°` that printed
+as `ř` (T1 font encoding), pdflatex's stdout, and the HTTP header. Bogdan had
+to point out that it was a pattern. **When an encoding bug appears, check the
+other boundaries in the same path** — file write, subprocess, HTTP header,
+font encoding — rather than fixing the one instance.
+
+### Uncommitted
+
+12 files, nothing committed. `v2.16.0` is the last tag and does NOT include any
+of today's fixes.
+
+### Also noticed
+
+- CrewAI 1.15.14 installed, 1.15.27 available. `patches.py` pins behaviour
+  against the tested range, so read it before upgrading.
+- Crew `verbose=True` floods the terminal and buries the `[tutor]` log lines.
+  Consider `verbose=False` for sheet crews once streaming carries the progress.
 
 ---
 

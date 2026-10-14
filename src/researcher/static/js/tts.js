@@ -7,6 +7,11 @@ let dialogMode = false;
 let isSpeaking = false;
 let lastInputWasVoice = false;   // tracks whether user used mic
 let currentAudio = null;         // currently playing Audio element
+/* A stop has to cancel speech that is still being FETCHED, not just speech
+   that is already playing. Without this, pressing Stop or leaving the tab did
+   nothing for the clip in flight: the request completed and played anyway. */
+let speakToken = 0;              // bumped on every stop; stale replies are dropped
+let speakAbort = null;           // aborts the /tts/speak request in flight
 
 async function loadVoices() {
     try {
@@ -92,6 +97,7 @@ function speakText(text, wrapper, lang) {
     if (!text) return Promise.resolve();
     return new Promise(async (resolve) => {
         stopSpeaking();  // stop any prior speech
+        const myToken = speakToken;        // claim this turn
         const clean = textForTTS(text);
         if (!clean) { resolve(); return; }
 
@@ -107,13 +113,21 @@ function speakText(text, wrapper, lang) {
         document.getElementById('stop-speak-btn').classList.add('visible');
 
         try {
+            speakAbort = new AbortController();
             const resp = await fetch('/tts/speak', {
                 method: 'POST',
                 headers: jsonAuthHeaders(),
-                body: JSON.stringify({ text: clean, voice: selectedVoiceName, lang: lang || '' })
+                body: JSON.stringify({ text: clean, voice: selectedVoiceName, lang: lang || '' }),
+                signal: speakAbort.signal,
             });
             if (!resp.ok) throw new Error('TTS server error');
             const blob = await resp.blob();
+            // Stopped while the audio was still downloading: do not start it.
+            if (myToken !== speakToken) {
+                if (indicator) indicator.remove();
+                resolve();
+                return;
+            }
             const url = URL.createObjectURL(blob);
             const audio = new Audio(url);
             currentAudio = audio;
@@ -146,6 +160,11 @@ function speakText(text, wrapper, lang) {
 
 function stopSpeaking() {
     isSpeaking = false;
+    speakToken += 1;                       // anything in flight is now stale
+    if (speakAbort) {
+        try { speakAbort.abort(); } catch (e) { /* already settled */ }
+        speakAbort = null;
+    }
     if (currentAudio) {
         currentAudio.pause();
         currentAudio.currentTime = 0;

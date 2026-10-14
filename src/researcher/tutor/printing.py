@@ -42,15 +42,57 @@ _SPACE = {
     "comprehension": "2.2cm", "summary": "6cm", "writing": "7cm",
 }
 
-# Sheet furniture in the student's own language where it is theirs, otherwise
-# English. The questions are in the target language; the instructions are not,
-# because a child who cannot yet read the instruction cannot start.
+# Sheet furniture — the words belonging to the page rather than to the lesson.
+#
+# These follow the student's NATIVE language, not the one being taught: the
+# questions are in French, but a child who cannot yet read "Name" in French
+# cannot start the sheet. The math tutor is the opposite case — there the whole
+# page is in one language — which is why the two tables differ.
 _WORDS = {
-    "Worksheet": "Worksheet", "Homework": "Homework", "Test": "Test",
-    "Exam": "Examination", "Challenge": "Challenge",
-    "Answer Key": "Answer Key", "Name": "Name", "Date": "Date",
-    "Marks": "Marks", "Total": "Total", "Model answer": "Model answer",
+    "Worksheet":    {"en": "Worksheet",    "fr": "Feuille d'exercices",
+                     "ro": "Fișă de lucru", "de": "Arbeitsblatt"},
+    "Homework":     {"en": "Homework",     "fr": "Devoirs",
+                     "ro": "Temă",          "de": "Hausaufgabe"},
+    "Test":         {"en": "Test",         "fr": "Contrôle",
+                     "ro": "Test",          "de": "Test"},
+    "Exam":         {"en": "Examination",  "fr": "Examen",
+                     "ro": "Examen",        "de": "Prüfung"},
+    "Challenge":    {"en": "Challenge",    "fr": "Défi",
+                     "ro": "Provocare",     "de": "Herausforderung"},
+    "Lesson":       {"en": "Lesson",       "fr": "Leçon",
+                     "ro": "Lecție",        "de": "Lektion"},
+    "Answer Key":   {"en": "Answer Key",   "fr": "Corrigé",
+                     "ro": "Barem de corectare", "de": "Lösungen"},
+    "Name":         {"en": "Name",         "fr": "Nom",
+                     "ro": "Numele",        "de": "Name"},
+    "Date":         {"en": "Date",         "fr": "Date",
+                     "ro": "Data",          "de": "Datum"},
+    "Marks":        {"en": "Marks",        "fr": "points",
+                     "ro": "puncte",        "de": "Punkte"},
+    "Total":        {"en": "Total",        "fr": "Total",
+                     "ro": "Total",         "de": "Gesamt"},
+    "Answer":       {"en": "Answer",       "fr": "Réponse",
+                     "ro": "Răspuns",       "de": "Antwort"},
+    "Model answer": {"en": "Model answer", "fr": "Réponse type",
+                     "ro": "Răspuns model", "de": "Musterlösung"},
 }
+
+# Language names as the UI sends them, mapped to the codes above.
+_UI_CODES = {"english": "en", "french": "fr", "français": "fr",
+             "romanian": "ro", "română": "ro", "german": "de", "deutsch": "de"}
+
+
+def ui_code(language: str) -> str:
+    """The furniture language code for a native-language name."""
+    key = (language or "").strip().lower()
+    return _UI_CODES.get(key, key if key in ("en", "fr", "ro", "de") else "en")
+
+
+def _w(word: str, lang: str = "en") -> str:
+    entry = _WORDS.get(word)
+    if not entry:
+        return word
+    return entry.get(lang) or entry["en"]
 
 # Marks a paragraph as the vocabulary glossary rather than story prose.
 _GLOSSARY_MARK = "\x01gloss"
@@ -78,7 +120,8 @@ class Section:
         return self.marks_each * len(self.exercises)
 
 
-def _item(ex, *, answers: bool, marks: int | None, model: bool) -> list[str]:
+def _item(ex, *, answers: bool, marks: int | None, model: bool,
+          lang: str = "en") -> list[str]:
     out = [r"\item"]
     if marks is not None:
         # The mark allocation sits in the right margin, as on a real paper.
@@ -90,7 +133,7 @@ def _item(ex, *, answers: bool, marks: int | None, model: bool) -> list[str]:
     if ex.hint and not answers:
         out.append(rf"\\[0.5mm]{{\small\itshape {escape_text(ex.hint)}}}")
     if answers:
-        label = _WORDS["Model answer"] if model else "Answer"
+        label = _w("Model answer" if model else "Answer", lang)
         out.append(rf"\\[1mm]\textbf{{{label}:}} "
                    rf"{{\bfseries {escape_text(ex.answer)}}}")
         out.append(r"\vspace{2mm}")
@@ -101,15 +144,15 @@ def _item(ex, *, answers: bool, marks: int | None, model: bool) -> list[str]:
 
 def _build_tex(sections: list[Section], *, title: str, subtitle: str,
                kind: str, answers: bool, student: str,
-               show_marks: bool) -> str:
+               show_marks: bool, ui: str = "en") -> str:
     lines = [preamble(11)]
     lines.append(rf"\fancyhead[L]{{\small {escape_text(title)}}}")
     lines.append(rf"\fancyhead[R]{{\small {escape_text(subtitle)}}}")
     lines.append(r"\fancyfoot[C]{\small\thepage}")
     lines.append(r"\begin{document}")
 
-    label = _WORDS["Answer Key"] if answers else _WORDS.get(
-        _KIND_TITLE.get(kind, "Worksheet"), "Worksheet")
+    label = _w("Answer Key" if answers else _KIND_TITLE.get(kind, "Worksheet"),
+               ui)
     lines.append(rf"\begin{{center}}\Large\textbf{{{escape_text(title)}}}\\[2pt]")
     lines.append(rf"\normalsize {escape_text(subtitle)} \quad"
                  rf"\textbf{{{label}}}\end{{center}}")
@@ -120,10 +163,10 @@ def _build_tex(sections: list[Section], *, title: str, subtitle: str,
         who = (rf"\underline{{\hspace{{1mm}}{escape_text(student)}"
                rf"\hspace{{6cm}}}}" if student
                else r"\underline{\hspace{6cm}}")
-        right = (rf"{_WORDS['Total']}: \underline{{\hspace{{1cm}}}} / {total}"
+        right = (rf"{_w('Total', ui)}: \underline{{\hspace{{1cm}}}} / {total}"
                  if show_marks
-                 else rf"{_WORDS['Date']}: \underline{{\hspace{{3.5cm}}}}")
-        lines.append(rf"{_WORDS['Name']}: {who} \hfill {right}")
+                 else rf"{_w('Date', ui)}: \underline{{\hspace{{3.5cm}}}}")
+        lines.append(rf"{_w('Name', ui)}: {who} \hfill {right}")
         lines.append(r"\vspace{3mm}\hrule\vspace{4mm}")
     else:
         lines.append(r"\vspace{3mm}")
@@ -131,7 +174,7 @@ def _build_tex(sections: list[Section], *, title: str, subtitle: str,
     for n, sec in enumerate(sections, 1):
         if sec.title or len(sections) > 1:
             head = sec.title or f"Part {n}"
-            marks = (rf" \hfill {{\small [{sec.marks} {_WORDS['Marks'].lower()}]}}"
+            marks = (rf" \hfill {{\small [{sec.marks} {_w('Marks', ui)}]}}"
                      if show_marks and sec.marks else "")
             lines.append(rf"\vspace{{1mm}}{{\large\bfseries {escape_text(head)}}}"
                          rf"{marks}\\[1mm]")
@@ -160,13 +203,13 @@ def _build_tex(sections: list[Section], *, title: str, subtitle: str,
         for ex in sec.exercises:
             lines += _item(ex, answers=answers,
                            marks=sec.marks_each if show_marks else None,
-                           model=sec.model_answers)
+                           model=sec.model_answers, lang=ui)
         lines.append(r"\end{enumerate}")
         lines.append(r"\vspace{3mm}")
 
     if show_marks and not answers:
         lines.append(r"\vfill\hrule\vspace{1mm}")
-        lines.append(rf"\hfill\textbf{{{_WORDS['Total']}: "
+        lines.append(rf"\hfill\textbf{{{_w('Total', ui)}: "
                      rf"\underline{{\hspace{{1.5cm}}}} / {total}}}")
     lines.append(r"\end{document}")
     return "\n".join(lines)
@@ -174,13 +217,14 @@ def _build_tex(sections: list[Section], *, title: str, subtitle: str,
 
 def render_pdf(sections: list[Section], *, title: str, subtitle: str,
                kind: str = "homework", answers: bool = False,
-               student: str = "") -> bytes | None:
+               student: str = "", native: str = "English") -> bytes | None:
     """Typeset a sheet, or its answer key, to PDF bytes."""
     if not sections or not any(s.exercises or s.passage for s in sections):
         return None
     show_marks = kind in ("test", "exam")
     tex = _build_tex(sections, title=title, subtitle=subtitle, kind=kind,
-                     answers=answers, student=student, show_marks=show_marks)
+                     answers=answers, student=student, show_marks=show_marks,
+                     ui=ui_code(native))
     return compile_pdf(tex, tag="tutor")
 
 
@@ -223,7 +267,8 @@ __all__ = ["Section", "render_pdf", "render_html", "latex_available",
 
 def render_lesson_pdf(markdown: str, *, title: str, subtitle: str,
                       answers: bool = False, student: str = "",
-                      practice_space: bool = True) -> bytes | None:
+                      practice_space: bool = True,
+                      native: str = "English") -> bytes | None:
     """Print a Markdown lesson as a sheet, or as its answer key.
 
     The lesson the model writes already ends with a Solutions section, so the
@@ -246,7 +291,8 @@ def render_lesson_pdf(markdown: str, *, title: str, subtitle: str,
     lines.append(rf"\fancyhead[R]{{\small {escape_text(subtitle)}}}")
     lines.append(r"\fancyfoot[C]{\small\thepage}")
     lines.append(r"\begin{document}")
-    kind = _WORDS["Answer Key"] if answers else "Lesson"
+    ui = ui_code(native)
+    kind = _w("Answer Key" if answers else "Lesson", ui)
     lines.append(rf"\begin{{center}}\Large\textbf{{{escape_text(title)}}}\\[2pt]")
     lines.append(rf"\normalsize {escape_text(subtitle)} \quad"
                  rf"\textbf{{{kind}}}\end{{center}}")
@@ -255,7 +301,7 @@ def render_lesson_pdf(markdown: str, *, title: str, subtitle: str,
         who = (rf"\underline{{\hspace{{1mm}}{escape_text(student)}"
                rf"\hspace{{6cm}}}}" if student
                else r"\underline{\hspace{6cm}}")
-        lines.append(rf"{_WORDS['Name']}: {who} \hfill {_WORDS['Date']}: "
+        lines.append(rf"{_w('Name', ui)}: {who} \hfill {_w('Date', ui)}: "
                      rf"\underline{{\hspace{{3.5cm}}}}")
         lines.append(r"\vspace{3mm}\hrule")
     lines.append(content)

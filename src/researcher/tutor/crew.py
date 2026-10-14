@@ -61,6 +61,10 @@ class TutorCrew:
         self._model_name = model or os.getenv("MODEL", "ollama/qwen3.5:9b")
         self._llm_params: dict = dict(self.DEFAULT_LLM_PARAMS)
         self._llm = self._make_llm(self._model_name, self._llm_params)
+        # For structured output — quiz JSON, story JSON — reasoning is not
+        # worth an empty answer.
+        self._llm_structured = self._make_llm(
+            self._model_name, self._llm_params, thinking=False)
         self._model_caps = probe_model_capabilities(self._model_name)
         self._agents_config = _load_yaml("agents.yaml")
         self._tasks_config = _load_yaml("tasks.yaml")
@@ -75,17 +79,38 @@ class TutorCrew:
             if k in self.DEFAULT_LLM_PARAMS:
                 self._llm_params[k] = v
         self._llm = self._make_llm(self._model_name, self._llm_params)
+        self._llm_structured = self._make_llm(
+            self._model_name, self._llm_params, thinking=False)
         return dict(self._llm_params)
 
     @staticmethod
-    def _make_llm(model: str, params: dict) -> LLM:
-        """Create an LLM instance with Ollama-compatible options."""
+    def _make_llm(model: str, params: dict, thinking: bool | None = None) -> LLM:
+        """Create an LLM instance with Ollama-compatible options.
+
+        *thinking* overrides the automatic choice. Pass False for a task whose
+        output must be complete and machine-readable.
+
+        Why this matters: a reasoning model spends its OUTPUT budget on the
+        thinking block, and Ollama then strips that block from the response. A
+        quiz asked of qwen3.5 burned 13,694 characters of reasoning, hit
+        num_predict=4096 mid-thought, and returned an empty string — which
+        CrewAI reports as "Invalid response from LLM call" and retries, so the
+        request appears to hang. With thinking off the same quiz answers in
+        three seconds.
+        """
         is_thinking_model = any(k in model.lower() for k in ("qwen3", "deepseek-r1"))
+        if thinking is not None:
+            is_thinking_model = is_thinking_model and thinking
         seed = int(params.get("seed", 0))
+        num_predict = int(params.get("num_predict", 4096))
+        if is_thinking_model:
+            # The answer has to fit AFTER the reasoning, so the budget cannot
+            # be the same as for a model that writes its answer immediately.
+            num_predict = max(num_predict, 16384)
         ollama_options = {
             "num_ctx": int(params.get("num_ctx", 32768)),
             "num_gpu": 99,
-            "num_predict": int(params.get("num_predict", 4096)),
+            "num_predict": num_predict,
             "top_k": int(params.get("top_k", 40)),
             "top_p": float(params.get("top_p", 0.9)),
             "min_p": float(params.get("min_p", 0.0)),
@@ -96,6 +121,12 @@ class TutorCrew:
         extra_body: dict = {"options": ollama_options}
         if is_thinking_model:
             extra_body["chat_template_kwargs"] = {"enable_thinking": True}
+        elif thinking is False:
+            # Only when reasoning was explicitly turned off for this LLM. Doing
+            # it for every unrecognised model would silence the thinking panel
+            # in chat, which is the one place the reasoning is the point.
+            extra_body["chat_template_kwargs"] = {"enable_thinking": False}
+            extra_body["think"] = False          # Ollama's own switch
         return LLM(
             model=model,
             base_url="http://localhost:11434",
@@ -128,6 +159,7 @@ class TutorCrew:
         native_lang: str,
         level: str,
         tools=None,
+        structured: bool = False,
     ) -> Agent:
         """Build the language tutor agent with language-specific config."""
         agent_cfg = self._agents_config["language_tutor"]
@@ -201,7 +233,7 @@ class TutorCrew:
             goal=_sub(agent_cfg["goal"]),
             backstory=backstory,
             tools=tools,
-            llm=self._llm,
+            llm=self._llm_structured if structured else self._llm,
             verbose=True,
             max_iter=int(self._llm_params.get("max_iter", 15)),
             max_retry_limit=2,
@@ -560,7 +592,8 @@ class TutorCrew:
         stored rather than regenerated — a second run would produce a different
         story, so a reprint would not match the sheet the child was given.
         """
-        agent = self._build_agent(target_lang, native_lang, level, tools=[])
+        agent = self._build_agent(target_lang, native_lang, level, tools=[],
+                                  structured=True)
         desc, exp = self._render_task(
             "story_sheet_task",
             {
@@ -596,7 +629,12 @@ class TutorCrew:
         quiz_type_instruction = self._QUIZ_TYPE_INSTRUCTIONS.get(
             quiz_type, self._QUIZ_TYPE_INSTRUCTIONS["mixed"]
         )
-        agent = self._build_agent(target_lang, native_lang, level)
+        # Parsed as JSON, so reasoning must not eat the answer — and no tools,
+        # because writing quiz questions is composition, not research. Left
+        # attached, the agent looks words up one at a time and the run dies on
+        # "Action Input is not a valid key, value dictionary".
+        agent = self._build_agent(target_lang, native_lang, level, tools=[],
+                                  structured=True)
         desc, exp = self._render_task(
             "quiz_task",
             {

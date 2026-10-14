@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Language Tutor</title>
     <link rel="stylesheet" href="/static/css/main.css">
-    <link rel="stylesheet" href="/static/css/tutor.css">
+    <link rel="stylesheet" href="/static/css/tutor.css?v=2">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -88,7 +88,6 @@
             <button onclick="createTutorSession()" title="New tutor session">🗒️ New</button>
             <button onclick="saveTutorSession()" title="Save session">💾 Save</button>
             <button onclick="openTutorSessionsPanel()" title="Saved tutor sessions">📂 Sessions</button>
-            <button onclick="openSheetsPanel()" title="Printable homework, tests and exams">🖨️ Sheets</button>
             <a href="/" class="nav-link" title="Back to Research Agent">🔬 Research</a>
             <a href="/composer" class="nav-link" title="Music Composer">🎼 Composer</a>
             <a href="/math" class="nav-link" title="Math Tutor">📐 Math</a>
@@ -120,16 +119,16 @@
 
     <!-- Tutor sessions panel (overlay, slides from right like research sessions) -->
     <!-- Printable sheets -->
-    <div class="sheets-overlay" id="sheets-overlay" onclick="closeSheetsPanel()"></div>
+    <div class="sheets-overlay" id="sheets-overlay" onclick="sheetClosePanel()"></div>
     <div class="sheets-panel" id="sheets-panel">
         <div class="sheets-build">
             <div class="sheets-head">
                 <h3>Printable sheets</h3>
-                <button onclick="closeSheetsPanel()" title="Close">✕</button>
+                <button onclick="sheetClosePanel()" title="Close">✕</button>
             </div>
 
             <label>Language
-                <select id="sheets-language" onchange="loadSheetSkills()">
+                <select id="sheets-language" onchange="sheetLoadSkills()">
                     <option value="French">French</option>
                 </select>
             </label>
@@ -151,31 +150,14 @@
 
             <div class="sheets-mode">
                 <button type="button" id="sheets-mode-grammar" class="on"
-                        onclick="setSheetMode('grammar')">Grammar</button>
+                        onclick="sheetSetMode('grammar')">Grammar</button>
                 <button type="button" id="sheets-mode-story"
-                        onclick="setSheetMode('story')">Story</button>
-                <button type="button" id="sheets-mode-lesson"
-                        onclick="setSheetMode('lesson')">Lesson</button>
+                        onclick="sheetSetMode('story')">Story</button>
             </div>
 
             <div id="sheets-grammar-pane">
                 <label>Skills <span class="sheets-note">questions · marks each</span></label>
                 <div id="sheets-skills"></div>
-            </div>
-
-            <div id="sheets-lesson-pane" style="display:none">
-                <label>Topic <input type="text" id="lesson-topic" placeholder="e.g. daily routines"></label>
-                <label style="display:flex;align-items:center;gap:0.4rem;margin-top:0.4rem">
-                    <input type="checkbox" id="lesson-full" style="width:auto">
-                    <span>Full lesson (slower — about 4 minutes)</span>
-                </label>
-                <div class="sheets-note">A full lesson — objectives, grammar,
-                    a vocabulary table, dialogues and practice. The model writes
-                    it with a Solutions section, so the sheet and its answer key
-                    are the same document cut in half and cannot disagree.</div>
-                <button style="width:100%;margin-top:0.5rem;background:#0f3460;color:#e2e8f0;border:1px solid #1a3a6e;border-radius:0.45rem;padding:0.4rem;font-size:0.76rem;cursor:pointer"
-                        onclick="listSavedLessons()">📂 Print a saved lesson (instant)</button>
-                <div id="lesson-saved" style="display:none;margin-top:0.5rem"></div>
             </div>
 
             <div id="sheets-story-pane" style="display:none">
@@ -199,11 +181,11 @@
             <label>Title <input type="text" id="sheets-title" placeholder="auto"></label>
 
             <div class="sheets-actions">
-                <button class="primary" id="sheets-go" onclick="previewSheet()">Preview</button>
-                <button onclick="downloadSheet(false)">⬇ Sheet</button>
-                <button onclick="downloadSheet(true)">⬇ Answer key</button>
-                <button onclick="saveSheet()">💾 Save</button>
-                <button onclick="listSavedSheets()">📂 Saved</button>
+                <button class="primary" id="sheets-go" onclick="sheetPreview()">Preview</button>
+                <button onclick="sheetDownload(false)">⬇ Sheet</button>
+                <button onclick="sheetDownload(true)">⬇ Answer key</button>
+                <button onclick="sheetSave()">💾 Save</button>
+                <button onclick="sheetListSaved()">📂 Saved</button>
             </div>
             <div class="sheets-note" id="sheets-status"></div>
             <div id="sheets-saved" style="display:none;margin-top:0.6rem"></div>
@@ -211,8 +193,8 @@
 
         <div class="sheets-preview">
             <div class="sheets-tabs">
-                <button id="sheets-tab-sheet" class="on" onclick="showSheetPdf(false)">Sheet</button>
-                <button id="sheets-tab-key" onclick="showSheetPdf(true)">Answer key</button>
+                <button id="sheets-tab-sheet" class="on" onclick="sheetShowPdf(false)">Sheet</button>
+                <button id="sheets-tab-key" onclick="sheetShowPdf(true)">Answer key</button>
             </div>
             <iframe id="sheets-frame" style="display:none" title="Sheet preview"></iframe>
             <div class="sheets-working" id="sheets-working" style="display:none">
@@ -412,6 +394,8 @@
                 <option value="culture">Culture</option>
             </select>
             <button onclick="generateLesson()">📖 Generate</button>
+            <button onclick="sheetOpenPanel()" title="Printable grammar exercises and story sheets"
+                    style="background:#0f3460;color:#e2e8f0;border:1px solid #1a3a6e;">🖨️ Exercise sheets</button>
         </div>
         <div class="lessons-content">
             <div id="lessons-content"></div>
@@ -546,23 +530,23 @@
     <script src="/static/js/state.js"></script>
     <script src="/static/js/utils.js"></script>
     <script src="/static/js/auth.js"></script>
-    <script src="/static/js/tts.js"></script>
-    <script src="/static/js/audio.js"></script>
+    <script src="/static/js/tts.js?v=1"></script>
+    <script src="/static/js/audio.js?v=1"></script>
     <script src="/static/js/page-settings.js?v=1"></script>
 
     <!-- Tutor JS -->
     <script src="/static/js/tutor-state.js"></script>
-    <script src="/static/js/tutor-sessions.js"></script>
-    <script src="/static/js/tutor-chat.js"></script>
-    <script src="/static/js/tutor-lessons.js"></script>
-    <script src="/static/js/tutor-reading.js"></script>
+    <script src="/static/js/tutor-sessions.js?v=1"></script>
+    <script src="/static/js/tutor-chat.js?v=2"></script>
+    <script src="/static/js/tutor-lessons.js?v=3"></script>
+    <script src="/static/js/tutor-reading.js?v=1"></script>
     <script src="/static/js/tutor-vocab.js"></script>
-    <script src="/static/js/tutor-quiz.js"></script>
+    <script src="/static/js/tutor-quiz.js?v=1"></script>
     <script src="/static/js/tutor-translate.js"></script>
-    <script src="/static/js/tutor-stats.js"></script>
+    <script src="/static/js/tutor-stats.js?v=1"></script>
     <script src="/static/js/tutor-scenarios.js"></script>
     <script src="/static/js/tutor-curriculum.js"></script>
-    <script src="/static/js/tutor-sheets.js?v=4"></script>
+    <script src="/static/js/tutor-sheets.js?v=5"></script>
 
     <!-- Tutor init -->
     <script>

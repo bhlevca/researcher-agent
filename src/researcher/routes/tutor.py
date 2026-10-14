@@ -21,6 +21,7 @@ from fastapi.responses import StreamingResponse
 from researcher.auth import get_current_user
 from researcher.config import _QueueWriter, _SESSION_ID_RE
 from researcher.tutor.crew import TutorCrew
+from researcher.tutor.failures import describe_for_user
 
 from researcher.tutor.models import (
     TutorSessionCreate,
@@ -195,7 +196,12 @@ async def _stream_tutor_crew(crew, request: Request, uid: str, timeout_sec: int 
                     yield _sse("cancelled", "Request cancelled by user")
                 if elapsed >= timeout_sec and early_exit is None:
                     early_exit = "timeout"
-                    yield _sse("error", f"Request timed out after {timeout_sec}s")
+                    yield _sse(
+                        "error",
+                        f"Request timed out after {timeout_sec}s. A model that "
+                        f"does not fit in VRAM runs partly on CPU and can take "
+                        f"minutes per call — check `ollama ps` for a CPU/GPU "
+                        f"split.")
                 await asyncio.sleep(0.15)
                 elapsed += 0.15
                 while not q.empty():
@@ -226,7 +232,10 @@ async def _stream_tutor_crew(crew, request: Request, uid: str, timeout_sec: int 
             try:
                 result = future.result()
             except Exception as e:
-                yield _sse("error", str(e))
+                # Name the likely cause: "Invalid response from LLM call"
+                # means an exhausted token budget far more often than it means
+                # anything else, and saying so saves an evening.
+                yield _sse("error", describe_for_user(e, "generation"))
                 return
 
             response_text = result.raw if hasattr(result, "raw") else str(result)

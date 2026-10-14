@@ -105,6 +105,7 @@ class SheetRequest(BaseModel):
     student: str = ""
     seed: int | None = None
     sections: list[SheetSection] = Field(default_factory=list)
+    native: str = "English"
 
 
 class SheetSaveRequest(SheetRequest):
@@ -137,6 +138,7 @@ class StorySheetRequest(BaseModel):
     title: str = ""
     student: str = ""
     notes: str = ""
+    native: str = "English"
 
 
 class LessonSheetRequest(BaseModel):
@@ -147,6 +149,9 @@ class LessonSheetRequest(BaseModel):
     language: str = ""
     level: str = ""
     student: str = ""
+    # The words belonging to the page — Name, Date, Answer Key — follow the
+    # student's NATIVE language, not the one being taught.
+    native: str = "English"
     # Leave writing space after each numbered exercise.
     practice_space: bool = True
 

@@ -406,11 +406,7 @@ async function loadComposition(id) {
     }
 }
 
-function escapeHtml(str) {
-    const d = document.createElement('div');
-    d.appendChild(document.createTextNode(str));
-    return d.innerHTML;
-}
+// escapeHtml lives in utils.js, which loads first.
 
 // ── Playback ─────────────────────────────────────────────────────────────
 // A score you cannot hear is hard to judge, so the server renders the notation

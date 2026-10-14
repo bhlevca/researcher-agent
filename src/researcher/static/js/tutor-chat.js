@@ -82,7 +82,7 @@ async function sendTutorMessage() {
         }
 
         const result = await processTutorSSE(resp, liveBox, reasoningLines);
-        liveWrapper.remove();
+        collapseThinking(liveWrapper, liveBox, 'Thinking');
 
         if (result) {
             addTutorMsg('assistant', result.response);
@@ -106,6 +106,36 @@ async function sendTutorMessage() {
 }
 
 // ── SSE stream processor (shared by chat, lessons, quiz, appraisal) ──
+/* Keep the model's working, collapsed.
+ *
+ * Every tutor feature used to delete the streaming box the moment the result
+ * arrived, so the reasoning you had just watched vanished and only the answer
+ * remained. For a tutor that reasoning is often the interesting part — why a
+ * word was chosen, what the model considered — so it is folded away instead of
+ * thrown away, and reopens with one click.
+ */
+function collapseThinking(liveWrapper, liveBox, label) {
+    if (!liveWrapper) return;
+    const text = liveBox ? (liveBox.textContent || '').trim() : '';
+    if (!text) { liveWrapper.remove(); return; }
+
+    const details = document.createElement('details');
+    details.className = 'tutor-thinking';
+
+    const summary = document.createElement('summary');
+    const words = text.split(/\s+/).length;
+    summary.textContent = `\u{1F9E0} ${label || 'Thinking'} (${words} words)`;
+    details.appendChild(summary);
+
+    const body = document.createElement('div');
+    body.className = 'tutor-thinking-body';
+    body.textContent = text;
+    details.appendChild(body);
+
+    liveWrapper.replaceWith(details);
+}
+
+
 async function processTutorSSE(resp, liveBox, reasoningLines) {
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();

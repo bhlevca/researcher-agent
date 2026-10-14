@@ -2,6 +2,11 @@
 // ── Tutor tab switching ──
 // ══════════════════════════════════════════════
 function switchTutorTab(tabName) {
+    // Leaving the tab must silence it. Speech and the microphone used to carry
+    // on into whatever you switched to, with no way to stop them.
+    if (typeof stopSpeaking === 'function') stopSpeaking();
+    if (typeof stopRecordingIfActive === 'function') stopRecordingIfActive();
+
     document.querySelectorAll('.tutor-tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.tutor-panel').forEach(p => p.classList.remove('active'));
     document.querySelector(`.tutor-tab[data-tab="${tabName}"]`).classList.add('active');

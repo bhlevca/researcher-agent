@@ -94,7 +94,7 @@ async function generatePassage() {
         }
 
         const result = await processTutorSSE(resp, liveBox, reasoningLines);
-        liveWrapper.remove();
+        collapseThinking(liveWrapper, liveBox, 'Thinking — passage');
         if (!result || !result.response) return;
 
         tutorPassageRaw = result.response;

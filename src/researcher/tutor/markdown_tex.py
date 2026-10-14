@@ -84,8 +84,22 @@ def _table(rows: list[str]) -> list[str]:
     width = max(len(r) for r in cells)
     cells = [r + [""] * (width - len(r)) for r in cells]
 
-    # p{} columns so long example sentences wrap instead of running off the page.
-    spec = "|" + "|".join([f"p{{{0.92 / width:.3f}\\textwidth}}"] * width) + "|"
+    # Width by content, not equal shares. A vocabulary table is
+    # | French | English | Example sentence | — giving the example the same
+    # room as the single word beside it wastes most of the page and wraps the
+    # sentence to four lines.
+    longest = [max((len(r[i]) for r in cells), default=1) or 1
+               for i in range(width)]
+    # A gentle curve: a column with four times the text gets rather more than
+    # twice the width, not four times, so the short columns stay readable while
+    # an example sentence still gets the room it needs.
+    weights = [max(1.0, n) ** 0.68 for n in longest]
+    total_w = sum(weights)
+    # Floor each column so a one-character header still has somewhere to sit.
+    shares = [max(0.08, 0.92 * w / total_w) for w in weights]
+    scale = 0.92 / sum(shares)
+    spec = "|" + "|".join(
+        f"p{{{s_ * scale:.3f}\\textwidth}}" for s_ in shares) + "|"
     out = [r"\vspace{1mm}", r"{\small\begin{tabular}{" + spec + "}", r"\hline"]
     for i, row in enumerate(cells):
         body = " & ".join(_inline(c) for c in row)

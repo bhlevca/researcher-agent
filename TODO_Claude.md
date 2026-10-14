@@ -1,12 +1,53 @@
 # TODO_Claude.md — Improvement Plan for Researcher, Tutor & Composer
 
 Generated: 2026-05-23 | Project: ai-agent v2.2.0 | Branch: developer
-Updated: 2026-10-13 — see TOMORROW at the top; sheet generation needs streaming.
+Updated: 2026-10-14 — see TOMORROW at the top: multi-user queueing, tag, confirm quiz.
 Statuses re-verified against the code, not against previous checkboxes.
 
 ---
 
-## ▶ TOMORROW — START HERE (2026-10-13)
+## ▶ TOMORROW (2026-10-14)
+
+### 1. Multi-user with one GPU — queue and tell people they are waiting
+
+The card holds one model. Two users generating at once means swapping, or an
+out-of-memory, or minutes of CPU offload. Today nothing says so: the second
+request simply appears to hang.
+
+Worth building:
+- A single in-process semaphore around every model call (chat, lessons,
+  reading, quiz, story, sheets, composer, image, video). One at a time.
+- Position in the queue pushed to the browser — the SSE channel already
+  exists, so "2 ahead of you, about 40s" is an event, not a redesign.
+- A guard on model switching: swapping models mid-queue evicts the loaded one
+  and costs everyone the reload.
+- Decide what a *fair* unit is. Per request is simplest; per user is fairer
+  when one person asks for a 60-question exam.
+
+Check first whether `app.state.tutor_crews` being per-user already serialises
+anything, and whether Ollama's own queue is enough — it may be, in which case
+this is a UI problem only: say "waiting for the model", not nothing.
+
+### 2. Tag
+
+v2.17.0 once the above is settled. Today's work is committed but untagged.
+
+### 3. Quiz — believed fixed, needs confirming in the browser
+
+Two causes, both now addressed:
+- A reasoning model spent its whole num_predict budget thinking and returned
+  an empty string. Quiz and story now use a non-thinking LLM; when thinking is
+  on, num_predict is raised to 16384 so the answer still fits.
+- The quiz agent carried all four tutor tools and would wander off looking
+  words up, dying on "Action Input is not a valid key, value dictionary".
+  Writing quiz questions is composition, not research — tools removed.
+
+Three consecutive runs with gpt-oss:20b: 13s, 5s, 9s, four questions each.
+Bogdan has not yet confirmed it in the UI.
+
+---
+
+## ▶ DONE 2026-10-13 — superseded
 
 ### The one real task: make sheet generation stream
 

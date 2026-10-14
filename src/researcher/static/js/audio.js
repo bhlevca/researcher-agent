@@ -72,6 +72,19 @@ function stopVisualizer() {
     if (audioContext) { audioContext.close().catch(() => {}); audioContext = null; }
 }
 
+/* Stop recording without the ambiguity of a toggle, which would START the mic
+   if it happened to be idle. */
+function stopRecordingIfActive() {
+    try {
+        if (mediaRecorder && mediaRecorder.state === 'recording') {
+            mediaRecorder.stop();
+            return true;
+        }
+    } catch (e) { /* recorder already torn down */ }
+    return false;
+}
+
+
 async function toggleMic() {
     const micBtn = document.getElementById('mic-btn');
 

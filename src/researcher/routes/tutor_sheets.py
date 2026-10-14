@@ -21,6 +21,7 @@ from researcher.downloads import content_disposition
 from researcher.tutor import exercises as X
 from researcher.tutor import printing
 from researcher.tutor import story as story_mod
+from researcher.tutor.failures import describe_for_user
 from researcher.tutor.crew import TutorCrew
 from researcher.tutor.models import (
     LessonRequest,
@@ -251,9 +252,8 @@ def register_tutor_sheet_routes(app):
                                 detail=f"The model did not answer within "
                                        f"{timeout}s")
         except Exception as e:
-            logger.warning("[tutor] story generation failed: %s", e)
             raise HTTPException(status_code=502,
-                                detail=f"Story generation failed: {e}")
+                                detail=describe_for_user(e, "story generation"))
 
         try:
             content = story_mod.parse_story(raw)
@@ -285,7 +285,7 @@ def register_tutor_sheet_routes(app):
         title, subtitle = _story_titles(req)
         pdf = printing.render_pdf(sections, title=title, subtitle=subtitle,
                                   kind=req.kind, answers=False,
-                                  student=req.student)
+                                  student=req.student, native=req.native)
         return _pdf_response(pdf, f"{req.language}-story.pdf")
 
     @app.post("/tutor/sheets/story/answers")
@@ -346,8 +346,8 @@ def register_tutor_sheet_routes(app):
             raise HTTPException(status_code=504,
                                 detail=f"The model did not answer within {timeout}s")
         except Exception as e:
-            logger.warning("[tutor] lesson generation failed: %s", e)
-            raise HTTPException(status_code=502, detail=f"Lesson failed: {e}")
+            raise HTTPException(status_code=502,
+                                detail=describe_for_user(e, "lesson generation"))
         has = printing.lesson_has_answers(markdown)
         logger.info("[tutor] lesson done in %.0fs: %d chars, answers=%s",
                     time.monotonic() - started, len(markdown), has)
@@ -360,7 +360,7 @@ def register_tutor_sheet_routes(app):
             req.markdown, title=title,
             subtitle=f"Level {req.level} · {req.language}",
             answers=answers, student="" if answers else req.student,
-            practice_space=req.practice_space)
+            practice_space=req.practice_space, native=req.native)
         if pdf is None and answers:
             raise HTTPException(
                 status_code=422,
@@ -407,7 +407,8 @@ def register_tutor_sheet_routes(app):
         req = LessonSheetRequest(
             markdown=markdown, title=lesson.get("title") or "Lesson",
             language=lesson.get("target_lang") or "",
-            level=lesson.get("level") or "")
+            level=lesson.get("level") or "",
+            native=lesson.get("native_lang") or "English")
         return _lesson_pdf(req, answers=answers)
 
     # -- Saved sheets -------------------------------------------------------

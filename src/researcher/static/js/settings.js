@@ -86,6 +86,11 @@ function openLlmSettings() {
         .then(r => r.ok ? r.json() : null)
         .then(data => { if (data && data.params) setImgParamUI(data.params); })
         .catch(() => {});
+    // Load OCR / speech / tutor / video values
+    fetch('/subsystem-params', { headers: authHeaders() })
+        .then(r => r.ok ? r.json() : null)
+        .then(data => { if (data && data.params) setSubParamUI(data.params); })
+        .catch(() => {});
 }
 
 function closeLlmSettings() {
@@ -98,7 +103,8 @@ const IMG_PARAM_KEYS = [
     'image_backend',
     'hires_enabled', 'hires_width', 'hires_height',
     'tile_overlap', 'hires_strength', 'realesrgan_enabled',
-    'tile_width', 'tile_height'
+    'tile_width', 'tile_height',
+    'refine_rounds', 'critic_model'
 ];
 
 function updateImgParamDisplay(key) {
@@ -136,7 +142,7 @@ function setImgParamUI(params) {
 function getImgParamValues() {
     const params = {};
     const floatKeys = new Set(['hires_strength']);
-    const stringKeys = new Set(['image_backend']);
+    const stringKeys = new Set(['image_backend', 'critic_model']);
     for (const key of IMG_PARAM_KEYS) {
         const el = document.getElementById('param-img-' + key);
         if (!el) continue;
@@ -151,6 +157,59 @@ function getImgParamValues() {
         }
     }
     return params;
+}
+
+
+// ── Subsystem parameters (OCR / speech / tutor SRS / video) ──
+// These are process-wide rather than per-user, so they come from one grouped
+// endpoint instead of one call per subsystem.
+const SUB_PARAM_GROUPS = {
+    ocr:     ['ocr_enabled','ocr_model','ocr_dpi','ocr_max_dim','ocr_max_pages','ocr_timeout','ocr_auto_export'],
+    whisper: ['whisper_model','whisper_device','whisper_compute_type','whisper_vad'],
+    srs:     ['srs_algo','srs_desired_retention','srs_max_interval','srs_initial_ease'],
+    video:   ['video_backend','width','height','fps','seconds','steps','guidance', 'clips'],
+};
+const SUB_FLOAT_KEYS = new Set(['srs_desired_retention','srs_initial_ease','guidance']);
+const SUB_STRING_KEYS = new Set(['ocr_model','ocr_auto_export','whisper_model',
+    'whisper_device','whisper_compute_type','srs_algo','video_backend']);
+
+function updateSubParamDisplay(key) {
+    const el = document.getElementById('param-sub-' + key);
+    const valEl = document.getElementById('val-sub-' + key);
+    if (!el || !valEl) return;
+    valEl.textContent = el.type === 'checkbox' ? (el.checked ? 'On' : 'Off') : el.value;
+}
+
+function setSubParamUI(groups) {
+    for (const [group, keys] of Object.entries(SUB_PARAM_GROUPS)) {
+        const vals = groups[group];
+        if (!vals) continue;
+        for (const key of keys) {
+            if (vals[key] === undefined) continue;
+            const el = document.getElementById('param-sub-' + key);
+            if (!el) continue;
+            if (el.type === 'checkbox') el.checked = !!vals[key];
+            else el.value = vals[key];
+            updateSubParamDisplay(key);
+        }
+    }
+}
+
+function getSubParamValues() {
+    const out = {};
+    for (const [group, keys] of Object.entries(SUB_PARAM_GROUPS)) {
+        const vals = {};
+        for (const key of keys) {
+            const el = document.getElementById('param-sub-' + key);
+            if (!el) continue;
+            if (el.type === 'checkbox') vals[key] = el.checked;
+            else if (SUB_STRING_KEYS.has(key)) vals[key] = el.value;
+            else if (SUB_FLOAT_KEYS.has(key)) vals[key] = parseFloat(el.value);
+            else vals[key] = parseInt(el.value, 10);
+        }
+        if (Object.keys(vals).length) out[group] = vals;
+    }
+    return out;
 }
 
 async function applyLlmParams() {
@@ -169,6 +228,16 @@ async function applyLlmParams() {
             headers: jsonAuthHeaders(),
             body: JSON.stringify({ params: imgParams }),
         });
+        // Apply subsystem params (OCR / speech / tutor / video)
+        const subResp = await fetch('/subsystem-params', {
+            method: 'POST',
+            headers: jsonAuthHeaders(),
+            body: JSON.stringify({ params: getSubParamValues() }),
+        });
+        if (subResp.ok) {
+            const subData = await subResp.json();
+            if (subData && subData.params) setSubParamUI(subData.params);
+        }
         if (resp.ok) {
             const data = await resp.json();
             setParamUI(data.params);

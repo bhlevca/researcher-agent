@@ -1,0 +1,397 @@
+# French language pack — the data deterministic exercises are built from.
+#
+# Every answer printed on a French grammar sheet comes from this file, so the
+# answer key is correct by construction rather than by a model's confidence.
+# That is the whole point: a child who is marked wrong on a correct answer, or
+# right on a wrong one, learns something false and is then told it twice.
+#
+# Add entries freely — generators read whatever is here. Each entry carries the
+# CEFR level at which it is reasonable to ask, so an A1 sheet never reaches for
+# the subjunctive.
+
+meta:
+  name: French
+  code: fr
+  # Elision before a vowel or MUTE h is the rule that catches everyone out.
+  elides_before_vowel: true
+  vowels: "aeiouâàéèêëîïôûùüœh"
+  # Aspirate h blocks elision: "le haricot", never "l'haricot". Every h-word
+  # currently in the pack is mute (homme, histoire, hôpital), so this is empty
+  # — but a word added later needs listing here or it will be set wrongly.
+  aspirate_h: []
+
+articles:
+  definite: {m: "le", f: "la", pl: "les", elided: "l'"}
+  indefinite: {m: "un", f: "une", pl: "des"}
+  partitive: {m: "du", f: "de la", pl: "des", elided: "de l'"}
+
+pronouns: ["je", "tu", "il", "nous", "vous", "ils"]
+
+# Pronoun forms that elide: je -> j' before a vowel.
+pronoun_elision: {je: "j'"}
+
+verbs:
+  - inf: parler
+    gloss: to speak
+    level: A1
+    present: {je: parle, tu: parles, il: parle, nous: parlons, vous: parlez, ils: parlent}
+    imparfait: {je: parlais, tu: parlais, il: parlait, nous: parlions, vous: parliez, ils: parlaient}
+    futur: {je: parlerai, tu: parleras, il: parlera, nous: parlerons, vous: parlerez, ils: parleront}
+    passe_compose: {aux: avoir, pp: parlé}
+  - inf: finir
+    gloss: to finish
+    level: A1
+    present: {je: finis, tu: finis, il: finit, nous: finissons, vous: finissez, ils: finissent}
+    imparfait: {je: finissais, tu: finissais, il: finissait, nous: finissions, vous: finissiez, ils: finissaient}
+    futur: {je: finirai, tu: finiras, il: finira, nous: finirons, vous: finirez, ils: finiront}
+    passe_compose: {aux: avoir, pp: fini}
+  - inf: vendre
+    gloss: to sell
+    level: A2
+    present: {je: vends, tu: vends, il: vend, nous: vendons, vous: vendez, ils: vendent}
+    imparfait: {je: vendais, tu: vendais, il: vendait, nous: vendions, vous: vendiez, ils: vendaient}
+    futur: {je: vendrai, tu: vendras, il: vendra, nous: vendrons, vous: vendrez, ils: vendront}
+    passe_compose: {aux: avoir, pp: vendu}
+  - inf: être
+    gloss: to be
+    level: A1
+    present: {je: suis, tu: es, il: est, nous: sommes, vous: êtes, ils: sont}
+    imparfait: {je: étais, tu: étais, il: était, nous: étions, vous: étiez, ils: étaient}
+    futur: {je: serai, tu: seras, il: sera, nous: serons, vous: serez, ils: seront}
+    passe_compose: {aux: avoir, pp: été}
+  - inf: avoir
+    gloss: to have
+    level: A1
+    present: {je: ai, tu: as, il: a, nous: avons, vous: avez, ils: ont}
+    imparfait: {je: avais, tu: avais, il: avait, nous: avions, vous: aviez, ils: avaient}
+    futur: {je: aurai, tu: auras, il: aura, nous: aurons, vous: aurez, ils: auront}
+    passe_compose: {aux: avoir, pp: eu}
+  - inf: aller
+    gloss: to go
+    level: A1
+    present: {je: vais, tu: vas, il: va, nous: allons, vous: allez, ils: vont}
+    imparfait: {je: allais, tu: allais, il: allait, nous: allions, vous: alliez, ils: allaient}
+    futur: {je: irai, tu: iras, il: ira, nous: irons, vous: irez, ils: iront}
+    passe_compose: {aux: être, pp: allé}
+  - inf: faire
+    gloss: to do, to make
+    level: A1
+    present: {je: fais, tu: fais, il: fait, nous: faisons, vous: faites, ils: font}
+    imparfait: {je: faisais, tu: faisais, il: faisait, nous: faisions, vous: faisiez, ils: faisaient}
+    futur: {je: ferai, tu: feras, il: fera, nous: ferons, vous: ferez, ils: feront}
+    passe_compose: {aux: avoir, pp: fait}
+  - inf: prendre
+    gloss: to take
+    level: A2
+    present: {je: prends, tu: prends, il: prend, nous: prenons, vous: prenez, ils: prennent}
+    imparfait: {je: prenais, tu: prenais, il: prenait, nous: prenions, vous: preniez, ils: prenaient}
+    futur: {je: prendrai, tu: prendras, il: prendra, nous: prendrons, vous: prendrez, ils: prendront}
+    passe_compose: {aux: avoir, pp: pris}
+  - inf: venir
+    gloss: to come
+    level: A2
+    present: {je: viens, tu: viens, il: vient, nous: venons, vous: venez, ils: viennent}
+    imparfait: {je: venais, tu: venais, il: venait, nous: venions, vous: veniez, ils: venaient}
+    futur: {je: viendrai, tu: viendras, il: viendra, nous: viendrons, vous: viendrez, ils: viendront}
+    passe_compose: {aux: être, pp: venu}
+  - inf: voir
+    gloss: to see
+    level: A2
+    present: {je: vois, tu: vois, il: voit, nous: voyons, vous: voyez, ils: voient}
+    imparfait: {je: voyais, tu: voyais, il: voyait, nous: voyions, vous: voyiez, ils: voyaient}
+    futur: {je: verrai, tu: verras, il: verra, nous: verrons, vous: verrez, ils: verront}
+    passe_compose: {aux: avoir, pp: vu}
+  - inf: pouvoir
+    gloss: to be able to
+    level: A2
+    present: {je: peux, tu: peux, il: peut, nous: pouvons, vous: pouvez, ils: peuvent}
+    imparfait: {je: pouvais, tu: pouvais, il: pouvait, nous: pouvions, vous: pouviez, ils: pouvaient}
+    futur: {je: pourrai, tu: pourras, il: pourra, nous: pourrons, vous: pourrez, ils: pourront}
+    passe_compose: {aux: avoir, pp: pu}
+  - inf: vouloir
+    gloss: to want
+    level: A2
+    present: {je: veux, tu: veux, il: veut, nous: voulons, vous: voulez, ils: veulent}
+    imparfait: {je: voulais, tu: voulais, il: voulait, nous: voulions, vous: vouliez, ils: voulaient}
+    futur: {je: voudrai, tu: voudras, il: voudra, nous: voudrons, vous: voudrez, ils: voudront}
+    passe_compose: {aux: avoir, pp: voulu}
+  - inf: devoir
+    gloss: to have to
+    level: B1
+    present: {je: dois, tu: dois, il: doit, nous: devons, vous: devez, ils: doivent}
+    imparfait: {je: devais, tu: devais, il: devait, nous: devions, vous: deviez, ils: devaient}
+    futur: {je: devrai, tu: devras, il: devra, nous: devrons, vous: devrez, ils: devront}
+    passe_compose: {aux: avoir, pp: dû}
+  - inf: savoir
+    gloss: to know
+    level: B1
+    present: {je: sais, tu: sais, il: sait, nous: savons, vous: savez, ils: savent}
+    imparfait: {je: savais, tu: savais, il: savait, nous: savions, vous: saviez, ils: savaient}
+    futur: {je: saurai, tu: sauras, il: saura, nous: saurons, vous: saurez, ils: sauront}
+    passe_compose: {aux: avoir, pp: su}
+  - inf: partir
+    gloss: to leave
+    level: A2
+    present: {je: pars, tu: pars, il: part, nous: partons, vous: partez, ils: partent}
+    imparfait: {je: partais, tu: partais, il: partait, nous: partions, vous: partiez, ils: partaient}
+    futur: {je: partirai, tu: partiras, il: partira, nous: partirons, vous: partirez, ils: partiront}
+    passe_compose: {aux: être, pp: parti}
+  - inf: manger
+    gloss: to eat
+    level: A1
+    present: {je: mange, tu: manges, il: mange, nous: mangeons, vous: mangez, ils: mangent}
+    imparfait: {je: mangeais, tu: mangeais, il: mangeait, nous: mangions, vous: mangiez, ils: mangeaient}
+    futur: {je: mangerai, tu: mangeras, il: mangera, nous: mangerons, vous: mangerez, ils: mangeront}
+    passe_compose: {aux: avoir, pp: mangé}
+  - inf: boire
+    gloss: to drink
+    level: A2
+    present: {je: bois, tu: bois, il: boit, nous: buvons, vous: buvez, ils: boivent}
+    imparfait: {je: buvais, tu: buvais, il: buvait, nous: buvions, vous: buviez, ils: buvaient}
+    futur: {je: boirai, tu: boiras, il: boira, nous: boirons, vous: boirez, ils: boiront}
+    passe_compose: {aux: avoir, pp: bu}
+  - inf: écrire
+    gloss: to write
+    level: B1
+    present: {je: écris, tu: écris, il: écrit, nous: écrivons, vous: écrivez, ils: écrivent}
+    imparfait: {je: écrivais, tu: écrivais, il: écrivait, nous: écrivions, vous: écriviez, ils: écrivaient}
+    futur: {je: écrirai, tu: écriras, il: écrira, nous: écrirons, vous: écrirez, ils: écriront}
+    passe_compose: {aux: avoir, pp: écrit}
+  - inf: lire
+    gloss: to read
+    level: B1
+    present: {je: lis, tu: lis, il: lit, nous: lisons, vous: lisez, ils: lisent}
+    imparfait: {je: lisais, tu: lisais, il: lisait, nous: lisions, vous: lisiez, ils: lisaient}
+    futur: {je: lirai, tu: liras, il: lira, nous: lirons, vous: lirez, ils: liront}
+    passe_compose: {aux: avoir, pp: lu}
+  - inf: dormir
+    gloss: to sleep
+    level: A2
+    present: {je: dors, tu: dors, il: dort, nous: dormons, vous: dormez, ils: dorment}
+    imparfait: {je: dormais, tu: dormais, il: dormait, nous: dormions, vous: dormiez, ils: dormaient}
+    futur: {je: dormirai, tu: dormiras, il: dormira, nous: dormirons, vous: dormirez, ils: dormiront}
+    passe_compose: {aux: avoir, pp: dormi}
+
+  # Regular verbs: one line each, paradigm derived by conjugator.py.
+  - {inf: donner,     gloss: to give, level: A1, class: er}
+  - {inf: aimer,      gloss: "to like, to love", level: A1, class: er}
+  - {inf: trouver,    gloss: to find, level: A1, class: er}
+  - {inf: penser,     gloss: to think, level: A1, class: er}
+  - {inf: demander,   gloss: to ask, level: A1, class: er}
+  - {inf: regarder,   gloss: to watch, level: A1, class: er}
+  - {inf: écouter,    gloss: to listen, level: A1, class: er}
+  - {inf: chercher,   gloss: to look for, level: A1, class: er}
+  - {inf: travailler, gloss: to work, level: A1, class: er}
+  - {inf: jouer,      gloss: to play, level: A1, class: er}
+  - {inf: habiter,    gloss: to live in, level: A1, class: er}
+  - {inf: montrer,    gloss: to show, level: A2, class: er}
+  - {inf: porter,     gloss: "to carry, to wear", level: A2, class: er}
+  - {inf: passer,     gloss: to pass, level: A2, class: er}
+  - {inf: rester,     gloss: to stay, level: A2, class: er, aux: être}
+  - {inf: entrer,     gloss: to enter, level: A2, class: er, aux: être}
+  - {inf: tomber,     gloss: to fall, level: A2, class: er, aux: être}
+  - {inf: arriver,    gloss: to arrive, level: A2, class: er, aux: être}
+  - {inf: commencer,  gloss: to begin, level: A2, class: cer}
+  - {inf: avancer,    gloss: to move forward, level: B1, class: cer}
+  - {inf: nager,      gloss: to swim, level: A2, class: ger}
+  - {inf: voyager,    gloss: to travel, level: A2, class: ger}
+  - {inf: changer,    gloss: to change, level: B1, class: ger}
+  - {inf: acheter,    gloss: to buy, level: A2, class: e_er}
+  - {inf: lever,      gloss: to lift, level: B1, class: e_er}
+  - {inf: mener,      gloss: to lead, level: B1, class: e_er}
+  - {inf: appeler,    gloss: to call, level: A2, class: ele_er}
+  - {inf: jeter,      gloss: to throw, level: B1, class: ele_er}
+  - {inf: préférer,   gloss: to prefer, level: A2, class: ere_er}
+  - {inf: espérer,    gloss: to hope, level: B1, class: ere_er}
+  - {inf: choisir,    gloss: to choose, level: A2, class: ir}
+  - {inf: réussir,    gloss: to succeed, level: B1, class: ir}
+  - {inf: grandir,    gloss: to grow, level: B1, class: ir}
+  - {inf: remplir,    gloss: to fill, level: B1, class: ir}
+  - {inf: réfléchir,  gloss: to think over, level: B1, class: ir}
+  - {inf: attendre,   gloss: to wait for, level: A2, class: re}
+  - {inf: entendre,   gloss: to hear, level: A2, class: re}
+  - {inf: répondre,   gloss: to answer, level: A2, class: re}
+  - {inf: perdre,     gloss: to lose, level: A2, class: re}
+  - {inf: descendre,  gloss: to go down, level: B1, class: re, aux: être}
+
+  # Irregular verbs keep explicit tables.
+  - inf: dire
+    gloss: to say
+    level: A2
+    present: {je: dis, tu: dis, il: dit, nous: disons, vous: dites, ils: disent}
+    imparfait: {je: disais, tu: disais, il: disait, nous: disions, vous: disiez, ils: disaient}
+    futur: {je: dirai, tu: diras, il: dira, nous: dirons, vous: direz, ils: diront}
+    passe_compose: {aux: avoir, pp: dit}
+  - inf: mettre
+    gloss: to put
+    level: A2
+    present: {je: mets, tu: mets, il: met, nous: mettons, vous: mettez, ils: mettent}
+    imparfait: {je: mettais, tu: mettais, il: mettait, nous: mettions, vous: mettiez, ils: mettaient}
+    futur: {je: mettrai, tu: mettras, il: mettra, nous: mettrons, vous: mettrez, ils: mettront}
+    passe_compose: {aux: avoir, pp: mis}
+  - inf: croire
+    gloss: to believe
+    level: B1
+    present: {je: crois, tu: crois, il: croit, nous: croyons, vous: croyez, ils: croient}
+    imparfait: {je: croyais, tu: croyais, il: croyait, nous: croyions, vous: croyiez, ils: croyaient}
+    futur: {je: croirai, tu: croiras, il: croira, nous: croirons, vous: croirez, ils: croiront}
+    passe_compose: {aux: avoir, pp: cru}
+  - inf: connaître
+    gloss: to know (a person)
+    level: B1
+    present: {je: connais, tu: connais, il: connaît, nous: connaissons, vous: connaissez, ils: connaissent}
+    imparfait: {je: connaissais, tu: connaissais, il: connaissait, nous: connaissions, vous: connaissiez, ils: connaissaient}
+    futur: {je: connaîtrai, tu: connaîtras, il: connaîtra, nous: connaîtrons, vous: connaîtrez, ils: connaîtront}
+    passe_compose: {aux: avoir, pp: connu}
+  - inf: sortir
+    gloss: to go out
+    level: A2
+    present: {je: sors, tu: sors, il: sort, nous: sortons, vous: sortez, ils: sortent}
+    imparfait: {je: sortais, tu: sortais, il: sortait, nous: sortions, vous: sortiez, ils: sortaient}
+    futur: {je: sortirai, tu: sortiras, il: sortira, nous: sortirons, vous: sortirez, ils: sortiront}
+    passe_compose: {aux: être, pp: sorti}
+  - inf: tenir
+    gloss: to hold
+    level: B1
+    present: {je: tiens, tu: tiens, il: tient, nous: tenons, vous: tenez, ils: tiennent}
+    imparfait: {je: tenais, tu: tenais, il: tenait, nous: tenions, vous: teniez, ils: tenaient}
+    futur: {je: tiendrai, tu: tiendras, il: tiendra, nous: tiendrons, vous: tiendrez, ils: tiendront}
+    passe_compose: {aux: avoir, pp: tenu}
+  - inf: ouvrir
+    gloss: to open
+    level: A2
+    present: {je: ouvre, tu: ouvres, il: ouvre, nous: ouvrons, vous: ouvrez, ils: ouvrent}
+    imparfait: {je: ouvrais, tu: ouvrais, il: ouvrait, nous: ouvrions, vous: ouvriez, ils: ouvraient}
+    futur: {je: ouvrirai, tu: ouvriras, il: ouvrira, nous: ouvrirons, vous: ouvrirez, ils: ouvriront}
+    passe_compose: {aux: avoir, pp: ouvert}
+  - inf: comprendre
+    gloss: to understand
+    level: A2
+    present: {je: comprends, tu: comprends, il: comprend, nous: comprenons, vous: comprenez, ils: comprennent}
+    imparfait: {je: comprenais, tu: comprenais, il: comprenait, nous: comprenions, vous: compreniez, ils: comprenaient}
+    futur: {je: comprendrai, tu: comprendras, il: comprendra, nous: comprendrons, vous: comprendrez, ils: comprendront}
+    passe_compose: {aux: avoir, pp: compris}
+  - inf: vivre
+    gloss: to live
+    level: B1
+    present: {je: vis, tu: vis, il: vit, nous: vivons, vous: vivez, ils: vivent}
+    imparfait: {je: vivais, tu: vivais, il: vivait, nous: vivions, vous: viviez, ils: vivaient}
+    futur: {je: vivrai, tu: vivras, il: vivra, nous: vivrons, vous: vivrez, ils: vivront}
+    passe_compose: {aux: avoir, pp: vécu}
+  - inf: suivre
+    gloss: to follow
+    level: B1
+    present: {je: suis, tu: suis, il: suit, nous: suivons, vous: suivez, ils: suivent}
+    imparfait: {je: suivais, tu: suivais, il: suivait, nous: suivions, vous: suiviez, ils: suivaient}
+    futur: {je: suivrai, tu: suivras, il: suivra, nous: suivrons, vous: suivrez, ils: suivront}
+    passe_compose: {aux: avoir, pp: suivi}
+  - inf: devenir
+    gloss: to become
+    level: B1
+    present: {je: deviens, tu: deviens, il: devient, nous: devenons, vous: devenez, ils: deviennent}
+    imparfait: {je: devenais, tu: devenais, il: devenait, nous: devenions, vous: deveniez, ils: devenaient}
+    futur: {je: deviendrai, tu: deviendras, il: deviendra, nous: deviendrons, vous: deviendrez, ils: deviendront}
+    passe_compose: {aux: être, pp: devenu}
+  - inf: recevoir
+    gloss: to receive
+    level: B2
+    present: {je: reçois, tu: reçois, il: reçoit, nous: recevons, vous: recevez, ils: reçoivent}
+    imparfait: {je: recevais, tu: recevais, il: recevait, nous: recevions, vous: receviez, ils: recevaient}
+    futur: {je: recevrai, tu: recevras, il: recevra, nous: recevrons, vous: recevrez, ils: recevront}
+    passe_compose: {aux: avoir, pp: reçu}
+
+nouns:
+  - {word: table, gloss: table, gender: f, plural: tables, level: A1}
+  - {word: livre, gloss: book, gender: m, plural: livres, level: A1}
+  - {word: maison, gloss: house, gender: f, plural: maisons, level: A1}
+  - {word: chien, gloss: dog, gender: m, plural: chiens, level: A1}
+  - {word: chat, gloss: cat, gender: m, plural: chats, level: A1}
+  - {word: voiture, gloss: car, gender: f, plural: voitures, level: A1}
+  - {word: école, gloss: school, gender: f, plural: écoles, level: A1}
+  - {word: ami, gloss: friend, gender: m, plural: amis, level: A1}
+  - {word: fenêtre, gloss: window, gender: f, plural: fenêtres, level: A1}
+  - {word: arbre, gloss: tree, gender: m, plural: arbres, level: A1}
+  - {word: enfant, gloss: child, gender: m, plural: enfants, level: A1}
+  - {word: ville, gloss: town, gender: f, plural: villes, level: A2}
+  - {word: journal, gloss: newspaper, gender: m, plural: journaux, level: A2}
+  - {word: cheval, gloss: horse, gender: m, plural: chevaux, level: A2}
+  - {word: oiseau, gloss: bird, gender: m, plural: oiseaux, level: A2}
+  - {word: bateau, gloss: boat, gender: m, plural: bateaux, level: A2}
+  - {word: œil, gloss: eye, gender: m, plural: yeux, level: B1}
+  - {word: travail, gloss: work, gender: m, plural: travaux, level: B1}
+  - {word: eau, gloss: water, gender: f, plural: eaux, level: A1}
+  - {word: pain, gloss: bread, gender: m, plural: pains, level: A1}
+
+  - {word: père,      gloss: father, gender: m, plural: pères,      level: A1}
+  - {word: mère,      gloss: mother, gender: f, plural: mères,      level: A1}
+  - {word: frère,     gloss: brother, gender: m, plural: frères,     level: A1}
+  - {word: sœur,      gloss: sister, gender: f, plural: sœurs,      level: A1}
+  - {word: jour,      gloss: day, gender: m, plural: jours,      level: A1}
+  - {word: nuit,      gloss: night, gender: f, plural: nuits,      level: A1}
+  - {word: homme,     gloss: man, gender: m, plural: hommes,     level: A1}
+  - {word: femme,     gloss: woman, gender: f, plural: femmes,     level: A1}
+  - {word: porte,     gloss: door, gender: f, plural: portes,     level: A1}
+  - {word: chaise,    gloss: chair, gender: f, plural: chaises,    level: A1}
+  - {word: pomme,     gloss: apple, gender: f, plural: pommes,     level: A1}
+  - {word: lait,      gloss: milk, gender: m, plural: laits,      level: A1}
+  - {word: rue,       gloss: street, gender: f, plural: rues,       level: A1}
+  - {word: classe,    gloss: classroom, gender: f, plural: classes,    level: A1}
+  - {word: stylo,     gloss: pen, gender: m, plural: stylos,     level: A1}
+  - {word: fleur,     gloss: flower, gender: f, plural: fleurs,     level: A1}
+  - {word: jardin,    gloss: garden, gender: m, plural: jardins,    level: A2}
+  - {word: cuisine,   gloss: kitchen, gender: f, plural: cuisines,   level: A2}
+  - {word: montagne,  gloss: mountain, gender: f, plural: montagnes,  level: A2}
+  - {word: rivière,   gloss: river, gender: f, plural: rivières,   level: A2}
+  - {word: forêt,     gloss: forest, gender: f, plural: forêts,     level: A2}
+  - {word: plage,     gloss: beach, gender: f, plural: plages,     level: A2}
+  - {word: histoire,  gloss: story, gender: f, plural: histoires,  level: A2}
+  - {word: musique,   gloss: music, gender: f, plural: musiques,   level: A2}
+  - {word: lettre,    gloss: letter, gender: f, plural: lettres,    level: A2}
+  - {word: question,  gloss: question, gender: f, plural: questions,  level: A2}
+  - {word: réponse,   gloss: answer, gender: f, plural: réponses,   level: A2}
+  - {word: voyage,    gloss: journey, gender: m, plural: voyages,    level: A2}
+  - {word: repas,     gloss: meal, gender: m, plural: repas,      level: B1}
+  - {word: prix,      gloss: price, gender: m, plural: prix,       level: B1}
+  - {word: pays,      gloss: country, gender: m, plural: pays,       level: A2}
+  - {word: nez,       gloss: nose, gender: m, plural: nez,        level: B1}
+  - {word: bureau,    gloss: desk, gender: m, plural: bureaux,    level: A2}
+  - {word: château,   gloss: castle, gender: m, plural: châteaux,   level: B1}
+  - {word: gâteau,    gloss: cake, gender: m, plural: gâteaux,    level: A2}
+  - {word: animal,    gloss: animal, gender: m, plural: animaux,    level: A2}
+  - {word: hôpital,   gloss: hospital, gender: m, plural: hôpitaux,   level: B1}
+  - {word: genou,     gloss: knee, gender: m, plural: genoux,     level: B1}
+  - {word: temps,     gloss: time, gender: m, plural: temps,      level: A2}
+  - {word: idée,      gloss: idea, gender: f, plural: idées,      level: B1}
+
+adjectives:
+  - {word: grand, gloss: big, f: grande, mpl: grands, fpl: grandes, level: A1, prenominal: true}
+  - {word: petit, gloss: small, f: petite, mpl: petits, fpl: petites, level: A1, prenominal: true}
+  - {word: vert, gloss: green, f: verte, mpl: verts, fpl: vertes, level: A1}
+  - {word: bleu, gloss: blue, f: bleue, mpl: bleus, fpl: bleues, level: A1}
+  - {word: heureux, gloss: happy, f: heureuse, mpl: heureux, fpl: heureuses, level: A2}
+  - {word: beau, gloss: beautiful, f: belle, mpl: beaux, fpl: belles, level: A2, prenominal: true, m_vowel: bel}
+  - {word: vieux, gloss: old, f: vieille, mpl: vieux, fpl: vieilles, level: A2, prenominal: true, m_vowel: vieil}
+  - {word: nouveau, gloss: new, f: nouvelle, mpl: nouveaux, fpl: nouvelles, level: A2, prenominal: true, m_vowel: nouvel}
+  - {word: blanc, gloss: white, f: blanche, mpl: blancs, fpl: blanches, level: A2}
+  - {word: long, gloss: long, f: longue, mpl: longs, fpl: longues, level: B1}
+  - {word: facile, gloss: easy, f: facile, mpl: faciles, fpl: faciles, level: A1}
+  - {word: rouge, gloss: red, f: rouge, mpl: rouges, fpl: rouges, level: A1}
+
+  - {word: joli,      gloss: pretty, f: jolie,      mpl: jolis,      fpl: jolies,      level: A1, prenominal: true}
+  - {word: jeune,     gloss: young, f: jeune,      mpl: jeunes,     fpl: jeunes,      level: A1, prenominal: true}
+  - {word: gros,      gloss: fat, f: grosse,     mpl: gros,       fpl: grosses,     level: A2, prenominal: true}
+  - {word: bon,       gloss: good, f: bonne,      mpl: bons,       fpl: bonnes,      level: A1, prenominal: true}
+  - {word: mauvais,   gloss: bad, f: mauvaise,   mpl: mauvais,    fpl: mauvaises,   level: A2, prenominal: true}
+  - {word: noir,      gloss: black, f: noire,      mpl: noirs,      fpl: noires,      level: A1}
+  - {word: jaune,     gloss: yellow, f: jaune,      mpl: jaunes,     fpl: jaunes,      level: A1}
+  - {word: gris,      gloss: grey, f: grise,      mpl: gris,       fpl: grises,      level: A2}
+  - {word: froid,     gloss: cold, f: froide,     mpl: froids,     fpl: froides,     level: A1}
+  - {word: chaud,     gloss: hot, f: chaude,     mpl: chauds,     fpl: chaudes,     level: A1}
+  - {word: content,   gloss: pleased, f: contente,   mpl: contents,   fpl: contentes,   level: A2}
+  - {word: fatigué,   gloss: tired, f: fatiguée,   mpl: fatigués,   fpl: fatiguées,   level: A2}
+  - {word: difficile, gloss: difficult, f: difficile,  mpl: difficiles, fpl: difficiles,  level: A2}
+  - {word: important, gloss: important, f: importante, mpl: importants, fpl: importantes, level: B1}
+  - {word: sérieux,   gloss: serious, f: sérieuse,   mpl: sérieux,    fpl: sérieuses,   level: B1}
+  - {word: actif,     gloss: active, f: active,     mpl: actifs,     fpl: actives,     level: B1}
+  - {word: naturel,   gloss: natural, f: naturelle,  mpl: naturels,   fpl: naturelles,  level: B1}
+  - {word: cher,      gloss: expensive, f: chère,      mpl: chers,      fpl: chères,      level: A2}

@@ -5,6 +5,22 @@
 function addComposerMsg(role, text, reasoning, hasScore) {
     const w = document.createElement('div');
     w.className = 'msg-wrapper ' + role;
+    // Reasoning goes ABOVE the answer, where the live reasoning box already
+    // was while the request ran; appending it below made it jump across the
+    // answer the moment the result arrived.
+    if (role === 'assistant' && reasoning && reasoning.length > 0) {
+        const details = document.createElement('details');
+        details.className = 'reasoning-toggle';
+        const summary = document.createElement('summary');
+        summary.textContent = 'Reasoning (' + reasoning.length + ' steps)';
+        details.appendChild(summary);
+        const content = document.createElement('div');
+        content.className = 'reasoning-content';
+        content.textContent = reasoning.join('\n');
+        details.appendChild(content);
+        w.appendChild(details);
+    }
+
     const m = document.createElement('div');
     m.className = 'message ' + role;
     m.innerHTML = renderContent(text);
@@ -53,20 +69,6 @@ function addComposerMsg(role, text, reasoning, hasScore) {
             scoreBtn.onclick = () => saveScoreFromResponse(text);
             acts.appendChild(scoreBtn);
         }
-        // Reasoning collapsible (before action buttons)
-        if (reasoning && reasoning.length > 0) {
-            const details = document.createElement('details');
-            details.className = 'reasoning-toggle';
-            const summary = document.createElement('summary');
-            summary.textContent = 'Reasoning (' + reasoning.length + ' steps)';
-            details.appendChild(summary);
-            const content = document.createElement('div');
-            content.className = 'reasoning-content';
-            content.textContent = reasoning.join('\n');
-            details.appendChild(content);
-            w.appendChild(details);
-        }
-
         w.appendChild(acts);
     }
 
@@ -76,6 +78,10 @@ function addComposerMsg(role, text, reasoning, hasScore) {
 
 /** Check whether the response contains a JSON score or legacy XML score. */
 function _hasScore(text) {
+    // ABC is the current format. Missing it here meant a valid score produced
+    // no Download/Play buttons at all — the response looked like plain text.
+    if (/^X:\s*\d/m.test(text) && /^K:/m.test(text)) return true;
+    if (text.includes('```abc')) return true;
     if (text.includes('<score-partwise') || text.includes('```xml')) return true;
     // JSON score: look for ```json with "parts" inside
     const jm = text.match(/```json\s*([\s\S]*?)```/);

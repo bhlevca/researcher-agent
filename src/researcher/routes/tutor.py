@@ -13,19 +13,24 @@ import queue
 import asyncio
 import threading
 import logging
+from pathlib import Path
 
 from fastapi import HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from researcher.auth import get_current_user
 from researcher.config import _QueueWriter, _SESSION_ID_RE
+from researcher.gpu_broker import GPU, Need, queue_message
 from researcher.tutor.crew import TutorCrew
+from researcher.user_crews import get_crew, resolve_model
+from researcher.tutor.failures import describe_for_user
 
 from researcher.tutor.models import (
     TutorSessionCreate,
     TutorSessionUpdate,
     TutorChatRequest,
     LessonPlanRequest,
+    PassageRequest,
     QuizRequest,
     QuizSubmitRequest,
     VocabularyAddRequest,
@@ -55,18 +60,53 @@ from researcher.tutor.storage import (
     update_vocabulary_mastery,
     get_student_stats,
     get_cross_session_stats,
+    save_passage,
+    list_passages,
+    get_passage,
+    delete_passage,
+    compute_unknown_ratio,
+    known_words_for,
 )
 
 logger = logging.getLogger(__name__)
 
 
-def _get_tutor_crew(request: Request, uid: str) -> TutorCrew:
-    """Return the per-user TutorCrew, creating it on first access."""
-    if uid not in request.app.state.tutor_crews:
-        request.app.state.tutor_crews[uid] = TutorCrew(
-            model=request.app.state.current_model
-        )
-    return request.app.state.tutor_crews[uid]
+_CURRICULUM_FILE = Path(__file__).parent.parent / "tutor" / "curriculum.yaml"
+_curriculum: dict = {}
+
+
+def _curriculum_topics(level: str) -> list[str]:
+    """Ordered topic list for a CEFR level, loaded once and cached."""
+    global _curriculum
+    if not _curriculum:
+        try:
+            import yaml
+
+            with open(_CURRICULUM_FILE) as f:
+                _curriculum = yaml.safe_load(f) or {}
+        except Exception as exc:  # pragma: no cover - config problem
+            logger.warning("Failed to load curriculum.yaml: %s", exc)
+            _curriculum = {}
+    return _curriculum.get((level or "A1").upper(), []) or []
+
+
+def _current_curriculum_topic(session: dict) -> str:
+    """The topic the learner is currently on, or "" if the level has none."""
+    topics = _curriculum_topics(session.get("level", "A1"))
+    if not topics:
+        return ""
+    idx = int(session.get("topic_index") or 0)
+    return topics[min(idx, len(topics) - 1)]
+
+
+async def _get_tutor_crew(request: Request, uid: str) -> TutorCrew:
+    """The per-user TutorCrew, built with the model that person chose.
+
+    Async because the choice lives in the database. It used to be read from
+    app.state.current_model, which is reset from .env on restart — so the
+    tutor ran whatever .env named rather than what the picker showed.
+    """
+    return await get_crew(request, uid, "tutor")
 
 
 def _validate_sid(session_id: str):
@@ -146,73 +186,96 @@ async def _stream_tutor_crew(crew, request: Request, uid: str, timeout_sec: int 
     async def event_stream():
         cancel = request.app.state.cancel_events[uid]
         cancel.clear()
+        # The per-user semaphore stops one person racing themselves. The GPU
+        # broker is process-wide: one card, so the queue decides whose turn it
+        # is and makes the right model resident before the work starts.
         async with semaphore:
-            loop = asyncio.get_running_loop()
-            future = loop.run_in_executor(None, lambda: _run_tutor_crew(crew, q))
-            all_lines: list[str] = []
-            elapsed = 0.0
-            early_exit: str | None = None  # "cancelled" | "timeout"
+            # Name the model that will actually run, which is the person's
+            # saved choice — not the process-wide default from .env.
+            _chosen, _ = await resolve_model(request, uid)
+            model = Need("ollama", str(_chosen).replace("ollama/", ""))
+            async with GPU.reserve(model, "tutor", user=uid) as _res:
+                # Consuming wait() is what queues. Because it is an async
+                # generator, the position reaches the browser while we are
+                # still waiting rather than in a burst afterwards.
+                async for _notice in _res.wait():
+                    yield _sse("queue", queue_message(
+                        _notice["position"], _notice["estimate"],
+                        _notice["ticket"]))
+                loop = asyncio.get_running_loop()
+                future = loop.run_in_executor(None, lambda: _run_tutor_crew(crew, q))
+                all_lines: list[str] = []
+                elapsed = 0.0
+                early_exit: str | None = None  # "cancelled" | "timeout"
 
-            while not future.done():
-                if cancel.is_set() and early_exit is None:
-                    early_exit = "cancelled"
-                    yield _sse("cancelled", "Request cancelled by user")
-                if elapsed >= timeout_sec and early_exit is None:
-                    early_exit = "timeout"
-                    yield _sse("error", f"Request timed out after {timeout_sec}s")
-                await asyncio.sleep(0.15)
-                elapsed += 0.15
+                while not future.done():
+                    if cancel.is_set() and early_exit is None:
+                        early_exit = "cancelled"
+                        yield _sse("cancelled", "Request cancelled by user")
+                    if elapsed >= timeout_sec and early_exit is None:
+                        early_exit = "timeout"
+                        yield _sse(
+                            "error",
+                            f"Request timed out after {timeout_sec}s. A model that "
+                            f"does not fit in VRAM runs partly on CPU and can take "
+                            f"minutes per call — check `ollama ps` for a CPU/GPU "
+                            f"split.")
+                    await asyncio.sleep(0.15)
+                    elapsed += 0.15
+                    while not q.empty():
+                        try:
+                            line = q.get_nowait()
+                            all_lines.append(line)
+                            if early_exit is None and _should_show(line):
+                                yield _sse("reasoning", line)
+                        except queue.Empty:
+                            break
+
+                if early_exit is not None:
+                    # Drain queue silently; semaphore releases after thread finished
+                    while not q.empty():
+                        q.get_nowait()
+                    return
+
+                # Drain remaining
                 while not q.empty():
                     try:
                         line = q.get_nowait()
                         all_lines.append(line)
-                        if early_exit is None and _should_show(line):
+                        if _should_show(line):
                             yield _sse("reasoning", line)
                     except queue.Empty:
                         break
 
-            if early_exit is not None:
-                # Drain queue silently; semaphore releases after thread finished
-                while not q.empty():
-                    q.get_nowait()
-                return
-
-            # Drain remaining
-            while not q.empty():
                 try:
-                    line = q.get_nowait()
-                    all_lines.append(line)
-                    if _should_show(line):
-                        yield _sse("reasoning", line)
-                except queue.Empty:
-                    break
+                    result = future.result()
+                except Exception as e:
+                    # Name the likely cause: "Invalid response from LLM call"
+                    # means an exhausted token budget far more often than it means
+                    # anything else, and saying so saves an evening.
+                    yield _sse("error", describe_for_user(e, "generation"))
+                    return
 
-            try:
-                result = future.result()
-            except Exception as e:
-                yield _sse("error", str(e))
-                return
+                response_text = result.raw if hasattr(result, "raw") else str(result)
+                # Strip thinking tags
+                response_text = re.sub(
+                    r"<think>[\s\S]*?</think>\s*", "", response_text
+                ).strip()
 
-            response_text = result.raw if hasattr(result, "raw") else str(result)
-            # Strip thinking tags
-            response_text = re.sub(
-                r"<think>[\s\S]*?</think>\s*", "", response_text
-            ).strip()
+                yield _sse(
+                    "done",
+                    {
+                        "response": response_text,
+                        "reasoning": all_lines,
+                    },
+                )
 
-            yield _sse(
-                "done",
-                {
-                    "response": response_text,
-                    "reasoning": all_lines,
-                },
-            )
-
-            if on_complete is not None:
-                try:
-                    await on_complete(response_text)
-                except Exception as _cb_err:
-                    import logging as _log
-                    _log.getLogger(__name__).warning("on_complete error: %s", _cb_err)
+                if on_complete is not None:
+                    try:
+                        await on_complete(response_text)
+                    except Exception as _cb_err:
+                        import logging as _log
+                        _log.getLogger(__name__).warning("on_complete error: %s", _cb_err)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -316,7 +379,7 @@ def register_tutor_routes(app):
             raise HTTPException(status_code=404, detail="Tutor session not found")
 
         uid = user["id"]
-        tutor_crew = _get_tutor_crew(request, uid)
+        tutor_crew = await _get_tutor_crew(request, uid)
         context = _build_tutor_context(session["messages"])
 
         scenario = None
@@ -390,7 +453,7 @@ def register_tutor_routes(app):
             raise HTTPException(status_code=404, detail="Tutor session not found")
 
         uid = user["id"]
-        tutor_crew = _get_tutor_crew(request, uid)
+        tutor_crew = await _get_tutor_crew(request, uid)
 
         crew = tutor_crew.build_lesson_crew(
             topic=req.topic,
@@ -416,7 +479,7 @@ def register_tutor_routes(app):
         if not session:
             raise HTTPException(status_code=404, detail="Tutor session not found")
 
-        tutor_crew = _get_tutor_crew(request, user["id"])
+        tutor_crew = await _get_tutor_crew(request, user["id"])
 
         # Extract vocabulary from the lesson content and save it
         content_text = body.get("content", "")
@@ -443,6 +506,121 @@ def register_tutor_routes(app):
         )
         lesson["vocabulary_saved"] = len(vocab_entries)
         return lesson
+
+    # ── Reading passages (comprehensible input) ──
+
+    @app.post("/tutor/passages")
+    async def tutor_create_passage(req: PassageRequest, request: Request):
+        """Generate a levelled reading passage — SSE streaming.
+
+        Seeds the passage with vocabulary that is due for review, so the learner
+        meets those words in context instead of as isolated flashcards.
+        """
+        _validate_sid(req.session_id)
+        user = await get_current_user(request)
+        db = request.app.state.db
+
+        session = await get_tutor_session(db, req.session_id, user["id"])
+        if not session:
+            raise HTTPException(status_code=404, detail="Tutor session not found")
+
+        due: list[dict] = []
+        if req.seed_due_vocab:
+            due = await list_vocabulary_due(
+                db, user["id"], session["target_lang"]
+            )
+            due = due[: max(0, req.max_seed_words)]
+
+        topic = req.topic.strip()
+        if not topic:
+            topic = _current_curriculum_topic(session) or "everyday life"
+
+        uid = user["id"]
+        tutor_crew = await _get_tutor_crew(request, uid)
+        crew = tutor_crew.build_passage_crew(
+            topic=topic,
+            target_lang=session["target_lang"],
+            native_lang=session["native_lang"],
+            level=session["level"],
+            due_words=due,
+            word_count=req.word_count,
+        )
+        return await _stream_tutor_crew(
+            crew, request, uid,
+            timeout_sec=tutor_crew.get_llm_params().get("crew_timeout_sec"),
+        )
+
+    @app.post("/tutor/passages/save")
+    async def tutor_save_passage(request: Request):
+        """Persist a generated passage, measuring how much of it is new.
+
+        The unknown-word ratio is what tells the learner whether the passage is
+        pitched at i+1 (~10% new). It is computed here rather than trusted from
+        the model, which has no idea what this particular learner knows.
+        """
+        user = await get_current_user(request)
+        body = await request.json()
+        session_id = (body.get("session_id") or "").strip()
+        _validate_sid(session_id)
+        content = (body.get("content") or "").strip()
+        if not content:
+            raise HTTPException(status_code=400, detail="content is required")
+
+        db = request.app.state.db
+        session = await get_tutor_session(db, session_id, user["id"])
+        if not session:
+            raise HTTPException(status_code=404, detail="Tutor session not found")
+
+        known = await known_words_for(db, user["id"], session["target_lang"])
+        ratio, word_count, unknown_sample = compute_unknown_ratio(
+            content, known, session["target_lang"]
+        )
+
+        title = (body.get("title") or "").strip()
+        if not title:
+            for line in content.splitlines():
+                if line.startswith("#"):
+                    title = line.lstrip("#").strip()
+                    break
+            title = title or "Reading passage"
+
+        saved = await save_passage(
+            db, user["id"], session_id, title,
+            body.get("topic", ""), session["target_lang"], session["level"],
+            content, body.get("seeded_words", []), word_count, ratio,
+        )
+        saved["unknown_sample"] = unknown_sample
+        # The ratio is only meaningful once the learner's saved vocabulary is
+        # large enough to represent what they actually know. Send the size so
+        # the UI can say "can't judge yet" instead of always reporting "hard".
+        saved["known_word_count"] = len(known)
+        return saved
+
+    @app.get("/tutor/sessions/{session_id}/passages")
+    async def tutor_list_passages(session_id: str, request: Request):
+        _validate_sid(session_id)
+        user = await get_current_user(request)
+        return {
+            "passages": await list_passages(
+                request.app.state.db, user["id"], session_id
+            )
+        }
+
+    @app.get("/tutor/passages/{passage_id}")
+    async def tutor_get_passage(passage_id: str, request: Request):
+        user = await get_current_user(request)
+        p = await get_passage(request.app.state.db, user["id"], passage_id)
+        if not p:
+            raise HTTPException(status_code=404, detail="Passage not found")
+        return p
+
+    @app.delete("/tutor/passages/{passage_id}")
+    async def tutor_delete_passage(passage_id: str, request: Request):
+        user = await get_current_user(request)
+        ok = await delete_passage(request.app.state.db, user["id"], passage_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Passage not found")
+        return {"deleted": passage_id}
 
     @app.get("/tutor/sessions/{session_id}/lessons")
     async def tutor_list_lessons(session_id: str, request: Request):
@@ -611,7 +789,7 @@ def register_tutor_routes(app):
             raise HTTPException(status_code=404, detail="Tutor session not found")
 
         uid = user["id"]
-        tutor_crew = _get_tutor_crew(request, uid)
+        tutor_crew = await _get_tutor_crew(request, uid)
 
         # Build vocabulary context from the student's saved words
         vocab = await list_vocabulary(db, user["id"], req.session_id)
@@ -659,7 +837,7 @@ def register_tutor_routes(app):
         session_id = body.get("session_id", "")
         _validate_sid(session_id)
 
-        tutor_crew = _get_tutor_crew(request, user["id"])
+        tutor_crew = await _get_tutor_crew(request, user["id"])
         response_text = body.get("response", "")
         questions = tutor_crew.extract_quiz_json(response_text)
         if not questions:
@@ -734,7 +912,7 @@ def register_tutor_routes(app):
                 llm_questions.append(q)
                 llm_answers.append(ans)
 
-        tutor_crew = _get_tutor_crew(request, user["id"])
+        tutor_crew = await _get_tutor_crew(request, user["id"])
         if llm_questions:
             llm_graded = await tutor_crew.grade_answers(
                 questions=llm_questions,
@@ -853,7 +1031,7 @@ def register_tutor_routes(app):
         recent = _build_tutor_context(session["messages"], max_messages=20)
 
         uid = user["id"]
-        tutor_crew = _get_tutor_crew(request, uid)
+        tutor_crew = await _get_tutor_crew(request, uid)
 
         crew = tutor_crew.build_appraisal_crew(
             target_lang=session["target_lang"],
@@ -940,7 +1118,7 @@ def register_tutor_routes(app):
                 status_code=400, detail="source_lang and target_lang required"
             )
 
-        tutor_crew = _get_tutor_crew(request, user["id"])
+        tutor_crew = await _get_tutor_crew(request, user["id"])
 
         prompt = (
             f"Translate the following text from {source_lang} to {target_lang}.\n"
@@ -963,7 +1141,11 @@ def register_tutor_routes(app):
             return resp.choices[0].message.content.strip()
 
         try:
-            translation = await loop.run_in_executor(None, _call_llm)
+            _chosen, _ = await resolve_model(request, user["id"])
+            async with GPU.exclusive(
+                    Need("ollama", str(_chosen).replace("ollama/", "")),
+                    "translate", user=user["id"]):
+                translation = await loop.run_in_executor(None, _call_llm)
             # Strip thinking tags if present (qwen3/deepseek-r1)
             translation = re.sub(
                 r"<think>.*?</think>", "", translation, flags=re.DOTALL

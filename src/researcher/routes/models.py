@@ -6,6 +6,8 @@ import logging
 from fastapi import HTTPException, Request
 import httpx
 
+from researcher.gpu_broker import GPU
+from researcher.user_crews import get_crew, resolve_model, default_model
 from researcher.config import OLLAMA_BASE, ModelRequest
 from researcher.crew import ResearchCrew
 from researcher.tutor.crew import TutorCrew
@@ -63,9 +65,11 @@ def register_model_routes(app):
     @app.post("/model/unload")
     async def unload_model(request: Request):
         """Unload the current model from GPU (free VRAM). Sends keep_alive=0 to Ollama."""
-        await get_current_user(request)
-        current = request.app.state.current_model or ""
-        model_name = current.replace("ollama/", "")
+        user = await get_current_user(request)
+        # Unload what this person is running, not whatever the global happens
+        # to hold.
+        current, _ = await resolve_model(request, user["id"])
+        model_name = (current or "").replace("ollama/", "")
         if not model_name:
             raise HTTPException(status_code=400, detail="No model loaded")
         try:
@@ -76,62 +80,43 @@ def register_model_routes(app):
                 )
                 resp.raise_for_status()
             logger.info("Unloaded model %s from GPU", model_name)
+            # The broker's idea of what is resident is now wrong.
+            GPU.forget_residency()
             return {"status": "unloaded", "model": model_name}
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Failed to unload model: {e}")
 
     @app.post("/model")
     async def switch_model(req: ModelRequest, request: Request):
-        """Switch the active LLM model. Stores per-user preference."""
+        """Record this person's model choice.
+
+        The choice is saved to the database and the person's cached crews are
+        dropped, so the next request rebuilds them from the saved value. This
+        used to construct all three crews here and also assign
+        app.state.current_model, which had two consequences: the work of
+        building three crews happened on a settings click even for the two
+        tabs the person was not using, and the global meant one person's
+        choice became the default every other user's lazily-created crews were
+        built with.
+        """
         user = await get_current_user(request)
         uid = user["id"]
-        new_model = req.model if req.model.startswith("ollama/") else f"ollama/{req.model}"
+        new_model = (req.model if req.model.startswith("ollama/")
+                     else f"ollama/{req.model}")
         try:
-            new_crew = ResearchCrew(model=new_model)
-            # Restore user's saved LLM params on model switch
             db = request.app.state.db
-            cursor = await db.execute("SELECT llm_params FROM users WHERE id = ?", (uid,))
-            row = await cursor.fetchone()
-            saved = row[0] if row and row[0] else None
-            if saved:
-                try:
-                    new_crew.update_llm_params(json.loads(saved))
-                except (json.JSONDecodeError, TypeError):
-                    pass
-            request.app.state.research_crews[uid] = new_crew
-            request.app.state.current_model = new_model
-
-            # Also switch tutor crew for this user
-            new_tutor = TutorCrew(model=new_model)
-            cursor2 = await db.execute("SELECT tutor_llm_params FROM users WHERE id = ?", (uid,))
-            row2 = await cursor2.fetchone()
-            if row2 and row2[0]:
-                try:
-                    new_tutor.update_llm_params(json.loads(row2[0]))
-                except (json.JSONDecodeError, TypeError):
-                    pass
-            request.app.state.tutor_crews[uid] = new_tutor
-
-            # Also switch composer crew for this user
-            new_composer = ComposerCrew(model=new_model)
-            cursor3 = await db.execute("SELECT composer_llm_params FROM users WHERE id = ?", (uid,))
-            row3 = await cursor3.fetchone()
-            if row3 and row3[0]:
-                try:
-                    new_composer.update_llm_params(json.loads(row3[0]))
-                except (json.JSONDecodeError, TypeError):
-                    pass
-            request.app.state.composer_crews[uid] = new_composer
-
-            await db.execute(
-                "UPDATE users SET model = ? WHERE id = ?",
-                (new_model, user["id"]),
-            )
+            await db.execute("UPDATE users SET model = ? WHERE id = ?",
+                             (new_model, uid))
             await db.commit()
-
+            for store in ("research_crews", "tutor_crews", "composer_crews"):
+                getattr(request.app.state, store, {}).pop(uid, None)
+            # Swapping models means the card's contents are no longer what the
+            # broker last recorded.
+            GPU.forget_residency()
             return {"model": new_model}
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to switch model: {e}")
+            raise HTTPException(status_code=500,
+                                detail=f"Failed to switch model: {e}")
 
     # --- Memory depth toggle ---
 
@@ -153,12 +138,75 @@ def register_model_routes(app):
 
     # --- LLM parameters ---
 
+    # ── Subsystem parameters ──
+    #
+    # OCR, speech, spaced repetition, video and crew wiring are all process-wide
+    # rather than per-user, so they live behind one endpoint instead of five.
+    # Grouped so the Params panel can render a labelled section per subsystem.
+
+    @app.get("/subsystem-params")
+    async def get_subsystem_params(request: Request):
+        """Return every runtime-tunable subsystem setting, grouped."""
+        _user = await get_current_user(request)
+        from researcher.ingestion import get_ocr_params
+        from researcher.routes.speech import get_whisper_params
+        from researcher.tutor.storage import get_srs_params
+        from researcher.video import get_video_params
+        import researcher.patches as _patches
+
+        return {
+            "params": {
+                "ocr": get_ocr_params(),
+                "whisper": get_whisper_params(),
+                "srs": get_srs_params(),
+                "video": get_video_params(),
+                "crew": {
+                    "executor": _patches.get_executor_class().__name__
+                    if _patches.get_executor_class() else "AgentExecutor (experimental)",
+                    "crew_timeout_default": request.app.state.crew_timeout,
+                    # Both, because the whole point of this panel is telling
+                    # them apart: "your_model" is what your requests run on,
+                    # "default_model" is only the fallback from .env.
+                    "your_model": (await resolve_model(request, _user["id"]))[0],
+                    "default_model": default_model(request.app),
+                },
+            }
+        }
+
+    @app.post("/subsystem-params")
+    async def set_subsystem_params(request: Request):
+        """Update subsystem settings. Accepts any subset of the groups."""
+        await get_current_user(request)
+        body = await request.json()
+        params = body.get("params", {})
+        if not isinstance(params, dict):
+            raise HTTPException(status_code=400, detail="params must be a dict")
+
+        from researcher.ingestion import update_ocr_params, get_ocr_params
+        from researcher.routes.speech import update_whisper_params, get_whisper_params
+        from researcher.tutor.storage import update_srs_params, get_srs_params
+        from researcher.video import update_video_params, get_video_params
+
+        out = {}
+        out["ocr"] = (update_ocr_params(params["ocr"]) if "ocr" in params
+                      else get_ocr_params())
+        out["whisper"] = (update_whisper_params(params["whisper"]) if "whisper" in params
+                          else get_whisper_params())
+        out["srs"] = (update_srs_params(params["srs"]) if "srs" in params
+                      else get_srs_params())
+        out["video"] = (update_video_params(params["video"]) if "video" in params
+                        else get_video_params())
+        # Crew settings are read-only here: the executor is chosen at import time
+        # (patches bind to it) and the model has its own switcher.
+        logger.info("Subsystem params updated: %s", list(params))
+        return {"params": out}
+
     @app.get("/llm-params")
     async def get_llm_params(request: Request):
         """Return current LLM generation parameters (loads from DB if available)."""
         user = await get_current_user(request)
         uid = user["id"]
-        research_crew = request.app.state.research_crews.get(uid) or ResearchCrew(model=request.app.state.current_model)
+        research_crew = await get_crew(request, uid, "research")
         db = request.app.state.db
         cursor = await db.execute("SELECT llm_params FROM users WHERE id = ?", (uid,))
         row = await cursor.fetchone()
@@ -180,7 +228,7 @@ def register_model_routes(app):
         params = body.get("params", {})
         if not isinstance(params, dict):
             raise HTTPException(status_code=400, detail="params must be a dict")
-        research_crew = request.app.state.research_crews.get(uid) or ResearchCrew(model=request.app.state.current_model)
+        research_crew = await get_crew(request, uid, "research")
         updated = research_crew.update_llm_params(params)
         db = request.app.state.db
         await db.execute(
@@ -196,7 +244,7 @@ def register_model_routes(app):
         """Reset LLM parameters to defaults. Clears DB storage."""
         user = await get_current_user(request)
         uid = user["id"]
-        research_crew = request.app.state.research_crews.get(uid) or ResearchCrew(model=request.app.state.current_model)
+        research_crew = await get_crew(request, uid, "research")
         updated = research_crew.update_llm_params(dict(ResearchCrew.DEFAULT_LLM_PARAMS))
         db = request.app.state.db
         await db.execute(
@@ -275,7 +323,7 @@ def register_model_routes(app):
         """Return current Tutor LLM parameters (loads from DB if available)."""
         user = await get_current_user(request)
         uid = user["id"]
-        tutor_crew = request.app.state.tutor_crews.get(uid) or TutorCrew(model=request.app.state.current_model)
+        tutor_crew = await get_crew(request, uid, "tutor")
         db = request.app.state.db
         cursor = await db.execute("SELECT tutor_llm_params FROM users WHERE id = ?", (uid,))
         row = await cursor.fetchone()
@@ -296,7 +344,7 @@ def register_model_routes(app):
         params = body.get("params", {})
         if not isinstance(params, dict):
             raise HTTPException(status_code=400, detail="params must be a dict")
-        tutor_crew = request.app.state.tutor_crews.get(uid) or TutorCrew(model=request.app.state.current_model)
+        tutor_crew = await get_crew(request, uid, "tutor")
         updated = tutor_crew.update_llm_params(params)
         db = request.app.state.db
         await db.execute(
@@ -312,7 +360,7 @@ def register_model_routes(app):
         """Reset Tutor LLM parameters to defaults."""
         user = await get_current_user(request)
         uid = user["id"]
-        tutor_crew = request.app.state.tutor_crews.get(uid) or TutorCrew(model=request.app.state.current_model)
+        tutor_crew = await get_crew(request, uid, "tutor")
         updated = tutor_crew.update_llm_params(dict(TutorCrew.DEFAULT_LLM_PARAMS))
         db = request.app.state.db
         await db.execute(
@@ -330,7 +378,7 @@ def register_model_routes(app):
         """Return current Composer LLM parameters (loads from DB if available)."""
         user = await get_current_user(request)
         uid = user["id"]
-        composer_crew = request.app.state.composer_crews.get(uid) or ComposerCrew(model=request.app.state.current_model)
+        composer_crew = await get_crew(request, uid, "composer")
         db = request.app.state.db
         cursor = await db.execute("SELECT composer_llm_params FROM users WHERE id = ?", (uid,))
         row = await cursor.fetchone()
@@ -351,7 +399,7 @@ def register_model_routes(app):
         params = body.get("params", {})
         if not isinstance(params, dict):
             raise HTTPException(status_code=400, detail="params must be a dict")
-        composer_crew = request.app.state.composer_crews.get(uid) or ComposerCrew(model=request.app.state.current_model)
+        composer_crew = await get_crew(request, uid, "composer")
         updated = composer_crew.update_llm_params(params)
         db = request.app.state.db
         await db.execute(
@@ -367,7 +415,7 @@ def register_model_routes(app):
         """Reset Composer LLM parameters to defaults."""
         user = await get_current_user(request)
         uid = user["id"]
-        composer_crew = request.app.state.composer_crews.get(uid) or ComposerCrew(model=request.app.state.current_model)
+        composer_crew = await get_crew(request, uid, "composer")
         updated = composer_crew.update_llm_params(dict(ComposerCrew.DEFAULT_LLM_PARAMS))
         db = request.app.state.db
         await db.execute(

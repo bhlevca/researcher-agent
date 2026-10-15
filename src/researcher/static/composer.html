@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Music Composer</title>
-    <link rel="stylesheet" href="/static/css/main.css">
+    <link rel="stylesheet" href="/static/css/main.css?v=3">
     <link rel="stylesheet" href="/static/css/composer.css?v=4">
 </head>
 <body>
@@ -85,6 +85,7 @@
             <button onclick="openComposerSessionsPanel()" title="Saved composer sessions">📂 Sessions</button>
             <a href="/" class="nav-link" title="Back to Research Agent">🔬 Research</a>
             <a href="/tutor" class="nav-link" title="Language Tutor">📚 Tutor</a>
+            <a href="/math" class="nav-link" title="Math Tutor">📐 Math</a>
             <a href="/chat-direct" class="nav-link" title="Direct Chat">🤖 Direct</a>
         </div>
         <div class="user-badge" id="user-badge" style="display:none;">
@@ -228,9 +229,20 @@
     <div class="composer-panel" id="cpanel-score">
         <div class="score-form">
             <input type="text" id="score-description" placeholder="Describe what to compose (e.g. 'A gentle waltz melody for piano with a melancholic feel')">
-            <label style="font-size:0.78rem;color:#94a3b8;display:flex;align-items:center;gap:0.3rem;">
+            <label style="font-size:0.78rem;color:#94a3b8;display:flex;align-items:center;gap:0.3rem;" title="Short form: the model writes this many bars directly. Ignored when Length is set.">
                 Measures:
                 <input type="number" id="score-measures" value="16" min="4" max="128">
+            </label>
+            <label style="font-size:0.78rem;color:#94a3b8;display:flex;align-items:center;gap:0.3rem;" title="Target length in minutes. Above 0 the piece is ASSEMBLED from recurring sections with extended harmony, because a single model call only holds together for 8-16 bars. 0 = short form, use Measures instead.">
+                Length:
+                <select id="score-minutes" style="min-width:96px;">
+                    <option value="0" selected>short (bars)</option>
+                    <option value="1">~1 min</option>
+                    <option value="1.5">~1.5 min</option>
+                    <option value="2">~2 min</option>
+                    <option value="2.5">~2.5 min</option>
+                    <option value="3">~3 min</option>
+                </select>
             </label>
             <label style="font-size:0.78rem;color:#94a3b8;display:flex;align-items:center;gap:0.3rem;">
                 Instruments:
@@ -311,6 +323,7 @@
     <div class="toast" id="toast"></div>
 
     <!-- Shared JS (auth, utils) -->
+    <script src="/static/js/gpu-queue.js?v=3"></script>
     <script src="/static/js/state.js"></script>
     <script src="/static/js/utils.js"></script>
     <script src="/static/js/auth.js"></script>
@@ -319,8 +332,8 @@
     <!-- Composer JS -->
     <script src="/static/js/composer-state.js?v=4"></script>
     <script src="/static/js/composer-sessions.js?v=4"></script>
-    <script src="/static/js/composer-chat.js?v=4"></script>
-    <script src="/static/js/composer-score.js?v=4"></script>
+    <script src="/static/js/composer-chat.js?v=3"></script>
+    <script src="/static/js/composer-score.js?v=3"></script>
 
     <!-- Composer init -->
     <script>

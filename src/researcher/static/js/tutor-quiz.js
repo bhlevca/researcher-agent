@@ -68,7 +68,7 @@ async function generateQuiz() {
         }
 
         const result = await processTutorSSE(resp, liveBox, reasoningLines);
-        liveWrapper.remove();
+        collapseThinking(liveWrapper, liveBox, 'Thinking — quiz');
 
         if (result && result.response) {
             tutorQuizRawResponse = result.response;

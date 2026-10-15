@@ -208,6 +208,9 @@ def _maybe_unload_ollama():
         import threading
 
         threading.Thread(target=_unload_ollama_model, daemon=True).start()
+        # The broker's record of what is resident is about to become wrong.
+        from researcher.gpu_broker import GPU
+        GPU.forget_residency()
         logger.info("[VRAM] Scheduling Ollama unload (image gen used GPU)")
     else:
         logger.debug("[VRAM] Skipping Ollama unload (no image gen this request)")

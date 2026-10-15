@@ -6,10 +6,12 @@ blending.  Extracted from crew.py during v1.1.0 refactoring.
 """
 
 import cv2
+import io
 import math
 import os
 import gc
 import json
+import re
 import threading
 import uuid as _uuid
 import logging
@@ -216,6 +218,8 @@ def get_image_params() -> dict:
         "realesrgan_enabled": _REALESRGAN_ENABLED,
         "tile_width": int(os.getenv("ZIMAGE_WIDTH", "512")),
         "tile_height": int(os.getenv("ZIMAGE_HEIGHT", "512")),
+        "refine_rounds": IMAGE_REFINE_ROUNDS,
+        "critic_model": IMAGE_CRITIC_MODEL,
     }
 
 
@@ -225,6 +229,7 @@ _VALID_BACKENDS = {"sd", "zimage", "ernie", "flux"}
 def update_image_params(params: dict) -> dict:
     """Update runtime image parameters. Only known keys are accepted."""
     global IMAGE_BACKEND, ZIMAGE_HIRES, _ZIMAGE_HIRES_WIDTH, _ZIMAGE_HIRES_HEIGHT, _ZIMAGE_TILE_OVERLAP, _ZIMAGE_HIRES_STRENGTH, _REALESRGAN_ENABLED
+    global IMAGE_REFINE_ROUNDS, IMAGE_CRITIC_MODEL
     if "image_backend" in params:
         val = str(params["image_backend"]).lower()
         if val in _VALID_BACKENDS:
@@ -241,6 +246,12 @@ def update_image_params(params: dict) -> dict:
         _ZIMAGE_HIRES_STRENGTH = max(0.05, min(1.0, float(params["hires_strength"])))
     if "realesrgan_enabled" in params:
         _REALESRGAN_ENABLED = bool(params["realesrgan_enabled"])
+    if "refine_rounds" in params:
+        IMAGE_REFINE_ROUNDS = max(0, min(5, int(params["refine_rounds"])))
+    if "critic_model" in params:
+        val = str(params["critic_model"]).strip()
+        if val:
+            IMAGE_CRITIC_MODEL = val
     # tile_width / tile_height are read from ZIMAGE_WIDTH/HEIGHT env vars
     # and used as the native pipeline resolution — not changeable at runtime
     # because changing them would require re-validating VRAM constraints.
@@ -266,8 +277,13 @@ _SD_MODEL_ID = os.getenv("SD_MODEL", "stable-diffusion-v1-5/stable-diffusion-v1-
 from contextlib import contextmanager as _contextmanager
 
 
+class _Brokered(Exception):
+    """Raised internally to skip the Ollama dance when the broker owns it."""
+
+
 @_contextmanager
-def _gpu_inference_ctx(tag: str = "IMG", min_vram_gib: float = 4.0):
+def _gpu_inference_ctx(tag: str = "IMG", min_vram_gib: float = 4.0,
+                       efficient_attention: bool = False):
     """Unified context manager for GPU image inference.
 
     1. Unloads all Ollama models via /api/ps to free VRAM.
@@ -287,8 +303,22 @@ def _gpu_inference_ctx(tag: str = "IMG", min_vram_gib: float = 4.0):
     _ollama_base = OLLAMA_IMAGE_URL.rsplit("/", 2)[0]
     _unloaded: list[str] = []
 
+    # When the GPU broker already holds this slot for torch work, it has
+    # released Ollama itself and the next task will declare what it needs. Both
+    # the unload here and — more importantly — the reload at the end would then
+    # be wasted: the old behaviour reinstated about ten and a half gigabytes of
+    # a model that nobody had asked for.
+    from researcher.gpu_broker import GPU as _GPU
+
+    _brokered = _GPU.resident is not None and _GPU.resident.kind == "torch"
+
     # -- 1. Unload all Ollama models --
+    if _brokered:
+        _sys.stderr.write(f"[{tag}] GPU broker holds the slot; "
+                          f"skipping unload and reload\n")
     try:
+        if _brokered:
+            raise _Brokered()
         _ps = _req.get(f"{_ollama_base}/api/ps", timeout=10)
         _ps.raise_for_status()
         for _m in _ps.json().get("models", []):
@@ -299,6 +329,8 @@ def _gpu_inference_ctx(tag: str = "IMG", min_vram_gib: float = 4.0):
                           timeout=30)
                 _unloaded.append(_mname)
         _sys.stderr.write(f"[{tag}] Unloaded LLM(s): {_unloaded}\n")
+    except _Brokered:
+        pass                      # the broker already freed what was needed
     except Exception as _e:
         _sys.stderr.write(f"[{tag}] LLM unload failed: {_e}\n")
         _fallback = os.getenv("MODEL", "qwen3.5:9b").replace("ollama/", "")
@@ -325,11 +357,33 @@ def _gpu_inference_ctx(tag: str = "IMG", min_vram_gib: float = 4.0):
     # -- 3. Disable cuDNN / Flash SDP --
     # System has cuDNN 9 (PyTorch) + cuDNN 8 (DaVinci Resolve in /opt/resolve/libs).
     # Flash/MemEfficient SDP triggers the mismatch; math SDP avoids cuDNN entirely.
+    #
+    # efficient_attention=True opts OUT of that workaround, and video MUST use it.
+    # Math attention materialises the full NxN score matrix, and a 3-second clip
+    # is ~26,500 latent tokens — 1.3 GiB per head-group before any weights. Flash
+    # and mem-efficient attention never build that matrix, so the difference is
+    # not a slowdown but the difference between running and an instant OOM.
     _cudnn_was = torch.backends.cudnn.enabled
-    torch.backends.cudnn.enabled = False
-    torch.backends.cuda.enable_flash_sdp(False)
-    torch.backends.cuda.enable_mem_efficient_sdp(False)
-    torch.backends.cuda.enable_math_sdp(True)
+    if efficient_attention:
+        # Two separate concerns, previously conflated. cuDNN stays OFF — that is
+        # what the Resolve conflict is about. Flash and mem-efficient attention
+        # are plain CUDA kernels and do NOT go through cuDNN, so they can stay on
+        # and keep the NxN score matrix from ever being materialised. Only the
+        # cuDNN *SDP backend* has to go, since that one does use cuDNN.
+        torch.backends.cudnn.enabled = False
+        torch.backends.cuda.enable_flash_sdp(True)
+        torch.backends.cuda.enable_mem_efficient_sdp(True)
+        torch.backends.cuda.enable_math_sdp(True)
+        if hasattr(torch.backends.cuda, "enable_cudnn_sdp"):
+            torch.backends.cuda.enable_cudnn_sdp(False)
+        _sys.stderr.write(
+            f"[{tag}] cuDNN off, flash/mem-efficient attention ON (required for video)\n"
+        )
+    else:
+        torch.backends.cudnn.enabled = False
+        torch.backends.cuda.enable_flash_sdp(False)
+        torch.backends.cuda.enable_mem_efficient_sdp(False)
+        torch.backends.cuda.enable_math_sdp(True)
 
     try:
         yield _unloaded
@@ -338,6 +392,8 @@ def _gpu_inference_ctx(tag: str = "IMG", min_vram_gib: float = 4.0):
         torch.backends.cudnn.enabled = _cudnn_was
         torch.backends.cuda.enable_flash_sdp(True)
         torch.backends.cuda.enable_mem_efficient_sdp(True)
+        if hasattr(torch.backends.cuda, "enable_cudnn_sdp"):
+            torch.backends.cuda.enable_cudnn_sdp(True)
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -346,7 +402,11 @@ def _gpu_inference_ctx(tag: str = "IMG", min_vram_gib: float = 4.0):
         _sys.stderr.write(f"[{tag}] GPU freed — {_free:.2f} GiB available\n")
 
         # -- 5. Reload Ollama LLM(s) --
-        _reload_list = _unloaded or [os.getenv("MODEL", "qwen3.5:9b").replace("ollama/", "")]
+        # Only when nothing is managing residency for us. Under the broker the
+        # next task loads what it actually wants, so restoring here is pure
+        # waste.
+        _reload_list = [] if _brokered else (
+            _unloaded or [os.getenv("MODEL", "qwen3.5:9b").replace("ollama/", "")])
         for _mname in _reload_list:
             try:
                 _req.post(OLLAMA_IMAGE_URL,
@@ -369,12 +429,54 @@ def _hf_hub_cache_root() -> Path:
 
 
 def _hf_model_cache_present(repo_id: str) -> bool:
-    """True if a model has at least one cached snapshot on disk."""
+    """True if a model is cached on disk AND the download finished.
+
+    The snapshots directory is created as soon as a download *starts*, so
+    checking only for its existence lets a half-fetched model look ready — and
+    then a chat request silently resumes a multi-gigabyte download instead of
+    failing fast. Unfinished blobs are staged as ``*.incomplete``, so their
+    absence is what actually distinguishes "downloaded" from "downloading".
+    """
     model_dir = _hf_hub_cache_root() / f"models--{repo_id.replace('/', '--')}"
     snapshots = model_dir / "snapshots"
     if not snapshots.exists() or not snapshots.is_dir():
         return False
-    return any(snapshots.iterdir())
+    snaps = [d for d in snapshots.iterdir() if d.is_dir()]
+    if not snaps:
+        return False
+    snap = max(snaps, key=lambda d: d.stat().st_mtime)
+
+    # A dangling symlink means a blob was staged but never finished.
+    for link in snap.rglob("*"):
+        if link.is_symlink() and not link.exists():
+            return False
+
+    # For a diffusers pipeline, model_index.json names the component folders.
+    # Each must actually carry weights — a half-fetched repo leaves the folder
+    # present but empty, which a symlink check alone would not catch.
+    index = snap / "model_index.json"
+    if index.is_file():
+        try:
+            spec = json.loads(index.read_text())
+        except Exception:
+            return False
+        for name, val in spec.items():
+            if name.startswith("_") or not isinstance(val, (list, tuple)):
+                continue
+            # A component declared as [None, None] is deliberately absent, not
+            # missing: Wan 2.2 TI2V-5B lists transformer_2 that way because it is
+            # the mixture-of-experts second expert, which the 5B model does not
+            # have. Requiring it would reject a complete download.
+            if all(v is None for v in val):
+                continue
+            comp = snap / name
+            if not comp.is_dir():
+                return False
+            has_weights = any(comp.glob("*.safetensors")) or any(comp.glob("*.bin"))
+            has_config = any(comp.glob("*.json")) or any(comp.glob("*.model"))
+            if not (has_weights or has_config):
+                return False
+    return True
 
 
 def _get_sd_pipe():
@@ -952,11 +1054,12 @@ def _apply_realesrgan(img: Image.Image) -> Image.Image:
             torch.cuda.empty_cache()
 
 
-@tool("GenerateAIImage")
-def generate_ai_image(prompt: str) -> str:
-    """Generate a realistic image from a text prompt using Stable Diffusion AI or Ollama z-image.
-    Use for animals, landscapes, people, objects, scenes. Add style keywords like photorealistic, 8k.
-    Copy the returned image tag EXACTLY into your Final Answer."""
+def _generate_image_once(prompt: str) -> str:
+    """Render one image and return its markdown/HTML tag.
+
+    Single-shot: no inspection of the result. ``generate_ai_image`` wraps this
+    in a critique-and-retry loop.
+    """
     import sys as _sys
     import requests
 
@@ -1451,7 +1554,7 @@ def generate_ai_image(prompt: str) -> str:
                         result_img = pipe(
                             prompt,
                             num_inference_steps=_ERNIE_STEPS,
-                            generator=torch.Generator().manual_seed(0),
+                            generator=torch.Generator().manual_seed(_next_seed()),
                         ).images[0]
             except Exception as e:
                 return f"Error during ERNIE generation: {e}"
@@ -1493,6 +1596,202 @@ def generate_ai_image(prompt: str) -> str:
 
     else:
         return f"Error: Unknown IMAGE_BACKEND '{backend}'. Use 'sd', 'zimage', 'ernie', or 'flux'."
+
+
+# ---------------------------------------------------------------------------
+# Critique-and-retry loop
+#
+# A diffusion model renders a prompt once and never looks at what it produced.
+# The agentic image systems that outperform it (Muse Image being the current
+# example) do the obvious thing instead: inspect the result, name what is wrong,
+# rewrite the prompt, and render again. That loop — not better weights — is most
+# of the quality difference, and it is reproducible locally with a vision model.
+#
+# Cost is real: every extra round is another generation plus an Ollama
+# unload/reload cycle. IMAGE_REFINE_ROUNDS=0 disables it entirely.
+# ---------------------------------------------------------------------------
+
+IMAGE_REFINE_ROUNDS = int(os.getenv("IMAGE_REFINE_ROUNDS", "2"))
+IMAGE_CRITIC_MODEL = os.getenv("IMAGE_CRITIC_MODEL", "qwen3-vl:8b")
+
+_IMG_PATH_RE = re.compile(r'/static/generated/([A-Za-z0-9_.-]+\.(?:png|jpg|jpeg|webp))')
+
+
+def check_critic_available() -> tuple[bool, str]:
+    """Report whether the configured critic model can actually be used.
+
+    The refine loop is fail-safe by design: if the critic errors, the image is
+    kept and generation continues. That makes a misconfigured critic invisible —
+    you get no refinement and no failure. Calling this at startup turns a silent
+    no-op into a log line.
+    """
+    if IMAGE_REFINE_ROUNDS <= 0:
+        return True, "image refinement disabled (IMAGE_REFINE_ROUNDS=0)"
+    try:
+        import requests as _req
+
+        base = OLLAMA_IMAGE_URL.rsplit("/", 2)[0]
+        resp = _req.get(f"{base}/api/tags", timeout=10)
+        resp.raise_for_status()
+        names = {m.get("name", "") for m in resp.json().get("models", [])}
+    except Exception as e:
+        return False, f"could not reach Ollama to verify critic model: {e}"
+
+    if IMAGE_CRITIC_MODEL in names or f"{IMAGE_CRITIC_MODEL}:latest" in names:
+        return True, f"image critic ready: {IMAGE_CRITIC_MODEL}"
+    return False, (
+        f"IMAGE_CRITIC_MODEL '{IMAGE_CRITIC_MODEL}' is not pulled — image "
+        f"refinement will silently do nothing. Run: ollama pull {IMAGE_CRITIC_MODEL}"
+    )
+
+
+def _next_seed() -> int:
+    """Seed for a fresh sample.
+
+    FLUX was pinned to seed 0, which made every render of the same prompt
+    identical — harmless alone, but it also made the refine loop's re-roll a
+    no-op. Honour an explicitly pinned seed, otherwise vary.
+    """
+    pinned = int(os.getenv("IMAGE_SEED", "0"))
+    if pinned > 0:
+        return pinned
+    return _uuid.uuid4().int % (2 ** 31 - 1)
+
+
+def _tag_to_path(tag: str) -> Path | None:
+    """Extract the on-disk path from a returned image tag, markdown or HTML."""
+    m = _IMG_PATH_RE.search(tag or "")
+    if not m:
+        return None
+    p = _GENERATED_DIR / m.group(1)
+    return p if p.is_file() else None
+
+
+_CRITIC_PROMPT = (
+    "You are inspecting an AI-generated image against the request it was made from.\n"
+    "Judge ONLY whether the image depicts what was asked. Ignore watermarks and "
+    "minor style preferences.\n\n"
+    "REQUEST: {prompt}\n\n"
+    "If the request names a NUMBER of things, count them in the image one by one "
+    "and write the count on the COUNT line. Vision models routinely miscount when "
+    "they answer straight away; counting explicitly first is what makes the "
+    "verdict trustworthy.\n\n"
+    "Reply in EXACTLY this format, four lines, nothing else:\n"
+    "COUNT: how many of the requested item you actually see, or 'n/a'\n"
+    "VERDICT: GOOD or RETRY\n"
+    "PROBLEMS: one sentence naming what is wrong, or 'none'\n"
+    "IMPROVED_PROMPT: a rewritten image prompt that fixes the problems, "
+    "keeping every requirement of the original request. If the verdict is GOOD, "
+    "repeat the original request unchanged.\n\n"
+    "Say RETRY only for real failures: wrong subject, wrong count, missing or "
+    "extra major elements, garbled text, malformed anatomy."
+)
+
+
+def _critique_image(image_path: Path, prompt: str) -> tuple[bool, str, str]:
+    """Ask a local vision model whether the image matches the prompt.
+
+    Returns ``(is_good, problems, improved_prompt)``. Any failure returns
+    ``(True, ...)`` — a broken critic must never block image generation.
+    """
+    import sys as _sys
+    import base64
+    import requests as _req
+
+    try:
+        img = Image.open(image_path)
+        img.thumbnail((1024, 1024), Image.LANCZOS)
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG", optimize=True)
+        b64 = base64.b64encode(buf.getvalue()).decode()
+
+        resp = _req.post(
+            OLLAMA_IMAGE_URL,
+            json={
+                "model": IMAGE_CRITIC_MODEL,
+                "prompt": _CRITIC_PROMPT.format(prompt=prompt),
+                "images": [b64],
+                "stream": False,
+                "options": {"temperature": 0.1, "num_predict": 300},
+            },
+            timeout=180,
+        )
+        resp.raise_for_status()
+        text = (resp.json().get("response") or "").strip()
+    except Exception as e:
+        _sys.stderr.write(f"[REFINE] Critic unavailable ({e}); keeping image\n")
+        return True, "", prompt
+
+    if not text:
+        return True, "", prompt
+
+    verdict, problems, improved = "GOOD", "", prompt
+    for line in text.splitlines():
+        line = line.strip()
+        if line.upper().startswith("VERDICT:"):
+            verdict = line.split(":", 1)[1].strip().upper()
+        elif line.upper().startswith("PROBLEMS:"):
+            problems = line.split(":", 1)[1].strip()
+        elif line.upper().startswith("IMPROVED_PROMPT:"):
+            improved = line.split(":", 1)[1].strip()
+
+    is_good = not verdict.startswith("RETRY")
+    if not improved or len(improved) < 10:
+        improved = prompt
+    return is_good, problems, improved
+
+
+@tool("GenerateAIImage")
+def generate_ai_image(prompt: str) -> str:
+    """Generate a picture. ONLY use this when the person explicitly asked for
+    an image, picture, photo, drawing or illustration.
+
+    Calling this ENDS the request: the image becomes the entire answer and no
+    text is written. So never call it to decorate or illustrate a written
+    answer — a question about travel, research, facts or advice wants words,
+    not a picture. If in doubt, do not call it.
+
+    Input: a description of the subject. Add style keywords like
+    photorealistic, 8k. Copy the returned image tag EXACTLY into your Final
+    Answer."""
+    import sys as _sys
+
+    tag = _generate_image_once(prompt)
+    if IMAGE_REFINE_ROUNDS <= 0 or tag.startswith("Error"):
+        return tag
+
+    current_prompt = prompt
+    for round_no in range(1, IMAGE_REFINE_ROUNDS + 1):
+        path = _tag_to_path(tag)
+        if path is None:
+            return tag  # nothing on disk to inspect
+
+        is_good, problems, improved = _critique_image(path, prompt)
+        if is_good:
+            _sys.stderr.write(f"[REFINE] Accepted after {round_no - 1} retry(s)\n")
+            return tag
+
+        _sys.stderr.write(
+            f"[REFINE] Round {round_no}/{IMAGE_REFINE_ROUNDS} — {problems[:120]}\n"
+        )
+        if improved.strip() == current_prompt.strip():
+            # The critic found a real fault but had nothing to add to the prompt —
+            # which is the NORMAL case when the prompt was already precise and the
+            # render simply got it wrong (miscounted objects, dropped an element).
+            # Bailing here skipped the retry in exactly the situation this loop
+            # exists for, so re-roll instead: these pipelines are stochastic, and
+            # a different sample often fixes a count error outright.
+            _sys.stderr.write("[REFINE] No better prompt offered; re-rolling\n")
+        current_prompt = improved
+        retry_tag = _generate_image_once(current_prompt)
+        if retry_tag.startswith("Error"):
+            return tag  # keep the last good render
+        tag = retry_tag
+
+    _sys.stderr.write(f"[REFINE] Exhausted {IMAGE_REFINE_ROUNDS} round(s)\n")
+    return tag
 
 
 # The image tag IS the final answer — skip the post-tool LLM call.

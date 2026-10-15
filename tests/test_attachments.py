@@ -96,6 +96,80 @@ class TestGetFileContext:
         assert "MUST use this text" in result
         assert "cannot read attachments" in result.lower() or "cannot read" in result
 
+    def test_odt_export_produces_valid_opendocument(self):
+        """ODT export must be a real OpenDocument container, not merely a zip."""
+        import io
+        import zipfile
+        from odf.opendocument import load
+        from odf import text as odftext, teletype
+        from researcher.ingestion import _export_odt
+
+        data = _export_odt("# Report\n\nDATE: 07/02/2026\n\n- muzzle control\n- red line")
+        assert zipfile.is_zipfile(io.BytesIO(data))
+
+        doc = load(io.BytesIO(data))
+        assert doc.mimetype == "application/vnd.oasis.opendocument.text"
+        paras = doc.getElementsByType(odftext.P) + doc.getElementsByType(odftext.H)
+        body = "\n".join(teletype.extractText(p) for p in paras)
+        assert "DATE: 07/02/2026" in body
+        assert "muzzle control" in body
+
+    def test_odt_export_strips_markdown_emphasis(self):
+        import io
+        from odf.opendocument import load
+        from odf import text as odftext, teletype
+        from researcher.ingestion import _export_odt
+
+        doc = load(io.BytesIO(_export_odt("Some **bold** and *italic* and `code`.")))
+        body = "\n".join(
+            teletype.extractText(p) for p in doc.getElementsByType(odftext.P)
+        )
+        assert "bold" in body and "**" not in body
+        assert "italic" in body and "`" not in body
+
+    def test_ocr_prompt_is_model_specific(self):
+        """deepseek-ocr returns an empty string unless given its sentinel prompt."""
+        from researcher.ingestion import _ocr_prompt
+
+        assert _ocr_prompt("deepseek-ocr:3b") == "<image>\nFree OCR."
+        assert "Transcribe" in _ocr_prompt("qwen3-vl:8b")
+
+    def test_empty_extraction_is_not_claimed_as_readable(self, memory_db, run):
+        """A scanned PDF that yielded no text must not get the 'text is RIGHT HERE' banner.
+
+        Regression: an image-only PDF extracted to "", which was still wrapped in
+        the ATTACHED FILE CONTENT block asserting the full text was present while
+        forbidding the agent from saying it could not read the file. The agent
+        could neither comply nor refuse, so it burned every ReAct iteration and
+        the request died on the crew timeout.
+        """
+        run(_insert_file(memory_db, "f1", "user1", "scan.pdf", ""))
+        result = run(get_file_context(memory_db, "user1", ["f1"]))
+
+        assert "=== ATTACHED FILE CONTENT" not in result
+        assert "FULL TEXT extracted" not in result
+        assert "UNREADABLE ATTACHMENT" in result
+        assert "scan.pdf" in result
+
+    def test_empty_extraction_tells_agent_not_to_retry(self, memory_db, run):
+        run(_insert_file(memory_db, "f1", "user1", "scan.pdf", "   \n  "))
+        result = run(get_file_context(memory_db, "user1", ["f1"]))
+
+        assert "Do NOT retry" in result
+        assert "could not be read" in result
+
+    def test_readable_and_unreadable_files_both_reported(self, memory_db, run):
+        run(_insert_file(memory_db, "f1", "user1", "good.txt", "Real content here"))
+        run(_insert_file(memory_db, "f2", "user1", "scan.pdf", ""))
+        result = run(get_file_context(memory_db, "user1", ["f1", "f2"]))
+
+        # The readable file keeps its normal block...
+        assert "=== ATTACHED FILE CONTENT" in result
+        assert "Real content here" in result
+        # ...and the unreadable one is called out separately.
+        assert "UNREADABLE ATTACHMENT" in result
+        assert "scan.pdf" in result
+
     def test_multiple_files_all_included(self, memory_db, run):
         run(_insert_file(memory_db, "f1", "user1", "ch1.txt", "Chapter 1 content"))
         run(_insert_file(memory_db, "f2", "user1", "ch2.txt", "Chapter 2 content"))

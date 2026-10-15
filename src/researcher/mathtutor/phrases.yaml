@@ -1,0 +1,808 @@
+# Sentence frames for question text, in English, French and Romanian.
+#
+# WHOLE SENTENCES, not words. Gluing translated words together produces
+# "Trouver le aire de ce cercle" — visibly machine-made, and not something you
+# hand a child. A frame may put its placeholders in a different order from the
+# English, which is the point.
+#
+# Placeholders are {name} and are filled with LaTeX. Templates must contain NO
+# literal { } braces of their own: every piece of mathematics arrives as a
+# parameter. (A literal brace would be read as a placeholder.)
+#
+# Mathematical register matters and differs from everyday translation:
+#   gradient            -> fr "coefficient directeur"   ro "panta"
+#   perpendicular bisector -> fr "médiatrice"           ro "mediatoarea"
+#   common difference/ratio -> fr "raison"              ro "rația"
+#   cyclic quadrilateral -> fr "quadrilatère inscriptible"  ro "patrulater inscriptibil"
+#   cuboid              -> fr "pavé droit"              ro "paralelipiped dreptunghic"
+#   slant height        -> fr "génératrice"             ro "generatoarea"
+#   curved surface area -> fr "aire latérale"           ro "aria laterală"
+#
+# French convention: a space before : ; ! ? and inside « ».
+# French and Romanian both write decimals with a comma; i18n.fmt_num does that.
+#
+# Corrections are welcome — this file is data, and nothing here is generated at
+# run time, so what you write is exactly what gets printed.
+
+# ---------------------------------------------------------------- instructions
+solve:
+  en: "Solve {eq}"
+  fr: "Résoudre {eq}"
+  ro: "Rezolvați {eq}"
+
+solve_simultaneous:
+  en: "Solve simultaneously: {e1} and {e2}"
+  fr: "Résoudre le système : {e1} et {e2}"
+  ro: "Rezolvați sistemul: {e1} și {e2}"
+
+simplify:
+  en: "Simplify {expr}"
+  fr: "Simplifier {expr}"
+  ro: "Simplificați {expr}"
+
+differentiate:
+  en: "Differentiate {f}"
+  fr: "Calculer la dérivée de {f}"
+  ro: "Calculați derivata funcției {f}"
+
+evaluate:
+  en: "Evaluate {expr}"
+  fr: "Calculer {expr}"
+  ro: "Calculați {expr}"
+
+find_expr:
+  en: "Find {expr}"
+  fr: "Calculer {expr}"
+  ro: "Calculați {expr}"
+
+# ------------------------------------------------------------------- arithmetic
+step_common_denominator:
+  en: "Common denominator: {n}"
+  fr: "Dénominateur commun : {n}"
+  ro: "Numitor comun: {n}"
+
+share_in_ratio:
+  en: "Share {total} in the ratio {ratio}"
+  fr: "Partager {total} selon le rapport {ratio}"
+  ro: "Împărțiți {total} în raportul {ratio}"
+
+pair_and:
+  en: "{a} and {b}"
+  fr: "{a} et {b}"
+  ro: "{a} și {b}"
+
+step_total_parts:
+  en: "Total parts = {expr}"
+  fr: "Nombre total de parts = {expr}"
+  ro: "Numărul total de părți = {expr}"
+
+step_one_part:
+  en: "One part = {expr}"
+  fr: "Une part = {expr}"
+  ro: "O parte = {expr}"
+
+step_collect_x_terms:
+  en: "Collect the {x} terms"
+  fr: "Regrouper les termes en {x}"
+  ro: "Grupați termenii în {x}"
+
+# -------------------------------------------------------------------- sequences
+arithmetic_sequence:
+  en: "An arithmetic sequence has {u1} and {d}. Find {un}"
+  fr: "Une suite arithmétique a pour premier terme {u1} et pour raison {d}. Calculer {un}"
+  ro: "O progresie aritmetică are primul termen {u1} și rația {d}. Aflați {un}"
+
+geometric_sequence:
+  en: "A geometric sequence has {u1} and {r}. Find {un}"
+  fr: "Une suite géométrique a pour premier terme {u1} et pour raison {r}. Calculer {un}"
+  ro: "O progresie geometrică are primul termen {u1} și rația {r}. Aflați {un}"
+
+# ------------------------------------------------------------------ probability
+bag_two_without_replacement:
+  en: "A bag holds {red} red and {blue} blue counters. Two are drawn without replacement. Find the probability that both are red."
+  fr: "Un sac contient {red} jetons rouges et {blue} jetons bleus. On en tire deux successivement et sans remise. Calculer la probabilité d'obtenir deux jetons rouges."
+  ro: "O pungă conține {red} jetoane roșii și {blue} jetoane albastre. Se extrag două, unul după altul, fără revenire. Aflați probabilitatea ca ambele să fie roșii."
+
+# --------------------------------------------------------------------- analysis
+composite_function:
+  en: "Given {f} and {g}, find {comp}"
+  fr: "Soit {f} et {g}. Déterminer {comp}"
+  ro: "Fie {f} și {g}. Determinați {comp}"
+
+step_integration_by_parts:
+  en: "Integration by parts: {formula}"
+  fr: "Intégration par parties : {formula}"
+  ro: "Integrare prin părți: {formula}"
+
+binomial_coefficient:
+  en: "Find the coefficient of {term} in the expansion of {expr}"
+  fr: "Déterminer le coefficient de {term} dans le développement de {expr}"
+  ro: "Determinați coeficientul lui {term} în dezvoltarea {expr}"
+
+complex_product:
+  en: "Given {z1} and {z2}, find {prod}"
+  fr: "Soit {z1} et {z2}. Calculer {prod}"
+  ro: "Fie {z1} și {z2}. Calculați {prod}"
+
+maclaurin_series:
+  en: "Find the Maclaurin series for {f} up to and including the term in {term}"
+  fr: "Déterminer le développement de Maclaurin de {f} jusqu'au terme en {term} inclus"
+  ro: "Determinați seria Maclaurin a funcției {f} până la termenul în {term} inclusiv"
+
+# ------------------------------------------------------------- quadratic theory
+discriminant_and_nature:
+  en: "Find the discriminant of {eq} and state the nature of the roots"
+  fr: "Calculer le discriminant de {eq} et préciser la nature des racines"
+  ro: "Calculați discriminantul ecuației {eq} și precizați natura rădăcinilor"
+
+nature_two_distinct:
+  en: "two distinct real roots"
+  fr: "deux racines réelles distinctes"
+  ro: "două rădăcini reale distincte"
+
+nature_repeated:
+  en: "one repeated real root"
+  fr: "une racine réelle double"
+  ro: "o rădăcină reală dublă"
+
+nature_none:
+  en: "no real roots"
+  fr: "aucune racine réelle"
+  ro: "nicio rădăcină reală"
+
+equal_roots_find_k:
+  en: "The equation {eq} has equal roots. Find the values of {k}"
+  fr: "L'équation {eq} admet une racine double. Déterminer les valeurs de {k}"
+  ro: "Ecuația {eq} are rădăcini egale. Determinați valorile lui {k}"
+
+two_distinct_find_k:
+  en: "Find the values of {k} for which {eq} has two distinct real roots"
+  fr: "Déterminer les valeurs de {k} pour lesquelles {eq} admet deux racines réelles distinctes"
+  ro: "Determinați valorile lui {k} pentru care {eq} are două rădăcini reale distincte"
+
+# ---------------------------------------------------------------- trigonometry
+trig_given_acute:
+  en: "Given {given} and {theta} is acute, find {find1} and {find2} in exact form"
+  fr: "Sachant que {given} et que {theta} est aigu, déterminer {find1} et {find2} sous forme exacte"
+  ro: "Știind că {given} și că {theta} este ascuțit, determinați {find1} și {find2} sub formă exactă"
+
+solve_trig_in_range:
+  en: "Solve {eq} for {range}"
+  fr: "Résoudre {eq} pour {range}"
+  ro: "Rezolvați {eq} pentru {range}"
+
+step_principal_value:
+  en: "Principal value: {v}"
+  fr: "Valeur principale : {v}"
+  ro: "Valoarea principală: {v}"
+
+step_second_solution_symmetry:
+  en: "The second solution follows from the symmetry of {fn}"
+  fr: "La seconde solution découle de la symétrie de {fn}"
+  ro: "A doua soluție rezultă din simetria funcției {fn}"
+
+# -------------------------------------------------------------------- induction
+prove_by_induction:
+  en: "Prove by induction that {statement} for all {domain}"
+  fr: "Démontrer par récurrence que {statement} pour tout {domain}"
+  ro: "Demonstrați prin inducție că {statement} pentru orice {domain}"
+
+answer_induction:
+  en: "Base {n1}: {base}. Step: {step}"
+  fr: "Initialisation {n1} : {base}. Hérédité : {step}"
+  ro: "Verificare {n1}: {base}. Pasul inductiv: {step}"
+
+step_base_case:
+  en: "Base case {n1}: LHS = {lhs} = RHS = {rhs}"
+  fr: "Initialisation {n1} : membre de gauche = {lhs} = membre de droite = {rhs}"
+  ro: "Verificare {n1}: membrul stâng = {lhs} = membrul drept = {rhs}"
+
+step_assume_true:
+  en: "Assume true for {nk}: {statement}"
+  fr: "Supposons la propriété vraie pour {nk} : {statement}"
+  ro: "Presupunem proprietatea adevărată pentru {nk}: {statement}"
+
+step_induction_conclusion:
+  en: "This is the closed form with {nk1}, so the result holds for all {domain} by induction."
+  fr: "C'est la forme fermée pour {nk1} ; la propriété est donc vraie pour tout {domain} par récurrence."
+  ro: "Aceasta este forma închisă pentru {nk1}, deci proprietatea este adevărată pentru orice {domain} prin inducție."
+
+# --------------------------------------------------- implicit diff & diff. eqns
+implicit_differentiation:
+  en: "Given {eq}, find {dydx} in terms of {vars}"
+  fr: "Soit {eq}. Calculer {dydx} en fonction de {vars}"
+  ro: "Fie {eq}. Calculați {dydx} în funcție de {vars}"
+
+step_differentiate_both_sides:
+  en: "Differentiate both sides with respect to {x}, treating {y} as a function of {x}"
+  fr: "Dériver les deux membres par rapport à {x}, en considérant {y} comme une fonction de {x}"
+  ro: "Derivați ambii membri în raport cu {x}, considerând {y} ca funcție de {x}"
+
+step_collect_dydx:
+  en: "Collect the {dydx} terms and factorise"
+  fr: "Regrouper les termes en {dydx} et factoriser"
+  ro: "Grupați termenii în {dydx} și dați factor comun"
+
+solve_ode_with_condition:
+  en: "Solve {eq} given {ic}"
+  fr: "Résoudre {eq} sachant que {ic}"
+  ro: "Rezolvați {eq} știind că {ic}"
+
+step_separate_variables:
+  en: "Separate the variables and integrate both sides"
+  fr: "Séparer les variables et intégrer les deux membres"
+  ro: "Separați variabilele și integrați ambii membri"
+
+step_apply_condition:
+  en: "Apply {ic} to find the constant"
+  fr: "Utiliser {ic} pour déterminer la constante"
+  ro: "Folosiți {ic} pentru a determina constanta"
+
+# ---------------------------------------------------------------------- vectors
+vector_find_where:
+  en: "Find {expr} where {a} and {b}"
+  fr: "Calculer {expr} où {a} et {b}"
+  ro: "Calculați {expr} unde {a} și {b}"
+
+vector_magnitude_exact:
+  en: "Find {expr} in exact form, where {a}"
+  fr: "Calculer {expr} sous forme exacte, où {a}"
+  ro: "Calculați {expr} sub formă exactă, unde {a}"
+
+vector_angle_between:
+  en: "Find the angle between {a} and {b}, correct to 3 significant figures"
+  fr: "Déterminer l'angle entre {a} et {b}, à 3 chiffres significatifs près"
+  ro: "Determinați unghiul dintre {a} și {b}, cu 3 cifre semnificative"
+
+vector_find_t_perpendicular:
+  en: "Find {t} such that {c} is perpendicular to {b}"
+  fr: "Déterminer {t} pour que {c} soit orthogonal à {b}"
+  ro: "Determinați {t} astfel încât {c} să fie perpendicular pe {b}"
+
+step_perpendicular_dot_zero:
+  en: "Perpendicular vectors have scalar product 0"
+  fr: "Deux vecteurs orthogonaux ont un produit scalaire nul"
+  ro: "Doi vectori perpendiculari au produsul scalar nul"
+
+vector_line_through:
+  en: "Find a vector equation of the line through {A} and {B}"
+  fr: "Déterminer une équation vectorielle de la droite passant par {A} et {B}"
+  ro: "Determinați o ecuație vectorială a dreptei care trece prin {A} și {B}"
+
+vectors_2d_magnitude_sum:
+  en: "Given {a} and {b}, find {expr} in exact form."
+  fr: "Soit {a} et {b}. Calculer {expr} sous forme exacte."
+  ro: "Fie {a} și {b}. Calculați {expr} sub formă exactă."
+
+# ----------------------------------------------------------------- basic angles
+angles_on_straight_line:
+  en: "Angles on a straight line. One angle is {a}. Find the other."
+  fr: "Angles sur une droite. L'un des angles vaut {a}. Déterminer l'autre."
+  ro: "Unghiuri pe o dreaptă. Unul dintre unghiuri are {a}. Aflați celălalt unghi."
+
+triangle_third_angle:
+  en: "A triangle has angles {a} and {b}. Find the third angle."
+  fr: "Un triangle a deux angles de {a} et {b}. Déterminer le troisième angle."
+  ro: "Un triunghi are două unghiuri de {a} și {b}. Aflați al treilea unghi."
+
+# ------------------------------------------------------------------- 2D shapes
+shape_named_count:
+  en: "This shape is a {name}. How many {what} does it have?"
+  fr: "Cette figure est un {name}. Combien {what} a-t-elle ?"
+  ro: "Această figură este un {name}. Câte {what} are?"
+
+regular_polygon_count:
+  en: "How many {what} does a regular {name} have?"
+  fr: "Combien {what} a un {name} régulier ?"
+  ro: "Câte {what} are un {name} regulat?"
+
+count_sides:
+  en: "sides"
+  fr: "de côtés"
+  ro: "laturi"
+
+count_corners:
+  en: "corners"
+  fr: "de sommets"
+  ro: "colțuri"
+
+count_vertices:
+  en: "vertices"
+  fr: "de sommets"
+  ro: "vârfuri"
+
+count_lines_of_symmetry:
+  en: "lines of symmetry"
+  fr: "d'axes de symétrie"
+  ro: "axe de simetrie"
+
+shape_triangle:
+  en: "triangle"
+  fr: "triangle"
+  ro: "triunghi"
+
+shape_square:
+  en: "square"
+  fr: "carré"
+  ro: "pătrat"
+
+shape_pentagon:
+  en: "pentagon"
+  fr: "pentagone"
+  ro: "pentagon"
+
+shape_hexagon:
+  en: "hexagon"
+  fr: "hexagone"
+  ro: "hexagon"
+
+shape_heptagon:
+  en: "heptagon"
+  fr: "heptagone"
+  ro: "heptagon"
+
+shape_octagon:
+  en: "octagon"
+  fr: "octogone"
+  ro: "octogon"
+
+# ----------------------------------------------------------------- measurement
+which_is_longer:
+  en: "Which is longer: {a} or {b}?"
+  fr: "Quelle longueur est la plus grande : {a} ou {b} ?"
+  ro: "Care lungime este mai mare: {a} sau {b}?"
+
+which_is_heavier:
+  en: "Which is heavier: {a} or {b}?"
+  fr: "Quelle masse est la plus grande : {a} ou {b} ?"
+  ro: "Care masă este mai mare: {a} sau {b}?"
+
+which_is_more:
+  en: "Which is more: {a} or {b}?"
+  fr: "Quel volume est le plus grand : {a} ou {b} ?"
+  ro: "Care volum este mai mare: {a} sau {b}?"
+
+total_length:
+  en: "One ribbon is {a} long. Another is {b} long. How long are they together?"
+  fr: "Un ruban mesure {a}. Un autre mesure {b}. Quelle est leur longueur totale ?"
+  ro: "O panglică are {a}. Alta are {b}. Ce lungime au împreună?"
+
+total_mass:
+  en: "One parcel weighs {a}. Another weighs {b}. How heavy are they together?"
+  fr: "Un colis pèse {a}. Un autre pèse {b}. Quelle est leur masse totale ?"
+  ro: "Un colet cântărește {a}. Altul cântărește {b}. Ce masă au împreună?"
+
+total_volume:
+  en: "One jug holds {a}. Another holds {b}. How much do they hold together?"
+  fr: "Un pichet contient {a}. Un autre contient {b}. Quel volume contiennent-ils ensemble ?"
+  ro: "Un ulcior conține {a}. Altul conține {b}. Ce volum conțin împreună?"
+
+convert_units:
+  en: "Convert {v} to {unit}"
+  fr: "Convertir {v} en {unit}"
+  ro: "Transformați {v} în {unit}"
+
+# ------------------------------------------------------------- area & perimeter
+find_area_rectangle:
+  en: "Find the area of this rectangle."
+  fr: "Calculer l'aire de ce rectangle."
+  ro: "Calculați aria acestui dreptunghi."
+
+find_perimeter_rectangle:
+  en: "Find the perimeter of this rectangle."
+  fr: "Calculer le périmètre de ce rectangle."
+  ro: "Calculați perimetrul acestui dreptunghi."
+
+find_area_compound:
+  en: "Find the total area of this compound shape."
+  fr: "Calculer l'aire totale de cette figure composée."
+  ro: "Calculați aria totală a acestei figuri compuse."
+
+find_area_circle_pi:
+  en: "Find the area of this circle, in terms of {pi}."
+  fr: "Calculer l'aire de ce cercle, en fonction de {pi}."
+  ro: "Calculați aria acestui cerc, în funcție de {pi}."
+
+find_circumference_pi:
+  en: "Find the circumference of this circle, in terms of {pi}."
+  fr: "Calculer la circonférence de ce cercle, en fonction de {pi}."
+  ro: "Calculați circumferința acestui cerc, în funcție de {pi}."
+
+# ------------------------------------------------------- coordinate geometry
+find_midpoint:
+  en: "Find the midpoint of {A} and {B}"
+  fr: "Déterminer le milieu de {A} et {B}"
+  ro: "Determinați mijlocul segmentului {A} {B}"
+
+find_distance_exact:
+  en: "Find the exact distance between {A} and {B}."
+  fr: "Calculer la distance exacte entre {A} et {B}."
+  ro: "Calculați distanța exactă dintre {A} și {B}."
+
+find_gradient:
+  en: "Find the gradient of the line through {A} and {B}."
+  fr: "Déterminer le coefficient directeur de la droite passant par {A} et {B}."
+  ro: "Determinați panta dreptei care trece prin {A} și {B}."
+
+find_line_equation:
+  en: "Find the equation of the line through {A} and {B}"
+  fr: "Déterminer l'équation de la droite passant par {A} et {B}"
+  ro: "Determinați ecuația dreptei care trece prin {A} și {B}"
+
+find_line_equation_form:
+  en: "Find the equation of the line through {A} and {B}, in the form {form}."
+  fr: "Déterminer l'équation de la droite passant par {A} et {B}, sous la forme {form}."
+  ro: "Determinați ecuația dreptei care trece prin {A} și {B}, sub forma {form}."
+
+find_perpendicular_gradient:
+  en: "A line has gradient {m}. Find the gradient of a line perpendicular to it."
+  fr: "Une droite a pour coefficient directeur {m}. Déterminer le coefficient directeur d'une droite perpendiculaire."
+  ro: "O dreaptă are panta {m}. Determinați panta unei drepte perpendiculare pe ea."
+
+find_perpendicular_bisector:
+  en: "Find the equation of the perpendicular bisector of {A} and {B}."
+  fr: "Déterminer l'équation de la médiatrice du segment {A} {B}."
+  ro: "Determinați ecuația mediatoarei segmentului {A} {B}."
+
+step_midpoint_is:
+  en: "Midpoint = {p}"
+  fr: "Milieu = {p}"
+  ro: "Mijlocul = {p}"
+
+step_gradient_and_perpendicular:
+  en: "Gradient of AB = {m}, so the perpendicular gradient = {mp}"
+  fr: "Coefficient directeur de AB = {m}, donc celui de la perpendiculaire = {mp}"
+  ro: "Panta lui AB = {m}, deci panta perpendicularei = {mp}"
+
+reflect_point:
+  en: "Reflect the point {p} in the {axis}."
+  fr: "Déterminer l'image du point {p} par la symétrie {axis}."
+  ro: "Determinați simetricul punctului {p} față de {axis}."
+
+axis_x:
+  en: "x-axis"
+  fr: "d'axe (Ox)"
+  ro: "axa Ox"
+
+axis_y:
+  en: "y-axis"
+  fr: "d'axe (Oy)"
+  ro: "axa Oy"
+
+axis_origin:
+  en: "origin"
+  fr: "de centre O"
+  ro: "originea O"
+
+# ------------------------------------------------------------------ Pythagoras
+pythagoras_find:
+  en: "Find the length marked {x}, in exact form."
+  fr: "Calculer la longueur notée {x}, sous forme exacte."
+  ro: "Calculați lungimea notată {x}, sub formă exactă."
+
+trig_find_marked:
+  en: "Find the length marked {x}, to 3 significant figures."
+  fr: "Calculer la longueur notée {x}, à 3 chiffres significatifs près."
+  ro: "Calculați lungimea notată {x}, cu 3 cifre semnificative."
+
+cosine_rule_third_side:
+  en: "Use the cosine rule to find the third side, to 3 significant figures."
+  fr: "Utiliser le théorème d'Al-Kashi pour calculer le troisième côté, à 3 chiffres significatifs près."
+  ro: "Folosiți teorema cosinusului pentru a calcula a treia latură, cu 3 cifre semnificative."
+
+# ------------------------------------------------------------- circle theorems
+circle_centre_find_inscribed:
+  en: "O is the centre. {given}. Find {asked}, giving a reason."
+  fr: "O est le centre du cercle. {given}. Déterminer {asked}, en justifiant."
+  ro: "O este centrul cercului. {given}. Determinați {asked}, justificând."
+
+circle_diameter_find:
+  en: "{AB} is a diameter. {given}. Find {asked}, giving a reason."
+  fr: "{AB} est un diamètre. {given}. Déterminer {asked}, en justifiant."
+  ro: "{AB} este un diametru. {given}. Determinați {asked}, justificând."
+
+circle_same_arc_find:
+  en: "P and Q lie on the same arc. {given}. Find {asked}, giving a reason."
+  fr: "P et Q sont sur le même arc. {given}. Déterminer {asked}, en justifiant."
+  ro: "P și Q se află pe același arc. {given}. Determinați {asked}, justificând."
+
+circle_cyclic_quad_find:
+  en: "ABCD is a cyclic quadrilateral. {given}. Find {asked}, giving a reason."
+  fr: "ABCD est un quadrilatère inscriptible. {given}. Déterminer {asked}, en justifiant."
+  ro: "ABCD este un patrulater inscriptibil. {given}. Determinați {asked}, justificând."
+
+circle_tangent_find:
+  en: "TA is a tangent to the circle, centre O. The angle between TA and the chord AO is {given}. Find {asked} in triangle OAT, giving a reason."
+  fr: "TA est tangente au cercle de centre O. L'angle entre TA et la corde AO vaut {given}. Déterminer {asked} dans le triangle OAT, en justifiant."
+  ro: "TA este tangentă cercului de centru O. Unghiul dintre TA și coarda AO are {given}. Determinați {asked} în triunghiul OAT, justificând."
+
+reason_angle_at_centre:
+  en: "The angle at the centre is twice the angle at the circumference on the same arc."
+  fr: "L'angle au centre vaut le double de l'angle inscrit interceptant le même arc."
+  ro: "Unghiul la centru este dublul unghiului înscris care subîntinde același arc."
+
+reason_angle_in_semicircle:
+  en: "The angle in a semicircle is {right}, so {conclusion}"
+  fr: "L'angle inscrit dans un demi-cercle vaut {right}, donc {conclusion}"
+  ro: "Unghiul înscris într-un semicerc are {right}, deci {conclusion}"
+
+reason_same_segment:
+  en: "Angles in the same segment are equal."
+  fr: "Les angles inscrits interceptant le même arc sont égaux."
+  ro: "Unghiurile înscrise care subîntind același arc sunt egale."
+
+reason_cyclic_quad:
+  en: "Opposite angles of a cyclic quadrilateral sum to {straight}"
+  fr: "Les angles opposés d'un quadrilatère inscriptible sont supplémentaires : leur somme vaut {straight}"
+  ro: "Unghiurile opuse ale unui patrulater inscriptibil sunt suplementare: suma lor este {straight}"
+
+reason_tangent_radius:
+  en: "A tangent meets a radius at {right}"
+  fr: "Une tangente est perpendiculaire au rayon au point de contact : l'angle vaut {right}"
+  ro: "Tangenta este perpendiculară pe rază în punctul de contact: unghiul este {right}"
+
+# --------------------------------------------------------- inscribed & shaded
+circle_in_square_shaded:
+  en: "A circle is inscribed in a square of side {s} cm. Find the shaded area, in terms of {pi}."
+  fr: "Un cercle est inscrit dans un carré de côté {s} cm. Calculer l'aire de la partie grisée, en fonction de {pi}."
+  ro: "Un cerc este înscris într-un pătrat cu latura de {s} cm. Calculați aria porțiunii hașurate, în funcție de {pi}."
+
+square_in_circle_shaded:
+  en: "A square is inscribed in a circle of radius {r} cm. Find the shaded area, in terms of {pi}."
+  fr: "Un carré est inscrit dans un cercle de rayon {r} cm. Calculer l'aire de la partie grisée, en fonction de {pi}."
+  ro: "Un pătrat este înscris într-un cerc de rază {r} cm. Calculați aria porțiunii hașurate, în funcție de {pi}."
+
+quarter_circles_shaded:
+  en: "A quarter circle is drawn at each corner of a square of side {s} cm, each of radius {r} cm. Find the shaded area, in terms of {pi}."
+  fr: "Un quart de cercle de rayon {r} cm est tracé à chaque sommet d'un carré de côté {s} cm. Calculer l'aire de la partie grisée, en fonction de {pi}."
+  ro: "La fiecare colț al unui pătrat cu latura de {s} cm se trasează un sfert de cerc de rază {r} cm. Calculați aria porțiunii hașurate, în funcție de {pi}."
+
+circle_in_triangle_shaded:
+  en: "A circle is inscribed in an equilateral triangle of side {s} cm. Find the shaded area, in exact form."
+  fr: "Un cercle est inscrit dans un triangle équilatéral de côté {s} cm. Calculer l'aire de la partie grisée, sous forme exacte."
+  ro: "Un cerc este înscris într-un triunghi echilateral cu latura de {s} cm. Calculați aria porțiunii hașurate, sub formă exactă."
+
+step_square_area:
+  en: "Square = {expr}"
+  fr: "Aire du carré = {expr}"
+  ro: "Aria pătratului = {expr}"
+
+step_circle_area:
+  en: "Circle = {expr}"
+  fr: "Aire du disque = {expr}"
+  ro: "Aria discului = {expr}"
+
+step_triangle_area:
+  en: "Triangle = {expr}"
+  fr: "Aire du triangle = {expr}"
+  ro: "Aria triunghiului = {expr}"
+
+step_inradius:
+  en: "Inradius = {expr}"
+  fr: "Rayon du cercle inscrit = {expr}"
+  ro: "Raza cercului înscris = {expr}"
+
+step_diagonal_is_diameter:
+  en: "The diagonal of the square is the diameter, so the side is {expr}"
+  fr: "La diagonale du carré est le diamètre, donc le côté vaut {expr}"
+  ro: "Diagonala pătratului este diametrul, deci latura este {expr}"
+
+step_four_quarters:
+  en: "Four quarter circles make one whole circle of radius {r}"
+  fr: "Quatre quarts de cercle forment un disque entier de rayon {r}"
+  ro: "Patru sferturi de cerc formează un disc întreg de rază {r}"
+
+# ------------------------------------------------------------ sectors and arcs
+sector_arc_length:
+  en: "A sector has radius {r} cm and angle {theta}. Find the arc length, in terms of {pi}."
+  fr: "Un secteur circulaire a un rayon de {r} cm et un angle de {theta}. Calculer la longueur de l'arc, en fonction de {pi}."
+  ro: "Un sector de cerc are raza de {r} cm și unghiul de {theta}. Calculați lungimea arcului, în funcție de {pi}."
+
+sector_area:
+  en: "A sector has radius {r} cm and angle {theta}. Find its area, in terms of {pi}."
+  fr: "Un secteur circulaire a un rayon de {r} cm et un angle de {theta}. Calculer son aire, en fonction de {pi}."
+  ro: "Un sector de cerc are raza de {r} cm și unghiul de {theta}. Calculați aria sa, în funcție de {pi}."
+
+sector_perimeter:
+  en: "A sector has radius {r} cm and angle {theta}. Find its perimeter, in terms of {pi}."
+  fr: "Un secteur circulaire a un rayon de {r} cm et un angle de {theta}. Calculer son périmètre, en fonction de {pi}."
+  ro: "Un sector de cerc are raza de {r} cm și unghiul de {theta}. Calculați perimetrul său, în funcție de {pi}."
+
+segment_area:
+  en: "A chord subtends an angle of {theta} at the centre of a circle of radius {r} cm. Find the area of the minor segment, in exact form."
+  fr: "Une corde sous-tend un angle de {theta} au centre d'un cercle de rayon {r} cm. Calculer l'aire du petit segment circulaire, sous forme exacte."
+  ro: "O coardă subîntinde un unghi de {theta} la centrul unui cerc de rază {r} cm. Calculați aria segmentului mic de cerc, sub formă exactă."
+
+step_perimeter_is_arc_plus:
+  en: "Perimeter = arc + {expr}"
+  fr: "Périmètre = arc + {expr}"
+  ro: "Perimetrul = arcul + {expr}"
+
+step_sector_equals:
+  en: "Sector = {expr}"
+  fr: "Aire du secteur = {expr}"
+  ro: "Aria sectorului = {expr}"
+
+# ------------------------------------------------------------ similar figures
+similar_missing_side:
+  en: "The two triangles are similar. The shorter sides are {a} cm and {a2} cm. The longer side of the first is {b} cm. Find the longer side of the second."
+  fr: "Les deux triangles sont semblables. Les petits côtés mesurent {a} cm et {a2} cm. Le grand côté du premier mesure {b} cm. Calculer le grand côté du second."
+  ro: "Cele două triunghiuri sunt asemenea. Laturile mici au {a} cm și {a2} cm. Latura mare a primului are {b} cm. Aflați latura mare a celui de-al doilea."
+
+similar_area_ratio:
+  en: "Two similar triangles have corresponding sides in the ratio {ratio}. The smaller has area {area}. Find the area of the larger."
+  fr: "Deux triangles semblables ont des côtés correspondants dans le rapport {ratio}. Le plus petit a une aire de {area}. Calculer l'aire du plus grand."
+  ro: "Două triunghiuri asemenea au laturile corespunzătoare în raportul {ratio}. Cel mic are aria {area}. Aflați aria celui mare."
+
+similar_volume_ratio:
+  en: "Two similar solids have corresponding lengths in the ratio {ratio}. The smaller has volume {vol}. Find the volume of the larger."
+  fr: "Deux solides semblables ont des longueurs correspondantes dans le rapport {ratio}. Le plus petit a un volume de {vol}. Calculer le volume du plus grand."
+  ro: "Două corpuri asemenea au lungimile corespunzătoare în raportul {ratio}. Cel mic are volumul {vol}. Aflați volumul celui mare."
+
+step_scale_factor:
+  en: "Scale factor = {expr}"
+  fr: "Rapport de similitude = {expr}"
+  ro: "Raportul de asemănare = {expr}"
+
+step_area_scale_factor:
+  en: "Area scale factor = {expr}"
+  fr: "Rapport des aires = {expr}"
+  ro: "Raportul ariilor = {expr}"
+
+step_volume_scale_factor:
+  en: "Volume scale factor = {expr}"
+  fr: "Rapport des volumes = {expr}"
+  ro: "Raportul volumelor = {expr}"
+
+# ----------------------------------------------------------------- angle rules
+parallel_find_x:
+  en: "The lines are parallel and one angle is {a}. Find {x}, giving a reason."
+  fr: "Les droites sont parallèles et l'un des angles vaut {a}. Déterminer {x}, en justifiant."
+  ro: "Dreptele sunt paralele și unul dintre unghiuri are {a}. Determinați {x}, justificând."
+
+reason_alternate_angles:
+  en: "Alternate angles between parallel lines are equal."
+  fr: "Les angles alternes-internes formés par deux parallèles sont égaux."
+  ro: "Unghiurile alterne interne formate de două paralele sunt egale."
+
+reason_corresponding_angles:
+  en: "Corresponding angles between parallel lines are equal."
+  fr: "Les angles correspondants formés par deux parallèles sont égaux."
+  ro: "Unghiurile corespondente formate de două paralele sunt egale."
+
+reason_cointerior_angles:
+  en: "Co-interior angles between parallel lines sum to {straight}"
+  fr: "Les angles internes du même côté de la sécante sont supplémentaires : leur somme vaut {straight}"
+  ro: "Unghiurile interne de aceeași parte a secantei sunt suplementare: suma lor este {straight}"
+
+polygon_interior_sum:
+  en: "Find the sum of the interior angles of a polygon with {n} sides."
+  fr: "Calculer la somme des angles intérieurs d'un polygone à {n} côtés."
+  ro: "Calculați suma unghiurilor interioare ale unui poligon cu {n} laturi."
+
+regular_polygon_interior:
+  en: "Find the size of each interior angle of a regular polygon with {n} sides."
+  fr: "Calculer la mesure de chaque angle intérieur d'un polygone régulier à {n} côtés."
+  ro: "Calculați măsura fiecărui unghi interior al unui poligon regulat cu {n} laturi."
+
+regular_polygon_exterior:
+  en: "Find the exterior angle of a regular polygon with {n} sides."
+  fr: "Calculer l'angle extérieur d'un polygone régulier à {n} côtés."
+  ro: "Calculați unghiul exterior al unui poligon regulat cu {n} laturi."
+
+polygon_sides_from_exterior:
+  en: "A regular polygon has an exterior angle of {a}. How many sides has it?"
+  fr: "Un polygone régulier a un angle extérieur de {a}. Combien de côtés a-t-il ?"
+  ro: "Un poligon regulat are unghiul exterior de {a}. Câte laturi are?"
+
+triangle_algebraic_angles:
+  en: "The angles of a triangle are {angles}. Find {x} and the three angles."
+  fr: "Les angles d'un triangle sont {angles}. Déterminer {x} et les trois angles."
+  ro: "Unghiurile unui triunghi sunt {angles}. Determinați {x} și cele trei unghiuri."
+
+# ------------------------------------------------------------ circle equations
+circle_centre_radius_from_eq:
+  en: "Find the centre and radius of the circle {eq}."
+  fr: "Déterminer le centre et le rayon du cercle d'équation {eq}."
+  ro: "Determinați centrul și raza cercului de ecuație {eq}."
+
+circle_complete_square:
+  en: "By completing the square, find the centre and radius of {eq}."
+  fr: "En complétant le carré, déterminer le centre et le rayon du cercle d'équation {eq}."
+  ro: "Prin formarea de pătrate perfecte, determinați centrul și raza cercului de ecuație {eq}."
+
+circle_equation_from_centre:
+  en: "Find the equation of the circle with centre {c} and radius {r}."
+  fr: "Déterminer l'équation du cercle de centre {c} et de rayon {r}."
+  ro: "Determinați ecuația cercului de centru {c} și rază {r}."
+
+circle_equation_from_diameter:
+  en: "{P} and {Q} are the ends of a diameter. Find the equation of the circle."
+  fr: "{P} et {Q} sont les extrémités d'un diamètre. Déterminer l'équation du cercle."
+  ro: "{P} și {Q} sunt capetele unui diametru. Determinați ecuația cercului."
+
+answer_centre_radius:
+  en: "Centre {c}, radius {r}"
+  fr: "Centre {c}, rayon {r}"
+  ro: "Centrul {c}, raza {r}"
+
+step_centre_is_midpoint:
+  en: "The centre is the midpoint = {c}"
+  fr: "Le centre est le milieu = {c}"
+  ro: "Centrul este mijlocul = {c}"
+
+step_radius_is_half:
+  en: "Radius = {expr}"
+  fr: "Rayon = {expr}"
+  ro: "Raza = {expr}"
+
+# --------------------------------------------------------------- 3D geometry
+cuboid_volume:
+  en: "Find the volume of a cuboid measuring {dims} cm."
+  fr: "Calculer le volume d'un pavé droit de dimensions {dims} cm."
+  ro: "Calculați volumul unui paralelipiped dreptunghic cu dimensiunile {dims} cm."
+
+cuboid_surface_area:
+  en: "Find the surface area of a cuboid measuring {dims} cm."
+  fr: "Calculer l'aire totale d'un pavé droit de dimensions {dims} cm."
+  ro: "Calculați aria totală a unui paralelipiped dreptunghic cu dimensiunile {dims} cm."
+
+cylinder_volume:
+  en: "A cylinder has radius {r} cm and height {h} cm. Find its volume, in terms of {pi}."
+  fr: "Un cylindre a un rayon de {r} cm et une hauteur de {h} cm. Calculer son volume, en fonction de {pi}."
+  ro: "Un cilindru are raza de {r} cm și înălțimea de {h} cm. Calculați volumul său, în funcție de {pi}."
+
+cylinder_curved_area:
+  en: "A cylinder has radius {r} cm and height {h} cm. Find its curved surface area, in terms of {pi}."
+  fr: "Un cylindre a un rayon de {r} cm et une hauteur de {h} cm. Calculer son aire latérale, en fonction de {pi}."
+  ro: "Un cilindru are raza de {r} cm și înălțimea de {h} cm. Calculați aria sa laterală, în funcție de {pi}."
+
+cone_volume:
+  en: "A cone has radius {r} cm and height {h} cm. Find its volume, in terms of {pi}."
+  fr: "Un cône a un rayon de {r} cm et une hauteur de {h} cm. Calculer son volume, en fonction de {pi}."
+  ro: "Un con are raza de {r} cm și înălțimea de {h} cm. Calculați volumul său, în funcție de {pi}."
+
+cone_slant_height:
+  en: "A cone has radius {r} cm and height {h} cm. Find its slant height, in exact form."
+  fr: "Un cône a un rayon de {r} cm et une hauteur de {h} cm. Calculer sa génératrice, sous forme exacte."
+  ro: "Un con are raza de {r} cm și înălțimea de {h} cm. Calculați generatoarea sa, sub formă exactă."
+
+sphere_volume:
+  en: "Find the volume of a sphere of radius {r} cm, in terms of {pi}."
+  fr: "Calculer le volume d'une sphère de rayon {r} cm, en fonction de {pi}."
+  ro: "Calculați volumul unei sfere de rază {r} cm, în funcție de {pi}."
+
+sphere_surface_area:
+  en: "Find the surface area of a sphere of radius {r} cm, in terms of {pi}."
+  fr: "Calculer l'aire d'une sphère de rayon {r} cm, en fonction de {pi}."
+  ro: "Calculați aria unei sfere de rază {r} cm, în funcție de {pi}."
+
+pyramid_volume:
+  en: "A pyramid has a square base of side {b} cm and height {h} cm. Find its volume."
+  fr: "Une pyramide a une base carrée de côté {b} cm et une hauteur de {h} cm. Calculer son volume."
+  ro: "O piramidă are baza pătrată cu latura de {b} cm și înălțimea de {h} cm. Calculați volumul său."
+
+cuboid_space_diagonal:
+  en: "Find the length of the space diagonal of a cuboid measuring {dims} cm, in exact form."
+  fr: "Calculer la longueur de la grande diagonale d'un pavé droit de dimensions {dims} cm, sous forme exacte."
+  ro: "Calculați lungimea diagonalei paralelipipedului dreptunghic cu dimensiunile {dims} cm, sub formă exactă."
+
+cuboid_angle_to_base:
+  en: "A cuboid measures {dims} cm. Find the angle between the space diagonal and the base, correct to 3 significant figures."
+  fr: "Un pavé droit a pour dimensions {dims} cm. Déterminer l'angle entre la grande diagonale et la base, à 3 chiffres significatifs près."
+  ro: "Un paralelipiped dreptunghic are dimensiunile {dims} cm. Determinați unghiul dintre diagonala sa și bază, cu 3 cifre semnificative."
+
+step_base_diagonal:
+  en: "Base diagonal = {expr}"
+  fr: "Diagonale de la base = {expr}"
+  ro: "Diagonala bazei = {expr}"
+
+fraction_of_amount:
+  en: "{frac} of {n}"
+  fr: "{frac} de {n}"
+  ro: "{frac} din {n}"
+
+percent_of_amount:
+  en: "{pct} of {n}"
+  fr: "{pct} de {n}"
+  ro: "{pct} din {n}"

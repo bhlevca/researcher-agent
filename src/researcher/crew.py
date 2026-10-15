@@ -18,6 +18,7 @@ from crewai.memory import Memory
 from crewai.agent.planning_config import PlanningConfig
 from crewai.project import CrewBase, agent, crew, task
 
+from researcher.llm_options import extra_body as _extra_body
 from researcher.tools import (
     serper_search_wrapped,
     ddg_search_wrapped,
@@ -30,6 +31,7 @@ from researcher.image import (
     IMAGE_BACKEND,
     OLLAMA_IMAGE_URL,
 )
+from researcher.video import generate_ai_video
 from researcher.config import probe_model_capabilities, TOOL_CAPABLE_MODEL
 import researcher.patches as _patches  # noqa: F401 — applies all CrewAI compatibility patches
 
@@ -74,6 +76,15 @@ class ResearchCrew:
         self._model_caps = probe_model_capabilities(self._model_name)
         self._is_multi_part = False
 
+    @property
+    def model_name(self) -> str:
+        """The model this crew was built with.
+
+        Used to decide whether a cached crew still matches the person's saved
+        choice; without it the cache can only be invalidated by guesswork.
+        """
+        return self._model_name
+
     def get_llm_params(self) -> dict:
         """Return current LLM parameters."""
         return dict(self._llm_params)
@@ -90,23 +101,12 @@ class ResearchCrew:
     def _make_llm(model: str, params: dict | None = None) -> LLM:
         if params is None:
             params = ResearchCrew.DEFAULT_LLM_PARAMS
-        is_thinking_model = any(k in model.lower() for k in ("qwen3", "deepseek-r1"))
-        # Build extra_body with Ollama options (CrewAI 1.12 no longer accepts config=)
-        seed = int(params.get("seed", 0))
-        ollama_options = {
-            "num_ctx": int(params.get("num_ctx", 32768)),
-            "num_gpu": 99,
-            "num_predict": int(params.get("num_predict", 4096)),
-            "top_k": int(params.get("top_k", 40)),
-            "top_p": float(params.get("top_p", 0.9)),
-            "min_p": float(params.get("min_p", 0.0)),
-            "repeat_penalty": float(params.get("repeat_penalty", 1.1)),
-        }
-        if seed > 0:
-            ollama_options["seed"] = seed
-        extra_body: dict = {"options": ollama_options}
-        if is_thinking_model:
-            extra_body["chat_template_kwargs"] = {"enable_thinking": True}
+        # Thinking off: this crew runs ReAct, so it needs an "Action:" line in
+        # the visible output. With thinking on, the model spends the whole
+        # num_predict budget in the thinking channel and returns an empty
+        # response — which looks exactly like an agent that writes a plan and
+        # then stops. See researcher/llm_options.py for the measurements.
+        extra_body = _extra_body(model, params, thinking=False)
         return LLM(
             model=model,
             base_url="http://localhost:11434",
@@ -131,12 +131,8 @@ class ResearchCrew:
             base_url="http://localhost:11434",
             temperature=0.2,
             extra_body={
-                "options": {
-                    "num_ctx": 8192,
-                    "num_gpu": 99,
-                    "num_predict": 2048,
-                },
-                "chat_template_kwargs": {"enable_thinking": False},
+                "options": {"num_ctx": 8192, "num_predict": 2048},
+                "think": False,
             },
         )
 
@@ -210,6 +206,7 @@ class ResearchCrew:
                 ddg_search_wrapped,
                 generate_image,
                 generate_ai_image,
+                generate_ai_video,
             ],
             llm=self.ollama_llm,
             verbose=True,
@@ -240,14 +237,22 @@ class ResearchCrew:
     # Dynamic task splitting: decompose complex requests into sub-tasks
     # ------------------------------------------------------------------
 
-    def _decompose(self, topic: str) -> list[str]:
+    def _decompose(self, topic: str, request_text: str | None = None) -> list[str]:
         """Use LLM to decide if a request should be split into parts.
 
         Returns a list with either one entry (no split) or multiple
         self-contained part descriptions.
+
+        *request_text* is what the user actually typed. The size test MUST use
+        it rather than *topic*: topic also carries attached file content and
+        conversation history, so a 38-character question about a one-page scan
+        measured 1480 chars and triggered a ~30 s "should I split this?" LLM
+        call that always answered "no". Attachment size says nothing about
+        request complexity.
         """
+        gauge = request_text if request_text is not None else topic
         # Skip decomposition for short / simple requests
-        if len(topic) < 300:
+        if len(gauge) < 300:
             return [topic]
 
         prompt = (
@@ -262,7 +267,7 @@ class ResearchCrew:
             "- It is a simple question or short task\n"
             "- The parts are interdependent (each needs context from others)\n"
             "- Total output would be under ~3000 words\n\n"
-            f"Request:\n{topic[:2000]}\n\n"
+            f"Request:\n{gauge[:2000]}\n\n"
             "Respond with ONLY valid JSON, no markdown fences, no explanation:\n"
             'If no split: {"split": false}\n'
             'If split: {"split": true, "parts": ["full description of '
@@ -287,8 +292,7 @@ class ResearchCrew:
             extra_body={
                 "options": {
                     "num_ctx": 8192,
-                    "num_gpu": 99,
-                    "num_predict": 2048,
+                                        "num_predict": 2048,
                 }
             },
         )
@@ -319,7 +323,7 @@ class ResearchCrew:
         },
     }
 
-    def build_crew(self, topic: str) -> "Crew":
+    def build_crew(self, topic: str, request_text: str | None = None) -> "Crew":
         """Build a Crew tailored for *topic*.
 
         Simple requests get a single task; complex ones are automatically
@@ -327,7 +331,7 @@ class ResearchCrew:
         ``context=[]`` so CrewAI does NOT forward previous task output
         into the next task — every task only sees its own description.
         """
-        parts = self._decompose(topic)
+        parts = self._decompose(topic, request_text)
         self._is_multi_part = len(parts) > 1
 
         agent_instance = self.researcher()
@@ -404,13 +408,20 @@ class ResearchCrew:
             except Exception as e:
                 _logger.warning("Failed to reset memory: %s", e)
 
-        # Also wipe the kickoff task outputs sqlite db (and stale WAL/SHM)
+        # Clear the kickoff task outputs through CrewAI's own storage rather
+        # than deleting its database file. Deleting the file was the cause of
+        # "Error deleting task outputs: no such table:
+        # latest_kickoff_task_outputs": the next kickoff reconnects, SQLite
+        # helpfully creates an empty database, and CrewAI's DELETE finds no
+        # table and raises — which aborted a run that had already produced an
+        # answer. With two people taking turns on one card that happened on
+        # almost every second request.
         try:
-            from crewai.utilities.paths import db_storage_path as _db_storage_path
+            from crewai.memory.storage.kickoff_task_outputs_storage import (
+                KickoffTaskOutputsSQLiteStorage,
+            )
 
-            db_dir = Path(_db_storage_path())
-            for pattern in ("latest_kickoff_task_outputs.db*",):
-                for f in db_dir.glob(pattern):
-                    f.unlink(missing_ok=True)
+            KickoffTaskOutputsSQLiteStorage().delete_all()
         except Exception as e:
+            # Never fatal: this is housekeeping, not the user's request.
             _logger.warning("Failed to clean kickoff outputs: %s", e)

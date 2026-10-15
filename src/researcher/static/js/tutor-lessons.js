@@ -3,11 +3,19 @@
 // ══════════════════════════════════════════════
 
 async function downloadLesson(id, format) {
+    // md and docx are documents to read; pdf and pdf-answers are the printable
+    // worksheet and its key, split at the lesson's own Solutions section.
+    const url = (format === 'pdf' || format === 'pdf-answers')
+        ? '/tutor/lessons/' + id + '/sheet?answers=' + (format === 'pdf-answers')
+        : '/tutor/lessons/' + id + '/export?format=' + format;
     try {
-        const resp = await fetch('/tutor/lessons/' + id + '/export?format=' + format, {
-            headers: tutorAuthHeaders(),
-        });
-        if (!resp.ok) { tutorShowToast('Export failed'); return; }
+        const resp = await fetch(url, { headers: tutorAuthHeaders() });
+        if (!resp.ok) {
+            let detail = 'Export failed';
+            try { detail = (await resp.json()).detail || detail; } catch (e) { /* keep */ }
+            tutorShowToast(detail);
+            return;
+        }
         const blob = await resp.blob();
         const disposition = resp.headers.get('Content-Disposition') || '';
         const nameMatch = disposition.match(/filename="([^"]+)"/);
@@ -64,7 +72,7 @@ async function generateLesson() {
         }
 
         const result = await processTutorSSE(resp, liveBox, reasoningLines);
-        liveWrapper.remove();
+        collapseThinking(liveWrapper, liveBox, 'Thinking — lesson');
 
         if (result && result.response) {
             tutorLessonRawResponse = result.response;
@@ -80,6 +88,10 @@ async function generateLesson() {
             saveBtn.style.cssText = 'margin-top:0.75rem;background:#e94560;color:white;border:none;padding:0.45rem 1rem;border-radius:0.5rem;cursor:pointer;font-size:0.85rem;';
             saveBtn.onclick = () => saveLesson(topic, lessonType);
             content.appendChild(saveBtn);
+
+            // Printing is an action on the lesson, not a second generator:
+            // the markdown just produced is sent straight to the typesetter.
+            content.appendChild(lessonPrintButtons(result.response, topic));
         }
     } catch (e) {
         liveWrapper.remove();
@@ -164,6 +176,20 @@ async function viewLesson(id) {
         exportDocx.onclick = () => downloadLesson(id, 'docx');
         toolbar.appendChild(exportDocx);
 
+        // MD and DOCX are documents to read; these two are the printable
+        // worksheet and its key, typeset from the same lesson.
+        const sheet = document.createElement('button');
+        sheet.textContent = '🖨️ Sheet';
+        sheet.style.cssText = btnStyle;
+        sheet.onclick = () => downloadLesson(id, 'pdf');
+        toolbar.appendChild(sheet);
+
+        const key = document.createElement('button');
+        key.textContent = '🖨️ Answer key';
+        key.style.cssText = btnStyle;
+        key.onclick = () => downloadLesson(id, 'pdf-answers');
+        toolbar.appendChild(key);
+
         content.appendChild(toolbar);
 
         const viewer = document.createElement('div');
@@ -172,4 +198,68 @@ async function viewLesson(id) {
         viewer.innerHTML = renderContent(mdText);
         content.appendChild(viewer);
     } catch (e) { tutorShowToast('Error: ' + e.message); }
+}
+
+
+// ══════════════════════════════════════════════
+// ── Printing a lesson ──
+// ══════════════════════════════════════════════
+//
+// The lesson the model writes already ends with a Solutions section, so the
+// worksheet and its answer key are the same document cut in half. No second
+// model call, and the two cannot disagree.
+
+function lessonPrintButtons(markdown, topic) {
+    const wrap = document.createElement('span');
+    wrap.style.cssText = 'margin-left:0.5rem;display:inline-flex;gap:0.4rem;';
+    [['🖨️ Sheet', false], ['🖨️ Answer key', true]].forEach(([label, answers]) => {
+        const b = document.createElement('button');
+        b.textContent = label;
+        b.style.cssText = 'background:#0f3460;color:#e2e8f0;border:1px solid #1a3a6e;'
+            + 'padding:0.45rem 0.9rem;border-radius:0.5rem;cursor:pointer;font-size:0.85rem;';
+        b.onclick = () => printLessonMarkdown(markdown, topic, answers, b);
+        wrap.appendChild(b);
+    });
+    return wrap;
+}
+
+async function printLessonMarkdown(markdown, topic, answers, btn) {
+    const cfg = getTutorConfig();
+    const was = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = 'Typesetting…'; }
+    try {
+        const resp = await fetch(
+            answers ? '/tutor/sheets/lesson/answers' : '/tutor/sheets/lesson/pdf', {
+                method: 'POST',
+                headers: tutorJsonHeaders(),
+                body: JSON.stringify({
+                    markdown,
+                    title: topic || 'Lesson',
+                    language: cfg.target_lang,
+                    level: cfg.level,
+                    student: '',
+                    practice_space: true,
+                    native: cfg.native_lang,
+                }),
+            });
+        if (!resp.ok) {
+            let detail = 'Could not build the PDF';
+            try { detail = (await resp.json()).detail || detail; } catch (e) { /* keep */ }
+            tutorShowToast(detail);
+            return;
+        }
+        const url = URL.createObjectURL(await resp.blob());
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = (topic || 'lesson').replace(/[^\w -]/g, '') +
+            (answers ? '-answers.pdf' : '.pdf');
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+    } catch (e) {
+        tutorShowToast('Print error: ' + e.message);
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = was; }
+    }
 }

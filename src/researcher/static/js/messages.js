@@ -14,12 +14,11 @@ function addAssistantMessage(text, reasoning, tokenUsage) {
     const w = document.createElement('div');
     w.className = 'msg-wrapper assistant';
 
-    const m = document.createElement('div');
-    m.className = 'message assistant';
-    m.innerHTML = renderContent(text);
-    w.appendChild(m);
-
-    // Collapsible reasoning
+    // Collapsible reasoning, ABOVE the answer. While the request is running
+    // the live reasoning box sits above too, so putting the collapsed one
+    // below afterwards made it jump across the answer the moment the result
+    // arrived — and left the thing you were reading in a different place from
+    // where it had been.
     if (reasoning && reasoning.length > 0) {
         const det = document.createElement('details');
         det.className = 'reasoning-toggle';
@@ -32,6 +31,11 @@ function addAssistantMessage(text, reasoning, tokenUsage) {
         det.appendChild(c);
         w.appendChild(det);
     }
+
+    const m = document.createElement('div');
+    m.className = 'message assistant';
+    m.innerHTML = renderContent(text);
+    w.appendChild(m);
 
     // Token usage
     if (tokenUsage && tokenUsage.total_tokens) {

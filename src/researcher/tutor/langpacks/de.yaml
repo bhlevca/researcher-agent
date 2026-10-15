@@ -1,0 +1,375 @@
+# German language pack.
+#
+# German's shape differs again: four CASES, and adjective endings that depend on
+# case + gender + which article precedes them. That last one is the thing
+# learners actually get wrong and the thing most worksheets avoid, so the
+# ending tables are encoded here and drilled directly.
+#
+# Encoding the tables rather than the inflected forms means the answer key is
+# derived, not transcribed — there is no opportunity to mistype one of the 48
+# adjective endings.
+
+meta:
+  name: German
+  code: de
+  cases: [nom, akk, dat, gen]
+  genders: [m, f, n]
+
+articles:
+  definite:
+    nom: {m: der, f: die, n: das, pl: die}
+    akk: {m: den, f: die, n: das, pl: die}
+    dat: {m: dem, f: der, n: dem, pl: den}
+    gen: {m: des, f: der, n: des, pl: der}
+  indefinite:
+    nom: {m: ein, f: eine, n: ein}
+    akk: {m: einen, f: eine, n: ein}
+    dat: {m: einem, f: einer, n: einem}
+    gen: {m: eines, f: einer, n: eines}
+
+# Adjective endings. "weak" follows a definite article, "mixed" follows ein-,
+# "strong" follows no article at all.
+adjective_endings:
+  weak:
+    nom: {m: e, f: e, n: e, pl: en}
+    akk: {m: en, f: e, n: e, pl: en}
+    dat: {m: en, f: en, n: en, pl: en}
+    gen: {m: en, f: en, n: en, pl: en}
+  mixed:
+    nom: {m: er, f: e, n: es}
+    akk: {m: en, f: e, n: es}
+    dat: {m: en, f: en, n: en}
+    gen: {m: en, f: en, n: en}
+  strong:
+    nom: {m: er, f: e, n: es, pl: e}
+    akk: {m: en, f: e, n: es, pl: e}
+    dat: {m: em, f: er, n: em, pl: en}
+    gen: {m: en, f: er, n: en, pl: er}
+
+pronouns: ["ich", "du", "er", "wir", "ihr", "sie"]
+
+verbs:
+  - inf: sprechen
+    gloss: to speak
+    level: A1
+    present: {ich: spreche, du: sprichst, er: spricht, wir: sprechen, ihr: sprecht, sie: sprechen}
+    praeteritum: {ich: sprach, du: sprachst, er: sprach, wir: sprachen, ihr: spracht, sie: sprachen}
+    perfekt: {aux: haben, pp: gesprochen}
+  - inf: sein
+    gloss: to be
+    level: A1
+    present: {ich: bin, du: bist, er: ist, wir: sind, ihr: seid, sie: sind}
+    praeteritum: {ich: war, du: warst, er: war, wir: waren, ihr: wart, sie: waren}
+    perfekt: {aux: sein, pp: gewesen}
+  - inf: haben
+    gloss: to have
+    level: A1
+    present: {ich: habe, du: hast, er: hat, wir: haben, ihr: habt, sie: haben}
+    praeteritum: {ich: hatte, du: hattest, er: hatte, wir: hatten, ihr: hattet, sie: hatten}
+    perfekt: {aux: haben, pp: gehabt}
+  - inf: gehen
+    gloss: to go
+    level: A1
+    present: {ich: gehe, du: gehst, er: geht, wir: gehen, ihr: geht, sie: gehen}
+    praeteritum: {ich: ging, du: gingst, er: ging, wir: gingen, ihr: gingt, sie: gingen}
+    perfekt: {aux: sein, pp: gegangen}
+  - inf: machen
+    gloss: to do, to make
+    level: A1
+    present: {ich: mache, du: machst, er: macht, wir: machen, ihr: macht, sie: machen}
+    praeteritum: {ich: machte, du: machtest, er: machte, wir: machten, ihr: machtet, sie: machten}
+    perfekt: {aux: haben, pp: gemacht}
+  - inf: arbeiten
+    gloss: to work
+    level: A1
+    present: {ich: arbeite, du: arbeitest, er: arbeitet, wir: arbeiten, ihr: arbeitet, sie: arbeiten}
+    praeteritum: {ich: arbeitete, du: arbeitetest, er: arbeitete, wir: arbeiteten, ihr: arbeitetet, sie: arbeiteten}
+    perfekt: {aux: haben, pp: gearbeitet}
+  - inf: lesen
+    gloss: to read
+    level: A2
+    present: {ich: lese, du: liest, er: liest, wir: lesen, ihr: lest, sie: lesen}
+    praeteritum: {ich: las, du: lasest, er: las, wir: lasen, ihr: last, sie: lasen}
+    perfekt: {aux: haben, pp: gelesen}
+  - inf: schreiben
+    gloss: to write
+    level: A2
+    present: {ich: schreibe, du: schreibst, er: schreibt, wir: schreiben, ihr: schreibt, sie: schreiben}
+    praeteritum: {ich: schrieb, du: schriebst, er: schrieb, wir: schrieben, ihr: schriebt, sie: schrieben}
+    perfekt: {aux: haben, pp: geschrieben}
+  - inf: essen
+    gloss: to eat
+    level: A1
+    present: {ich: esse, du: isst, er: isst, wir: essen, ihr: esst, sie: essen}
+    praeteritum: {ich: aß, du: aßest, er: aß, wir: aßen, ihr: aßt, sie: aßen}
+    perfekt: {aux: haben, pp: gegessen}
+  - inf: trinken
+    gloss: to drink
+    level: A1
+    present: {ich: trinke, du: trinkst, er: trinkt, wir: trinken, ihr: trinkt, sie: trinken}
+    praeteritum: {ich: trank, du: trankst, er: trank, wir: tranken, ihr: trankt, sie: tranken}
+    perfekt: {aux: haben, pp: getrunken}
+  - inf: sehen
+    gloss: to see
+    level: A2
+    present: {ich: sehe, du: siehst, er: sieht, wir: sehen, ihr: seht, sie: sehen}
+    praeteritum: {ich: sah, du: sahst, er: sah, wir: sahen, ihr: saht, sie: sahen}
+    perfekt: {aux: haben, pp: gesehen}
+  - inf: können
+    gloss: to be able to
+    level: A2
+    present: {ich: kann, du: kannst, er: kann, wir: können, ihr: könnt, sie: können}
+    praeteritum: {ich: konnte, du: konntest, er: konnte, wir: konnten, ihr: konntet, sie: konnten}
+    perfekt: {aux: haben, pp: gekonnt}
+  - inf: wollen
+    gloss: to want
+    level: A2
+    present: {ich: will, du: willst, er: will, wir: wollen, ihr: wollt, sie: wollen}
+    praeteritum: {ich: wollte, du: wolltest, er: wollte, wir: wollten, ihr: wolltet, sie: wollten}
+    perfekt: {aux: haben, pp: gewollt}
+  - inf: kommen
+    gloss: to come
+    level: A1
+    present: {ich: komme, du: kommst, er: kommt, wir: kommen, ihr: kommt, sie: kommen}
+    praeteritum: {ich: kam, du: kamst, er: kam, wir: kamen, ihr: kamt, sie: kamen}
+    perfekt: {aux: sein, pp: gekommen}
+  - inf: schlafen
+    gloss: to sleep
+    level: A2
+    present: {ich: schlafe, du: schläfst, er: schläft, wir: schlafen, ihr: schlaft, sie: schlafen}
+    praeteritum: {ich: schlief, du: schliefst, er: schlief, wir: schliefen, ihr: schlieft, sie: schliefen}
+    perfekt: {aux: haben, pp: geschlafen}
+  - inf: fahren
+    gloss: to drive, to travel
+    level: A2
+    present: {ich: fahre, du: fährst, er: fährt, wir: fahren, ihr: fahrt, sie: fahren}
+    praeteritum: {ich: fuhr, du: fuhrst, er: fuhr, wir: fuhren, ihr: fuhrt, sie: fuhren}
+    perfekt: {aux: sein, pp: gefahren}
+
+  # Weak verbs: one line each, paradigm derived by conjugator.py.
+  - {inf: spielen,   gloss: to play, level: A1, class: weak}
+  - {inf: lernen,    gloss: to learn, level: A1, class: weak}
+  - {inf: kaufen,    gloss: to buy, level: A1, class: weak}
+  - {inf: wohnen,    gloss: to live, level: A1, class: weak}
+  - {inf: fragen,    gloss: to ask, level: A1, class: weak}
+  - {inf: hören,     gloss: to hear, level: A1, class: weak}
+  - {inf: sagen,     gloss: to say, level: A1, class: weak}
+  - {inf: zeigen,    gloss: to show, level: A2, class: weak}
+  - {inf: suchen,    gloss: to look for, level: A1, class: weak}
+  - {inf: brauchen,  gloss: to need, level: A2, class: weak}
+  - {inf: lieben,    gloss: to love, level: A1, class: weak}
+  - {inf: kochen,    gloss: to cook, level: A2, class: weak}
+  - {inf: tanzen,    gloss: to dance, level: A2, class: weak}
+  - {inf: reisen,    gloss: to travel, level: A2, class: weak, aux: sein}
+  - {inf: warten,    gloss: to wait, level: A2, class: weak}
+  - {inf: antworten, gloss: to answer, level: A2, class: weak}
+  - {inf: öffnen,    gloss: to open, level: A2, class: weak}
+  - {inf: danken,    gloss: to thank, level: A2, class: weak}
+  - {inf: holen,     gloss: to fetch, level: A2, class: weak}
+  - {inf: stellen,   gloss: to place, level: A2, class: weak}
+  - {inf: legen,     gloss: to lay, level: A2, class: weak}
+  - {inf: setzen,    gloss: to set, level: A2, class: weak}
+  - {inf: führen,    gloss: to lead, level: B1, class: weak}
+  - {inf: bauen,     gloss: to build, level: A2, class: weak}
+  - {inf: malen,     gloss: to paint, level: A2, class: weak}
+  - {inf: zählen,    gloss: to count, level: A1, class: weak}
+  - {inf: lachen,    gloss: to laugh, level: A1, class: weak}
+  - {inf: leben,     gloss: to live, level: A1, class: weak}
+  - {inf: glauben,   gloss: to believe, level: A2, class: weak}
+  - {inf: üben,      gloss: to practise, level: A2, class: weak}
+  - {inf: erklären,  gloss: to explain, level: B1, class: weak}
+  - {inf: besuchen,  gloss: to visit, level: A2, class: weak}
+  - {inf: bezahlen,  gloss: to pay, level: A2, class: weak}
+  - {inf: verkaufen, gloss: to sell, level: A2, class: weak}
+  - {inf: studieren, gloss: to study, level: A2, class: weak}
+  - {inf: wandern,   gloss: to hike, level: A2, class: weak, aux: sein}
+
+  # Strong verbs keep explicit tables.
+  - inf: finden
+    gloss: to find
+    level: A1
+    present: {ich: finde, du: findest, er: findet, wir: finden, ihr: findet, sie: finden}
+    praeteritum: {ich: fand, du: fandst, er: fand, wir: fanden, ihr: fandet, sie: fanden}
+    perfekt: {aux: haben, pp: gefunden}
+  - inf: geben
+    gloss: to give
+    level: A1
+    present: {ich: gebe, du: gibst, er: gibt, wir: geben, ihr: gebt, sie: geben}
+    praeteritum: {ich: gab, du: gabst, er: gab, wir: gaben, ihr: gabt, sie: gaben}
+    perfekt: {aux: haben, pp: gegeben}
+  - inf: nehmen
+    gloss: to take
+    level: A2
+    present: {ich: nehme, du: nimmst, er: nimmt, wir: nehmen, ihr: nehmt, sie: nehmen}
+    praeteritum: {ich: nahm, du: nahmst, er: nahm, wir: nahmen, ihr: nahmt, sie: nahmen}
+    perfekt: {aux: haben, pp: genommen}
+  - inf: laufen
+    gloss: to run
+    level: A2
+    present: {ich: laufe, du: läufst, er: läuft, wir: laufen, ihr: lauft, sie: laufen}
+    praeteritum: {ich: lief, du: liefst, er: lief, wir: liefen, ihr: lieft, sie: liefen}
+    perfekt: {aux: sein, pp: gelaufen}
+  - inf: bleiben
+    gloss: to stay
+    level: A2
+    present: {ich: bleibe, du: bleibst, er: bleibt, wir: bleiben, ihr: bleibt, sie: bleiben}
+    praeteritum: {ich: blieb, du: bliebst, er: blieb, wir: blieben, ihr: bliebt, sie: blieben}
+    perfekt: {aux: sein, pp: geblieben}
+  - inf: heißen
+    gloss: to be called
+    level: A1
+    present: {ich: heiße, du: heißt, er: heißt, wir: heißen, ihr: heißt, sie: heißen}
+    praeteritum: {ich: hieß, du: hießt, er: hieß, wir: hießen, ihr: hießt, sie: hießen}
+    perfekt: {aux: haben, pp: geheißen}
+  - inf: stehen
+    gloss: to stand
+    level: A2
+    present: {ich: stehe, du: stehst, er: steht, wir: stehen, ihr: steht, sie: stehen}
+    praeteritum: {ich: stand, du: standst, er: stand, wir: standen, ihr: standet, sie: standen}
+    perfekt: {aux: haben, pp: gestanden}
+  - inf: liegen
+    gloss: to lie
+    level: A2
+    present: {ich: liege, du: liegst, er: liegt, wir: liegen, ihr: liegt, sie: liegen}
+    praeteritum: {ich: lag, du: lagst, er: lag, wir: lagen, ihr: lagt, sie: lagen}
+    perfekt: {aux: haben, pp: gelegen}
+  - inf: sitzen
+    gloss: to sit
+    level: A2
+    present: {ich: sitze, du: sitzt, er: sitzt, wir: sitzen, ihr: sitzt, sie: sitzen}
+    praeteritum: {ich: saß, du: saßt, er: saß, wir: saßen, ihr: saßt, sie: saßen}
+    perfekt: {aux: haben, pp: gesessen}
+  - inf: bringen
+    gloss: to bring
+    level: A2
+    present: {ich: bringe, du: bringst, er: bringt, wir: bringen, ihr: bringt, sie: bringen}
+    praeteritum: {ich: brachte, du: brachtest, er: brachte, wir: brachten, ihr: brachtet, sie: brachten}
+    perfekt: {aux: haben, pp: gebracht}
+  - inf: denken
+    gloss: to think
+    level: A2
+    present: {ich: denke, du: denkst, er: denkt, wir: denken, ihr: denkt, sie: denken}
+    praeteritum: {ich: dachte, du: dachtest, er: dachte, wir: dachten, ihr: dachtet, sie: dachten}
+    perfekt: {aux: haben, pp: gedacht}
+  - inf: wissen
+    gloss: to know
+    level: A2
+    present: {ich: weiß, du: weißt, er: weiß, wir: wissen, ihr: wisst, sie: wissen}
+    praeteritum: {ich: wusste, du: wusstest, er: wusste, wir: wussten, ihr: wusstet, sie: wussten}
+    perfekt: {aux: haben, pp: gewusst}
+  - inf: tragen
+    gloss: to carry, to wear
+    level: B1
+    present: {ich: trage, du: trägst, er: trägt, wir: tragen, ihr: tragt, sie: tragen}
+    praeteritum: {ich: trug, du: trugst, er: trug, wir: trugen, ihr: trugt, sie: trugen}
+    perfekt: {aux: haben, pp: getragen}
+  - inf: helfen
+    gloss: to help
+    level: B1
+    present: {ich: helfe, du: hilfst, er: hilft, wir: helfen, ihr: helft, sie: helfen}
+    praeteritum: {ich: half, du: halfst, er: half, wir: halfen, ihr: halft, sie: halfen}
+    perfekt: {aux: haben, pp: geholfen}
+  - inf: werden
+    gloss: to become
+    level: B1
+    present: {ich: werde, du: wirst, er: wird, wir: werden, ihr: werdet, sie: werden}
+    praeteritum: {ich: wurde, du: wurdest, er: wurde, wir: wurden, ihr: wurdet, sie: wurden}
+    perfekt: {aux: sein, pp: geworden}
+
+nouns:
+  - {word: Tisch,   gloss: table, gender: m, plural: Tische,    level: A1}
+  - {word: Buch,    gloss: book, gender: n, plural: Bücher,    level: A1}
+  - {word: Haus,    gloss: house, gender: n, plural: Häuser,    level: A1}
+  - {word: Hund,    gloss: dog, gender: m, plural: Hunde,     level: A1}
+  - {word: Katze,   gloss: cat, gender: f, plural: Katzen,    level: A1}
+  - {word: Auto,    gloss: car, gender: n, plural: Autos,     level: A1}
+  - {word: Schule,  gloss: school, gender: f, plural: Schulen,   level: A1}
+  - {word: Freund,  gloss: friend, gender: m, plural: Freunde,   level: A1}
+  - {word: Fenster, gloss: window, gender: n, plural: Fenster,   level: A1}
+  - {word: Baum,    gloss: tree, gender: m, plural: Bäume,     level: A1}
+  - {word: Kind,    gloss: child, gender: n, plural: Kinder,    level: A1}
+  - {word: Stadt,   gloss: town, gender: f, plural: Städte,    level: A2}
+  - {word: Zeitung, gloss: newspaper, gender: f, plural: Zeitungen, level: A2}
+  - {word: Pferd,   gloss: horse, gender: n, plural: Pferde,    level: A2}
+  - {word: Vogel,   gloss: bird, gender: m, plural: Vögel,     level: A2}
+  - {word: Wasser,  gloss: water, gender: n, plural: Wasser,    level: A1}
+  - {word: Brot,    gloss: bread, gender: n, plural: Brote,     level: A1}
+  - {word: Mann,    gloss: man, gender: m, plural: Männer,    level: A1}
+  - {word: Frau,    gloss: woman, gender: f, plural: Frauen,    level: A1}
+  - {word: Tür,     gloss: door, gender: f, plural: Türen,     level: A1}
+
+  - {word: Vater,     gloss: father, gender: m, plural: Väter,       level: A1}
+  - {word: Mutter,    gloss: mother, gender: f, plural: Mütter,      level: A1}
+  - {word: Bruder,    gloss: brother, gender: m, plural: Brüder,      level: A1}
+  - {word: Schwester, gloss: sister, gender: f, plural: Schwestern,  level: A1}
+  - {word: Tag,       gloss: day, gender: m, plural: Tage,        level: A1}
+  - {word: Nacht,     gloss: night, gender: f, plural: Nächte,      level: A1}
+  - {word: Jahr,      gloss: year, gender: n, plural: Jahre,       level: A1}
+  - {word: Stuhl,     gloss: chair, gender: m, plural: Stühle,      level: A1}
+  - {word: Apfel,     gloss: apple, gender: m, plural: Äpfel,       level: A1}
+  - {word: Milch,     gloss: milk, gender: f, plural: Milch,       level: A1}
+  - {word: Straße,    gloss: street, gender: f, plural: Straßen,     level: A1}
+  - {word: Lehrer,    gloss: teacher, gender: m, plural: Lehrer,      level: A1}
+  - {word: Blume,     gloss: flower, gender: f, plural: Blumen,      level: A1}
+  - {word: Garten,    gloss: garden, gender: m, plural: Gärten,      level: A2}
+  - {word: Küche,     gloss: kitchen, gender: f, plural: Küchen,      level: A2}
+  - {word: Berg,      gloss: mountain, gender: m, plural: Berge,       level: A2}
+  - {word: Fluss,     gloss: river, gender: m, plural: Flüsse,      level: A2}
+  - {word: Wald,      gloss: forest, gender: m, plural: Wälder,      level: A2}
+  - {word: Strand,    gloss: beach, gender: m, plural: Strände,     level: A2}
+  - {word: Geschichte, gloss: story, gender: f, plural: Geschichten, level: A2}
+  - {word: Musik,     gloss: music, gender: f, plural: Musik,       level: A2}
+  - {word: Brief,     gloss: letter, gender: m, plural: Briefe,      level: A2}
+  - {word: Frage,     gloss: question, gender: f, plural: Fragen,      level: A2}
+  - {word: Antwort,   gloss: answer, gender: f, plural: Antworten,   level: A2}
+  - {word: Reise,     gloss: journey, gender: f, plural: Reisen,      level: A2}
+  - {word: Essen,     gloss: meal, gender: n, plural: Essen,       level: A2}
+  - {word: Preis,     gloss: price, gender: m, plural: Preise,      level: B1}
+  - {word: Land,      gloss: country, gender: n, plural: Länder,      level: A2}
+  - {word: Hand,      gloss: hand, gender: f, plural: Hände,       level: A1}
+  - {word: Kopf,      gloss: head, gender: m, plural: Köpfe,       level: A2}
+  - {word: Arbeit,    gloss: work, gender: f, plural: Arbeiten,    level: A2}
+  - {word: Zeit,      gloss: time, gender: f, plural: Zeiten,      level: A1}
+  - {word: Idee,      gloss: idea, gender: f, plural: Ideen,       level: B1}
+  - {word: Freundin,  gloss: female friend, gender: f, plural: Freundinnen, level: A1}
+  - {word: Mädchen,   gloss: girl, gender: n, plural: Mädchen,     level: A1}
+  - {word: Junge,     gloss: boy, gender: m, plural: Jungen,      level: A1}
+  - {word: Zimmer,    gloss: room, gender: n, plural: Zimmer,      level: A1}
+  - {word: Schlüssel, gloss: key, gender: m, plural: Schlüssel,   level: A2}
+  - {word: Bild,      gloss: picture, gender: n, plural: Bilder,      level: A1}
+  - {word: Wort,      gloss: word, gender: n, plural: Wörter,      level: A1}
+
+# Base forms only: the ending is derived from the tables above, so it cannot be
+# mistyped.
+adjectives:
+  - {word: groß,      gloss: big, level: A1}
+  - {word: klein,     gloss: small, level: A1}
+  - {word: grün,      gloss: green, level: A1}
+  - {word: blau,      gloss: blue, level: A1}
+  - {word: glücklich, gloss: happy, level: A2}
+  - {word: schön,     gloss: beautiful, level: A1}
+  - {word: alt,       gloss: old, level: A1}
+  - {word: neu,       gloss: new, level: A1}
+  - {word: weiß,      gloss: white, level: A2}
+  - {word: lang,      gloss: long, level: A2}
+  - {word: leicht,    gloss: easy, level: A2}
+  - {word: rot,       gloss: red, level: A1}
+
+  - {word: jung,      gloss: young, level: A1}
+  - {word: gut,       gloss: good, level: A1}
+  - {word: schlecht,  gloss: bad, level: A1}
+  - {word: schwarz,   gloss: black, level: A1}
+  - {word: gelb,      gloss: yellow, level: A1}
+  - {word: grau,      gloss: grey, level: A2}
+  - {word: kalt,      gloss: cold, level: A1}
+  - {word: warm,      gloss: warm, level: A1}
+  - {word: müde,      gloss: tired, level: A2}
+  - {word: schwer,    gloss: difficult, level: A2}
+  - {word: wichtig,   gloss: important, level: B1}
+  - {word: freundlich, gloss: friendly, level: A2}
+  - {word: teuer,     gloss: expensive, level: A2}
+  - {word: billig,    gloss: cheap, level: A2}
+  - {word: schnell,   gloss: fast, level: A1}
+  - {word: langsam,   gloss: slow, level: A1}
+  - {word: interessant, gloss: interesting, level: A2}
+  - {word: ruhig,     gloss: quiet, level: B1}

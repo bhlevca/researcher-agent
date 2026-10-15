@@ -4,6 +4,7 @@ import sys
 import io
 import re
 import json
+import os
 import asyncio
 import queue
 import threading
@@ -12,6 +13,8 @@ import logging
 from fastapi import HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from researcher.gpu_broker import GPU, Need, queue_message
+from researcher.user_crews import get_crew, resolve_model
 from researcher.config import (
     ChatRequest,
     ContinueRequest,
@@ -25,9 +28,12 @@ from researcher.postprocess import (
     _build_conversation_context,
 )
 from researcher.auth import get_current_user
-from researcher.ingestion import get_file_context
+from researcher.ingestion import (
+    get_file_context,
+    get_file_texts,
+    is_extraction_request,
+)
 from researcher.image import load_image_params_from_json
-from researcher.crew import ResearchCrew
 
 from crewai.agents.parser import AgentAction, AgentFinish
 from crewai.events.event_bus import crewai_event_bus
@@ -131,6 +137,26 @@ def _make_event_handlers(q_ref):
     ]
 
 
+# Explicit media prefixes. Deliberately narrow — an accidental match would send
+# a real question to a diffusion model instead of the agent.
+_MEDIA_PREFIX_RE = re.compile(
+    r"^\s*(video|clip|animation|image|img|picture|photo|draw)\s*:\s*(.+)$",
+    re.IGNORECASE | re.DOTALL,
+)
+_VIDEO_WORDS = {"video", "clip", "animation"}
+
+
+def _match_media_prefix(message: str) -> tuple[str, str] | None:
+    """Return ("video"|"image", prompt) when the message opens with a prefix."""
+    m = _MEDIA_PREFIX_RE.match(message or "")
+    if not m:
+        return None
+    word, prompt = m.group(1).lower(), m.group(2).strip()
+    if not prompt:
+        return None
+    return ("video" if word in _VIDEO_WORDS else "image"), prompt
+
+
 def register_chat_routes(app):
     """Attach /chat, /chat/cancel, /chat/continue to the FastAPI app."""
 
@@ -141,30 +167,155 @@ def register_chat_routes(app):
         uid = user["id"]
         db = request.app.state.db
 
+        # ── Fast path: transcription request + attachment ────────────────────
+        # "OCR this", "extract the text", "give me the text" over an attached
+        # scan is a conversion job, not a conversation. The text was already
+        # produced at upload, so return it directly. Routing it through the crew
+        # costs a decomposition call, a planning call and a full ReAct loop —
+        # minutes — just to have an LLM retype text we already hold, with the
+        # added risk that it paraphrases a document whose exact wording matters.
+        if req.file_ids and is_extraction_request(req.message):
+            files = await get_file_texts(db, uid, req.file_ids)
+            have_text = [f for f in files if f["text"]]
+
+            def _sse_direct(event: str, data) -> str:
+                return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+            async def direct_stream():
+                if not have_text:
+                    names = ", ".join(f["filename"] for f in files) or "the attachment"
+                    yield _sse_direct("done", {
+                        "response": (
+                            f"No text could be extracted from {names}. If it is a "
+                            "scanned PDF or photo, check that OCR is enabled and "
+                            "the OCR model is pulled, then re-upload."
+                        ),
+                        "reasoning": ["Direct extraction — no agent involved"],
+                        "token_usage": {},
+                        "incomplete": False,
+                    })
+                    return
+                chunks = []
+                for f in have_text:
+                    chunks.append(
+                        f"### {f['filename']}\n\n{f['text']}\n\n"
+                        f"[⬇ Download as DOCX](/files/{f['id']}/export?format=docx) · "
+                        f"[⬇ ODT](/files/{f['id']}/export?format=odt)"
+                    )
+                yield _sse_direct("done", {
+                    "response": "\n\n---\n\n".join(chunks),
+                    "reasoning": [
+                        f"Returned stored text for {len(have_text)} file(s) directly — "
+                        "no LLM call, no agent run."
+                    ],
+                    "token_usage": {},
+                    "incomplete": False,
+                })
+
+            logger.info(
+                "[chat] Extraction fast path: %d file(s), bypassing crew", len(files)
+            )
+            return StreamingResponse(direct_stream(), media_type="text/event-stream")
+
+        # ── Fast path: explicit media prefix ─────────────────────────────────
+        # "video: <prompt>" or "image: <prompt>" sends the text STRAIGHT to the
+        # generator, skipping planning and the agent's prompt rewriting. Opt-in
+        # by design: without a prefix the normal agent path is untouched, so
+        # nothing that works today changes.
+        #
+        # This buys two things — no ~30s planning round trip, and the prompt
+        # reaches the model verbatim, which matters when iterating on wording.
+        # Note the image path still self-critiques: the refine loop lives inside
+        # the tool, not in the agent.
+        media = _match_media_prefix(req.message)
+        if media:
+            kind, direct_prompt = media
+
+            def _sse_media(event: str, data) -> str:
+                return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+            if uid not in request.app.state.crew_semaphores:
+                request.app.state.crew_semaphores[uid] = asyncio.Semaphore(1)
+            semaphore = request.app.state.crew_semaphores[uid]
+
+            async def media_stream():
+                # Image and video are torch work: the broker releases Ollama
+                # for them, and — unlike the old context manager — does not
+                # reinstate it afterwards. The next task says what it wants.
+                _backend = os.getenv("IMAGE_BACKEND", "zimage")
+                _need = Need("torch", "video" if kind == "video" else _backend)
+                async with semaphore, GPU.reserve(_need, kind, user=uid) as _res:
+                    async for _n in _res.wait():
+                        if _n["position"]:
+                            yield _sse_media(
+                                "reasoning",
+                                f"\u23f3 Waiting for the GPU \u2014 "
+                                f"{_n['position']} ahead of you")
+                    yield _sse_media(
+                        "reasoning",
+                        f"🎬 Direct {kind} generation (agent bypassed): {direct_prompt[:80]}",
+                    )
+                    loop = asyncio.get_running_loop()
+                    # Video runs for many minutes — an hour-plus for a stitched
+                    # clip — so stream progress rather than leaving the request
+                    # silent, which is indistinguishable from a hang.
+                    pq: queue.Queue = queue.Queue()
+                    if kind == "video":
+                        from researcher.video import _generate_video_once as _vgen
+
+                        def _gen(p):
+                            return _vgen(p, progress=pq.put)
+                    else:
+                        from researcher.image import generate_ai_image as _tool
+                        _inner = getattr(_tool, "func", _tool)
+
+                        def _gen(p):
+                            return _inner(p)
+
+                    future = loop.run_in_executor(None, _gen, direct_prompt)
+                    last = None
+                    while not future.done():
+                        await asyncio.sleep(0.25)
+                        while not pq.empty():
+                            try:
+                                line = pq.get_nowait()
+                            except queue.Empty:
+                                break
+                            if line != last:      # collapse repeats
+                                last = line
+                                yield _sse_media("reasoning", line)
+                    while not pq.empty():
+                        try:
+                            yield _sse_media("reasoning", pq.get_nowait())
+                        except queue.Empty:
+                            break
+                    try:
+                        out = future.result()
+                    except Exception as e:
+                        yield _sse_media("error", f"{kind} generation failed: {e}")
+                        return
+                    yield _sse_media("done", {
+                        "response": out,
+                        "reasoning": [f"Direct {kind} generation — no agent, no planning"],
+                        "token_usage": {},
+                        "incomplete": False,
+                    })
+
+            logger.info("[chat] Media fast path: kind=%s", kind)
+            return StreamingResponse(media_stream(), media_type="text/event-stream")
+
         # Lazy-init per-user semaphore and cancel event
         if uid not in request.app.state.crew_semaphores:
             request.app.state.crew_semaphores[uid] = asyncio.Semaphore(1)
         if uid not in request.app.state.cancel_events:
             request.app.state.cancel_events[uid] = threading.Event()
 
-        # Ensure runtime model matches the user's saved model.
-        cursor_model = await db.execute(
-            "SELECT model, llm_params FROM users WHERE id = ?", (uid,)
-        )
-        row_model = await cursor_model.fetchone()
-        saved_model = row_model[0] if row_model and row_model[0] else None
-        effective_model = saved_model or request.app.state.current_model
-
-        existing_crew = request.app.state.research_crews.get(uid)
-        if existing_crew is None or effective_model != request.app.state.current_model:
-            new_crew = ResearchCrew(model=effective_model)
-            if row_model and row_model[1]:
-                try:
-                    new_crew.update_llm_params(json.loads(row_model[1]))
-                except (json.JSONDecodeError, TypeError):
-                    pass
-            request.app.state.research_crews[uid] = new_crew
-            request.app.state.current_model = effective_model
+        # The model this person chose, which is held in the database. The
+        # comparison this used to make was against app.state.current_model —
+        # process-wide, so the last person to use the picker decided what
+        # everybody else ran.
+        research_crew = await get_crew(request, uid, "research")
+        effective_model = research_crew.model_name
 
         # Prepend attached file contents
         file_context = ""
@@ -173,15 +324,13 @@ def register_chat_routes(app):
             file_context = await get_file_context(db, user["id"], req.file_ids)
 
         # Build context from conversation history (3-tier strategy)
-        model = request.app.state.current_model
+        model = effective_model
         conv_context = _build_conversation_context(req.history, model)
 
         if conv_context:
             topic = file_context + conv_context + "\n\nNew request: " + req.message
         else:
             topic = file_context + req.message
-
-        research_crew = request.app.state.research_crews[uid]
 
         # Ensure image params from DB are applied before generation
         cursor = await db.execute(
@@ -190,7 +339,9 @@ def register_chat_routes(app):
         row = await cursor.fetchone()
         load_image_params_from_json(row[0] if row and row[0] else None)
 
-        crew = research_crew.build_crew(topic)
+        # Pass the raw message so the split heuristic sizes the *request*, not
+        # the attachments and history bolted onto it.
+        crew = research_crew.build_crew(topic, request_text=req.message)
         semaphore = request.app.state.crew_semaphores[uid]
 
         q: queue.Queue = queue.Queue()
@@ -222,96 +373,109 @@ def register_chat_routes(app):
                 "crew_timeout_sec", request.app.state.crew_timeout
             )
             async with semaphore:
-                loop = asyncio.get_running_loop()
-                future = loop.run_in_executor(None, _run_crew)
-                all_lines: list[str] = []
+                # One card, several people. Reserve before the crew starts,
+                # because kickoff() is what loads the model: without this two
+                # people simply both load, and Ollama spills one of them to
+                # CPU rather than queueing. Consuming wait() is what queues,
+                # and because it is an async generator the position reaches
+                # the browser while we are still waiting.
+                _need = Need("ollama",
+                             str(effective_model).replace("ollama/", ""))
+                async with GPU.reserve(_need, "research", user=uid) as _res:
+                    async for _notice in _res.wait():
+                        yield _sse("queue", queue_message(
+                            _notice["position"], _notice["estimate"],
+                            _notice["ticket"]))
+                    loop = asyncio.get_running_loop()
+                    future = loop.run_in_executor(None, _run_crew)
+                    all_lines: list[str] = []
 
-                _skip_history = False
+                    _skip_history = False
 
-                _verbose_noise = re.compile(
-                    r"^(Agent:|Task:|Thought:|Action:|Action Input:|Observation:|"
-                    r"Entering new CrewAgentExecutor|Finished chain|"
-                    r"> |I encountered an error|Tool .* accepts these inputs|"
-                    r"Tool Name:|Tool Arguments:|Tool Description:|"
-                    r"\[1m|> Entering|> Finished|Moving on then)",
-                    re.IGNORECASE,
-                )
+                    _verbose_noise = re.compile(
+                        r"^(Agent:|Task:|Thought:|Action:|Action Input:|Observation:|"
+                        r"Entering new CrewAgentExecutor|Finished chain|"
+                        r"> |I encountered an error|Tool .* accepts these inputs|"
+                        r"Tool Name:|Tool Arguments:|Tool Description:|"
+                        r"\[1m|> Entering|> Finished|Moving on then)",
+                        re.IGNORECASE,
+                    )
 
-                def _should_show(line: str) -> bool:
-                    nonlocal _skip_history
-                    if "Previous conversation:" in line:
-                        _skip_history = True
-                        return False
-                    if _skip_history:
-                        if "New request:" in line:
-                            _skip_history = False
-                        return False
-                    if line and line[0] in "💭🔧📋✅🧠📝⚠️👁️🎯":
+                    def _should_show(line: str) -> bool:
+                        nonlocal _skip_history
+                        if "Previous conversation:" in line:
+                            _skip_history = True
+                            return False
+                        if _skip_history:
+                            if "New request:" in line:
+                                _skip_history = False
+                            return False
+                        if line and line[0] in "💭🔧📋✅🧠📝⚠️👁️🎯":
+                            return True
+                        if _verbose_noise.search(line):
+                            return False
                         return True
-                    if _verbose_noise.search(line):
-                        return False
-                    return True
 
-                elapsed = 0.0
-                early_exit: str | None = None  # "cancelled" | "timeout"
+                    elapsed = 0.0
+                    early_exit: str | None = None  # "cancelled" | "timeout"
 
-                while not future.done():
-                    if cancel.is_set() and early_exit is None:
-                        early_exit = "cancelled"
-                        yield _sse("cancelled", "Request cancelled by user")
-                    if elapsed >= timeout_sec and early_exit is None:
-                        early_exit = "timeout"
-                        yield _sse("error", f"Request timed out after {timeout_sec}s")
-                    await asyncio.sleep(0.15)
-                    elapsed += 0.15
+                    while not future.done():
+                        if cancel.is_set() and early_exit is None:
+                            early_exit = "cancelled"
+                            yield _sse("cancelled", "Request cancelled by user")
+                        if elapsed >= timeout_sec and early_exit is None:
+                            early_exit = "timeout"
+                            yield _sse("error", f"Request timed out after {timeout_sec}s")
+                        await asyncio.sleep(0.15)
+                        elapsed += 0.15
+                        while not q.empty():
+                            try:
+                                line = q.get_nowait()
+                                all_lines.append(line)
+                                if early_exit is None and _should_show(line):
+                                    yield _sse("reasoning", line)
+                            except queue.Empty:
+                                break
+
+                    if early_exit is not None:
+                        # Drain queue silently; semaphore releases after thread finished
+                        while not q.empty():
+                            q.get_nowait()
+                        return
+
+                    # Drain remaining
                     while not q.empty():
                         try:
                             line = q.get_nowait()
                             all_lines.append(line)
-                            if early_exit is None and _should_show(line):
+                            if _should_show(line):
                                 yield _sse("reasoning", line)
                         except queue.Empty:
                             break
 
-                if early_exit is not None:
-                    # Drain queue silently; semaphore releases after thread finished
-                    while not q.empty():
-                        q.get_nowait()
-                    return
-
-                # Drain remaining
-                while not q.empty():
                     try:
-                        line = q.get_nowait()
-                        all_lines.append(line)
-                        if _should_show(line):
-                            yield _sse("reasoning", line)
-                    except queue.Empty:
-                        break
+                        result = future.result()
+                    except Exception as e:
+                        yield _sse("error", str(e))
+                        return
 
-                try:
-                    result = future.result()
-                except Exception as e:
-                    yield _sse("error", str(e))
-                    return
+                    response_text = _postprocess(
+                        research_crew.postprocess(result), "\n".join(all_lines)
+                    )
+                    usage = _extract_usage(result)
+                    incomplete = _is_incomplete(response_text, "\n".join(all_lines))
 
-                response_text = _postprocess(
-                    research_crew.postprocess(result), "\n".join(all_lines)
-                )
-                usage = _extract_usage(result)
-                incomplete = _is_incomplete(response_text, "\n".join(all_lines))
+                    yield _sse(
+                        "done",
+                        {
+                            "response": response_text,
+                            "reasoning": all_lines,
+                            "token_usage": usage,
+                            "incomplete": incomplete,
+                        },
+                    )
 
-                yield _sse(
-                    "done",
-                    {
-                        "response": response_text,
-                        "reasoning": all_lines,
-                        "token_usage": usage,
-                        "incomplete": incomplete,
-                    },
-                )
-
-                _maybe_unload_ollama()
+                    _maybe_unload_ollama()
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -337,7 +501,7 @@ def register_chat_routes(app):
             db = request.app.state.db
             file_context = await get_file_context(db, user["id"], req.file_ids)
 
-        model = request.app.state.current_model
+        model, _ = await resolve_model(request, user["id"])
         if model.startswith("ollama/"):
             litellm_model = "ollama_chat/" + model[len("ollama/"):]
         else:
@@ -385,7 +549,11 @@ def register_chat_routes(app):
                 len(req.original_query),
                 len(req.partial_response),
             )
-            response = await loop.run_in_executor(None, _call_llm)
+            # Continuing an answer is another model call, so it waits its
+            # turn like everything else.
+            async with GPU.exclusive(Need("ollama", model.replace("ollama/", "")),
+                                     "continue", user=user["id"]):
+                response = await loop.run_in_executor(None, _call_llm)
             text = response.choices[0].message.content or ""
             logger.info("[chat/continue] LLM returned %d chars", len(text))
             text = re.sub(r"<think>[\s\S]*?</think>\s*", "", text).strip()

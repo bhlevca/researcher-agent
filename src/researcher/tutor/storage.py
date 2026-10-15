@@ -5,6 +5,7 @@ vocabulary entries, lesson plans, and quiz results in SQLite.
 """
 
 import os
+import re
 import json
 import uuid
 import logging
@@ -13,8 +14,44 @@ from datetime import datetime, timezone, timedelta
 import aiosqlite
 
 SRS_INITIAL_EASE = float(os.environ.get("SRS_INITIAL_EASE", "2.5"))
+# Scheduler: "fsrs" (default) or "sm2" to fall back to the pre-2.6 algorithm.
+SRS_ALGO = os.environ.get("SRS_ALGO", "fsrs").strip().lower()
+# Target probability of recall at review time. Lower = fewer, longer-spaced
+# reviews; higher = more frequent. 0.9 is the FSRS default.
+SRS_DESIRED_RETENTION = float(os.environ.get("SRS_DESIRED_RETENTION", "0.9"))
+# Ceiling on any interval. FSRS's own default is 36500 days, which is meaningless
+# for language study — a word you next see in 11 years is not being learned.
+SRS_MAX_INTERVAL = int(os.environ.get("SRS_MAX_INTERVAL", "365"))
 
 logger = logging.getLogger(__name__)
+
+
+def get_srs_params() -> dict:
+    """Current spaced-repetition settings, for the Params panel."""
+    return {
+        "srs_algo": SRS_ALGO,
+        "srs_desired_retention": SRS_DESIRED_RETENTION,
+        "srs_max_interval": SRS_MAX_INTERVAL,
+        "srs_initial_ease": SRS_INITIAL_EASE,
+    }
+
+
+def update_srs_params(params: dict) -> dict:
+    """Update spaced-repetition settings at runtime."""
+    global SRS_ALGO, SRS_DESIRED_RETENTION, SRS_MAX_INTERVAL, SRS_INITIAL_EASE
+
+    if "srs_algo" in params:
+        val = str(params["srs_algo"]).lower().strip()
+        if val in ("fsrs", "sm2"):
+            SRS_ALGO = val
+    if "srs_desired_retention" in params:
+        # Below ~0.7 scheduling becomes erratic; above 0.97 reviews explode.
+        SRS_DESIRED_RETENTION = max(0.7, min(0.97, float(params["srs_desired_retention"])))
+    if "srs_max_interval" in params:
+        SRS_MAX_INTERVAL = max(1, min(36500, int(params["srs_max_interval"])))
+    if "srs_initial_ease" in params:
+        SRS_INITIAL_EASE = max(1.3, min(4.0, float(params["srs_initial_ease"])))
+    return get_srs_params()
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +127,14 @@ async def init_tutor_tables(db: aiosqlite.Connection):
         "ALTER TABLE vocabulary ADD COLUMN interval_days INTEGER NOT NULL DEFAULT 1",
         "ALTER TABLE vocabulary ADD COLUMN ease_factor   REAL    NOT NULL DEFAULT 2.5",
         "ALTER TABLE vocabulary ADD COLUMN lapses        INTEGER NOT NULL DEFAULT 0",
+        # FSRS state. NULL stability means "not yet migrated from SM-2" — the
+        # scheduler seeds it from interval_days/ease_factor on first review so
+        # existing cards keep their place instead of restarting.
+        "ALTER TABLE vocabulary ADD COLUMN fsrs_stability  REAL",
+        "ALTER TABLE vocabulary ADD COLUMN fsrs_difficulty REAL",
+        "ALTER TABLE vocabulary ADD COLUMN fsrs_state      INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE vocabulary ADD COLUMN fsrs_step       INTEGER",
+        "ALTER TABLE vocabulary ADD COLUMN last_review     TEXT",
     ):
         try:
             await db.execute(col_sql)
@@ -146,6 +191,24 @@ async def init_tutor_tables(db: aiosqlite.Connection):
             level         TEXT NOT NULL DEFAULT 'A1',
             content       TEXT NOT NULL DEFAULT '{}',
             created_at    TEXT NOT NULL,
+            FOREIGN KEY (session_id) REFERENCES tutor_sessions(id)
+        )
+        """)
+
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS passages (
+            id             TEXT PRIMARY KEY,
+            user_id        TEXT NOT NULL DEFAULT '',
+            session_id     TEXT NOT NULL,
+            title          TEXT NOT NULL DEFAULT '',
+            topic          TEXT NOT NULL DEFAULT '',
+            target_lang    TEXT NOT NULL DEFAULT '',
+            level          TEXT NOT NULL DEFAULT 'A1',
+            content        TEXT NOT NULL DEFAULT '',
+            seeded_words   TEXT NOT NULL DEFAULT '[]',
+            word_count     INTEGER NOT NULL DEFAULT 0,
+            unknown_ratio  REAL    NOT NULL DEFAULT 0.0,
+            created_at     TEXT NOT NULL,
             FOREIGN KEY (session_id) REFERENCES tutor_sessions(id)
         )
         """)
@@ -490,9 +553,8 @@ async def update_vocabulary_mastery(
         (correct, vocab_id),
     )
     await db.commit()
-    # Apply SM-2 scheduling
     grade = 5 if correct else 1
-    await sm2_review(db, vocab_id, grade)
+    await schedule_review(db, vocab_id, grade)
 
 
 def _sm2_compute(
@@ -520,6 +582,131 @@ def _sm2_compute(
     new_ef = ease_factor + 0.1 - (5 - grade) * (0.08 + (5 - grade) * 0.02)
     new_ef = max(1.3, round(new_ef, 3))
     return new_interval, new_ef, is_lapse
+
+
+def _grade_to_rating(grade: int):
+    """Map an SM-2 0–5 grade onto an FSRS rating.
+
+    Keeps the existing call sites (and the quiz grader's 0–5 vocabulary) intact
+    while the scheduler underneath changes.
+    """
+    from fsrs import Rating
+
+    if grade < 3:
+        return Rating.Again
+    if grade == 3:
+        return Rating.Hard
+    if grade == 4:
+        return Rating.Good
+    return Rating.Easy
+
+
+def _seed_fsrs_from_sm2(interval_days: int, ease_factor: float, lapses: int) -> tuple:
+    """Derive initial FSRS (stability, difficulty) from accumulated SM-2 state.
+
+    Without this, switching schedulers would reset every card a learner has
+    already driven out to a long interval, forcing them to re-review words they
+    know well.
+
+    * stability ≈ the current interval — both express "days until recall
+      probability decays to ~90%".
+    * difficulty is FSRS's 1 (easiest) – 10 (hardest) scale, mapped from SM-2's
+      inverted ease factor, where 1.3 is hardest and ~3.3 easiest. Lapses nudge
+      it upward, since a lapsed card is by definition harder than its ease says.
+    """
+    stability = max(0.5, float(interval_days or 1))
+    ease = float(ease_factor or SRS_INITIAL_EASE)
+    difficulty = 10.0 - ((ease - 1.3) / 2.0) * 9.0
+    difficulty += min(2.0, 0.25 * int(lapses or 0))
+    difficulty = max(1.0, min(10.0, round(difficulty, 4)))
+    return stability, difficulty
+
+
+async def fsrs_review(db: aiosqlite.Connection, vocab_id: str, grade: int):
+    """Schedule the next review with FSRS.
+
+    FSRS tracks difficulty, stability and retrievability per card, fitted to
+    hundreds of millions of real reviews. It needs roughly 20–30% fewer reviews
+    than SM-2 for the same retention.
+
+    interval_days and ease_factor are still written so the UI, the stats
+    endpoint and a rollback to SRS_ALGO=sm2 all keep working.
+    """
+    from fsrs import Card, Scheduler, State
+
+    cursor = await db.execute(
+        "SELECT interval_days, ease_factor, lapses, fsrs_stability, "
+        "fsrs_difficulty, fsrs_state, fsrs_step, last_review, times_reviewed "
+        "FROM vocabulary WHERE id = ?",
+        (vocab_id,),
+    )
+    row = await cursor.fetchone()
+    if not row:
+        return
+
+    (interval_days, ease_factor, lapses, stability, difficulty,
+     state, step, last_review, times_reviewed) = row
+
+    if stability is None:
+        # First review under FSRS: carry the card's SM-2 history across.
+        if (times_reviewed or 0) > 0:
+            stability, difficulty = _seed_fsrs_from_sm2(
+                interval_days, ease_factor, lapses
+            )
+            state = State.Review.value
+            step = None
+            # FSRS derives retrievability from time since last_review. Leaving it
+            # NULL means "zero elapsed time", which makes a long-interval card
+            # look perfectly retained and sends the next interval to ~5000 days.
+            # The card was in fact last seen one interval ago, so say so.
+            if not last_review:
+                last_review = (
+                    datetime.now(timezone.utc)
+                    - timedelta(days=max(1, int(interval_days or 1)))
+                ).isoformat()
+        else:
+            stability = difficulty = None  # genuinely new card
+
+    card = Card(
+        card_id=int(datetime.now(timezone.utc).timestamp() * 1000),
+        state=State(state or State.Learning.value),
+        step=step,
+        stability=stability,
+        difficulty=difficulty,
+        last_review=datetime.fromisoformat(last_review) if last_review else None,
+    )
+
+    now = datetime.now(timezone.utc)
+    scheduler = Scheduler(
+        desired_retention=SRS_DESIRED_RETENTION,
+        maximum_interval=SRS_MAX_INTERVAL,
+    )
+    card, _log = scheduler.review_card(card, _grade_to_rating(grade), now)
+
+    new_interval = max(1, (card.due.date() - now.date()).days)
+    is_lapse = grade < 3
+    await db.execute(
+        "UPDATE vocabulary SET next_review = ?, interval_days = ?, "
+        "fsrs_stability = ?, fsrs_difficulty = ?, fsrs_state = ?, fsrs_step = ?, "
+        "last_review = ?, lapses = lapses + ? WHERE id = ?",
+        (
+            card.due.date().isoformat(), new_interval,
+            card.stability, card.difficulty, card.state.value, card.step,
+            now.isoformat(), 1 if is_lapse else 0, vocab_id,
+        ),
+    )
+    await db.commit()
+
+
+async def schedule_review(db: aiosqlite.Connection, vocab_id: str, grade: int):
+    """Schedule the next review using the configured algorithm.
+
+    SRS_ALGO=sm2 restores the previous scheduler; FSRS is the default.
+    """
+    if SRS_ALGO == "sm2":
+        await sm2_review(db, vocab_id, grade)
+    else:
+        await fsrs_review(db, vocab_id, grade)
 
 
 async def sm2_review(db: aiosqlite.Connection, vocab_id: str, grade: int):
@@ -633,6 +820,26 @@ async def save_lesson_plan(
     )
     await db.commit()
     return {"id": lid, "title": title, "topic": topic, "created_at": now}
+
+
+async def list_all_lesson_plans(
+    db: aiosqlite.Connection, user_id: str, limit: int = 200
+) -> list[dict]:
+    """Every lesson this user has saved, across all sessions.
+
+    The printable-sheets panel is not tied to a tutor session, so it needs the
+    whole list; list_lesson_plans is per-session and cannot serve it.
+    """
+    cursor = await db.execute(
+        "SELECT id, title, topic, lesson_type, target_lang, level, created_at "
+        "FROM lesson_plans WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+        (user_id, int(limit)),
+    )
+    return [
+        {"id": r[0], "title": r[1], "topic": r[2], "lesson_type": r[3],
+         "target_lang": r[4], "level": r[5], "created_at": r[6]}
+        for r in await cursor.fetchall()
+    ]
 
 
 async def list_lesson_plans(
@@ -1017,3 +1224,295 @@ async def get_cross_session_stats(
             "total_interactions": total_messages,
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# Reading passages (comprehensible input)
+# ---------------------------------------------------------------------------
+
+# Word characters across Latin, Cyrillic, Greek and the common diacritics. Kept
+# deliberately simple: this measures *coverage*, not linguistics, so lemmatising
+# would add a dependency for little gain at these sample sizes.
+_WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
+
+
+def tokenise_words(text: str) -> list[str]:
+    """Lowercased word tokens, punctuation and digits removed."""
+    return [w.lower() for w in _WORD_RE.findall(text or "")]
+
+
+# Function words — articles, pronouns, prepositions, conjunctions, auxiliaries.
+# These are acquired almost immediately and are not "vocabulary to learn", so
+# counting them as unknown makes the i+1 ratio meaningless for any learner whose
+# saved word list is short (i.e. every beginner, which is who this is for).
+_FUNCTION_WORDS: dict[str, set[str]] = {
+    "french": set("""le la les un une des du de d au aux a à et ou mais donc or ni car
+        je tu il elle on nous vous ils elles me te se lui leur y en
+        ce cet cette ces son sa ses mon ma mes ton ta tes notre votre leurs
+        qui que quoi dont où est sont suis es sommes êtes était étaient être
+        ai as a avons avez ont avait avaient avoir fait faire pas ne plus très
+        pour par sur sous dans avec sans chez vers entre comme si oui non
+        ça cela celui celle tout tous toute toutes bien aussi encore""".split()),
+    "spanish": set("""el la los las un una unos unas de del al a y o pero porque
+        yo tu él ella nosotros vosotros ellos ellas me te se le les lo nos os
+        que quien cual donde es son soy eres somos sois era eran ser estar
+        está están he has ha hemos han había habían tener tiene no sí muy
+        para por sobre bajo en con sin hacia entre como si su sus mi mis tu tus
+        este esta estos estas ese esa eso todo todos toda todas también más""".split()),
+    "german": set("""der die das den dem des ein eine einen einem einer eines
+        ich du er sie es wir ihr mich dich sich uns euch mir dir ihm ihnen
+        und oder aber denn weil dass ob wenn als wie so auch noch nur schon
+        ist sind bin bist seid war waren sein habe hast hat haben hatte hatten
+        nicht kein keine in an auf für mit von zu bei nach aus über unter vor
+        mein dein ihr unser euer alle alles diese dieser dieses sehr""".split()),
+    "italian": set("""il lo la i gli le un uno una del della dei delle di a da in
+        con su per tra fra e o ma perché che chi cui dove io tu lui lei noi voi
+        loro mi ti si ci vi è sono sei siamo siete era erano essere ho hai ha
+        abbiamo avete hanno non sì molto anche ancora già questo questa quello
+        mio tuo suo nostro vostro tutto tutti come se quando""".split()),
+    "portuguese": set("""o a os as um uma uns umas de do da dos das em no na nos nas
+        ao aos à às por para com sem sobre e ou mas porque que quem qual onde
+        eu tu ele ela nós vós eles elas me te se lhe lhes nos vos é são sou és
+        somos era eram ser estar está estão tenho tem temos têm não sim muito
+        meu teu seu nosso vosso todo todos toda todas este esta esse essa como se""".split()),
+    "english": set("""the a an of to in on at by for with from and or but so if
+        i you he she it we they me him her us them my your his its our their
+        is are am was were be been being have has had do does did not no yes
+        this that these those what which who whom whose where when how very
+        as than then there here all some any more most much many""".split()),
+    "romanian": set("""un o unui unei niște al a ai ale cel cea cei cele
+        eu tu el ea noi voi ei ele mă te se ne vă îl îi le îmi îți îi
+        și sau dar că să nu da este sunt sînt era erau fi fost am ai are avem
+        aveți au de la în pe cu fără despre pentru prin sub peste între ca dacă
+        acest această acești aceste acel acea meu tău său nostru vostru foarte""".split()),
+}
+
+
+def _function_words(target_lang: str) -> set[str]:
+    """Function-word set for a language name, empty if we have no list."""
+    return _FUNCTION_WORDS.get((target_lang or "").strip().lower(), set())
+
+
+def compute_unknown_ratio(
+    text: str, known_words: set[str], target_lang: str = ""
+) -> tuple[float, int, list[str]]:
+    """Measure how much of *text* is new to the learner.
+
+    Returns ``(unknown_ratio, word_count, sample_unknown)``.
+
+    Krashen's *i+1* says input should sit just above current ability — in
+    practice about 10% unknown. Below that the learner is not stretched; far
+    above it, comprehension collapses and the input stops being comprehensible.
+    This is what lets the UI tell the learner whether a passage is pitched right.
+
+    Function words are excluded from the measurement. Without that, a beginner
+    with a handful of saved words scores ~95% unknown on an A1 passage — the
+    articles and pronouns dominate — and the number tells them nothing.
+    """
+    tokens = tokenise_words(text)
+    if not tokens:
+        return 0.0, 0, []
+
+    known = {w.lower() for w in known_words}
+    stop = _function_words(target_lang)
+
+    content = {t for t in tokens if t not in stop and len(t) > 1}
+    if not content:
+        return 0.0, len(tokens), []
+
+    # Distinct words: meeting one hard word ten times is one thing to learn.
+    unknown = sorted(content - known)
+    ratio = len(unknown) / len(content)
+    return round(ratio, 4), len(tokens), unknown[:40]
+
+
+async def known_words_for(
+    db: aiosqlite.Connection, user_id: str, target_lang: str
+) -> set[str]:
+    """Every word the learner has in their vocabulary for this language."""
+    cursor = await db.execute(
+        "SELECT word FROM vocabulary WHERE user_id = ? AND target_lang = ?",
+        (user_id, target_lang),
+    )
+    rows = await cursor.fetchall()
+    out: set[str] = set()
+    for r in rows:
+        out.update(tokenise_words(r[0]))
+    return out
+
+
+async def save_passage(
+    db: aiosqlite.Connection,
+    user_id: str,
+    session_id: str,
+    title: str,
+    topic: str,
+    target_lang: str,
+    level: str,
+    content: str,
+    seeded_words: list[str],
+    word_count: int,
+    unknown_ratio: float,
+) -> dict:
+    pid = uuid.uuid4().hex[:12]
+    now = datetime.now(timezone.utc).isoformat()
+    await db.execute(
+        "INSERT INTO passages (id, user_id, session_id, title, topic, target_lang, "
+        "level, content, seeded_words, word_count, unknown_ratio, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (pid, user_id, session_id, title, topic, target_lang, level, content,
+         json.dumps(seeded_words), word_count, unknown_ratio, now),
+    )
+    await db.commit()
+    return {
+        "id": pid, "session_id": session_id, "title": title, "topic": topic,
+        "target_lang": target_lang, "level": level, "content": content,
+        "seeded_words": seeded_words, "word_count": word_count,
+        "unknown_ratio": unknown_ratio, "created_at": now,
+    }
+
+
+def _passage_row_to_dict(r) -> dict:
+    return {
+        "id": r[0], "session_id": r[1], "title": r[2], "topic": r[3],
+        "target_lang": r[4], "level": r[5], "content": r[6],
+        "seeded_words": json.loads(r[7] or "[]"), "word_count": r[8],
+        "unknown_ratio": r[9], "created_at": r[10],
+    }
+
+
+_PASSAGE_SELECT = (
+    "SELECT id, session_id, title, topic, target_lang, level, content, "
+    "seeded_words, word_count, unknown_ratio, created_at "
+)
+
+
+async def list_passages(
+    db: aiosqlite.Connection, user_id: str, session_id: str
+) -> list[dict]:
+    cursor = await db.execute(
+        _PASSAGE_SELECT
+        + "FROM passages WHERE user_id = ? AND session_id = ? ORDER BY created_at DESC",
+        (user_id, session_id),
+    )
+    return [_passage_row_to_dict(r) for r in await cursor.fetchall()]
+
+
+async def get_passage(
+    db: aiosqlite.Connection, user_id: str, passage_id: str
+) -> dict | None:
+    cursor = await db.execute(
+        _PASSAGE_SELECT + "FROM passages WHERE id = ? AND user_id = ?",
+        (passage_id, user_id),
+    )
+    row = await cursor.fetchone()
+    return _passage_row_to_dict(row) if row else None
+
+
+async def delete_passage(
+    db: aiosqlite.Connection, user_id: str, passage_id: str
+) -> bool:
+    cursor = await db.execute(
+        "DELETE FROM passages WHERE id = ? AND user_id = ?", (passage_id, user_id)
+    )
+    await db.commit()
+    return cursor.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Printable sheets
+# ---------------------------------------------------------------------------
+#
+# Stored as a RECIPE (language, level, kind, sections, seed), never as the
+# finished exercises. The generators are deterministic, so the recipe rebuilds
+# the identical sheet whenever it is needed: a test printed in March can have
+# its answer key reprinted in June and the two still match.
+
+
+async def init_sheet_tables(db: aiosqlite.Connection):
+    await db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS tutor_sheets (
+            id          TEXT PRIMARY KEY,
+            user_id     TEXT NOT NULL DEFAULT '',
+            title       TEXT NOT NULL,
+            language    TEXT NOT NULL,
+            level       TEXT NOT NULL DEFAULT 'A1',
+            kind        TEXT NOT NULL DEFAULT 'homework',
+            sections    TEXT NOT NULL DEFAULT '[]',
+            seed        INTEGER NOT NULL,
+            student     TEXT NOT NULL DEFAULT '',
+            notes       TEXT NOT NULL DEFAULT '',
+            content     TEXT NOT NULL DEFAULT '',
+            created_at  TEXT NOT NULL
+        )
+        """
+    )
+    # A story sheet cannot be rebuilt from a seed — a second model call writes a
+    # different story — so its generated text is stored verbatim.
+    cur = await db.execute("PRAGMA table_info(tutor_sheets)")
+    if "content" not in {r[1] for r in await cur.fetchall()}:
+        await db.execute("ALTER TABLE tutor_sheets "
+                         "ADD COLUMN content TEXT NOT NULL DEFAULT ''")
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tutor_sheets_user "
+        "ON tutor_sheets(user_id, created_at DESC)"
+    )
+    await db.commit()
+
+
+_SHEET_COLS = ("id, title, language, level, kind, sections, seed, student, "
+               "notes, content, created_at")
+
+
+def _sheet_row(r) -> dict:
+    return {"id": r[0], "title": r[1], "language": r[2], "level": r[3],
+            "kind": r[4], "sections": json.loads(r[5] or "[]"), "seed": r[6],
+            "student": r[7], "notes": r[8],
+            "content": json.loads(r[9]) if r[9] else None,
+            "created_at": r[10]}
+
+
+async def save_sheet(db: aiosqlite.Connection, user_id: str, *, title: str,
+                     language: str, level: str, kind: str, sections: list,
+                     seed: int, student: str = "", notes: str = "",
+                     content: dict | None = None) -> dict:
+    sid = uuid.uuid4().hex[:8]
+    now = datetime.now(timezone.utc).isoformat()
+    await db.execute(
+        "INSERT INTO tutor_sheets (id, user_id, title, language, level, kind, "
+        "sections, seed, student, notes, content, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (sid, user_id, title, language, level, kind, json.dumps(sections),
+         int(seed), student, notes,
+         json.dumps(content, ensure_ascii=False) if content else "", now))
+    await db.commit()
+    return {"id": sid, "title": title, "language": language, "level": level,
+            "kind": kind, "sections": sections, "seed": seed,
+            "student": student, "notes": notes, "content": content,
+            "created_at": now}
+
+
+async def list_sheets(db: aiosqlite.Connection, user_id: str,
+                      limit: int = 100) -> list[dict]:
+    cur = await db.execute(
+        f"SELECT {_SHEET_COLS} FROM tutor_sheets WHERE user_id = ? "
+        "ORDER BY created_at DESC LIMIT ?", (user_id, int(limit)))
+    return [_sheet_row(r) for r in await cur.fetchall()]
+
+
+async def get_sheet(db: aiosqlite.Connection, user_id: str,
+                    sid: str) -> dict | None:
+    cur = await db.execute(
+        f"SELECT {_SHEET_COLS} FROM tutor_sheets WHERE id = ? AND user_id = ?",
+        (sid, user_id))
+    row = await cur.fetchone()
+    return _sheet_row(row) if row else None
+
+
+async def delete_sheet(db: aiosqlite.Connection, user_id: str,
+                       sid: str) -> bool:
+    cur = await db.execute(
+        "DELETE FROM tutor_sheets WHERE id = ? AND user_id = ?", (sid, user_id))
+    await db.commit()
+    return cur.rowcount > 0

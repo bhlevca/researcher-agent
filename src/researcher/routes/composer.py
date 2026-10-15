@@ -8,6 +8,7 @@ import sys
 import io
 import re
 import json
+import pathlib
 import queue
 import asyncio
 import threading
@@ -19,6 +20,8 @@ from fastapi.responses import StreamingResponse, Response
 from researcher.auth import get_current_user
 from researcher.config import _QueueWriter, _SESSION_ID_RE
 from researcher.composer.crew import ComposerCrew
+from researcher.gpu_broker import GPU, Need, queue_message
+from researcher.user_crews import get_crew, resolve_model
 
 from researcher.composer.models import (
     ComposerSessionCreate,
@@ -43,13 +46,9 @@ from researcher.composer.storage import (
 logger = logging.getLogger(__name__)
 
 
-def _get_composer_crew(request: Request, uid: str) -> ComposerCrew:
-    """Return the per-user ComposerCrew, creating it on first access."""
-    if uid not in request.app.state.composer_crews:
-        request.app.state.composer_crews[uid] = ComposerCrew(
-            model=request.app.state.current_model
-        )
-    return request.app.state.composer_crews[uid]
+async def _get_composer_crew(request: Request, uid: str) -> ComposerCrew:
+    """The per-user ComposerCrew, built with the model that person chose."""
+    return await get_crew(request, uid, "composer")
 
 
 def _validate_sid(session_id: str):
@@ -127,73 +126,83 @@ async def _stream_composer_crew(crew, request: Request, uid: str, timeout_sec: i
         cancel = request.app.state.cancel_events[uid]
         cancel.clear()
         async with semaphore:
-            loop = asyncio.get_running_loop()
-            future = loop.run_in_executor(None, lambda: _run_composer_crew(crew, q))
-            all_lines: list[str] = []
-            elapsed = 0.0
+            # One card, one queue: the composer takes its turn beside the
+            # researcher and the tutor rather than loading a second model
+            # alongside them.
+            _chosen, _ = await resolve_model(request, uid)
+            _need = Need("ollama", str(_chosen).replace("ollama/", ""))
+            async with GPU.reserve(_need, "composer", user=uid) as _res:
+                async for _notice in _res.wait():
+                    yield _sse("queue", queue_message(
+                        _notice["position"], _notice["estimate"],
+                        _notice["ticket"]))
+                loop = asyncio.get_running_loop()
+                future = loop.run_in_executor(None, lambda: _run_composer_crew(crew, q))
+                all_lines: list[str] = []
+                elapsed = 0.0
 
-            early_exit: str | None = None  # "cancelled" | "timeout"
+                early_exit: str | None = None  # "cancelled" | "timeout"
 
-            while not future.done():
-                if cancel.is_set() and early_exit is None:
-                    early_exit = "cancelled"
-                    yield _sse("cancelled", "Request cancelled by user")
-                if elapsed >= timeout_sec and early_exit is None:
-                    early_exit = "timeout"
-                    yield _sse("error", f"Request timed out after {timeout_sec}s")
-                await asyncio.sleep(0.15)
-                elapsed += 0.15
+                while not future.done():
+                    if cancel.is_set() and early_exit is None:
+                        early_exit = "cancelled"
+                        yield _sse("cancelled", "Request cancelled by user")
+                    if elapsed >= timeout_sec and early_exit is None:
+                        early_exit = "timeout"
+                        yield _sse("error", f"Request timed out after {timeout_sec}s")
+                    await asyncio.sleep(0.15)
+                    elapsed += 0.15
+                    while not q.empty():
+                        try:
+                            line = q.get_nowait()
+                            all_lines.append(line)
+                            if early_exit is None and _should_show(line):
+                                yield _sse("reasoning", line)
+                        except queue.Empty:
+                            break
+
+                if early_exit is not None:
+                    # Drain queue silently; semaphore releases after thread finished
+                    while not q.empty():
+                        q.get_nowait()
+                    return
+
+                # Drain remaining
                 while not q.empty():
                     try:
                         line = q.get_nowait()
                         all_lines.append(line)
-                        if early_exit is None and _should_show(line):
+                        if _should_show(line):
                             yield _sse("reasoning", line)
                     except queue.Empty:
                         break
 
-            if early_exit is not None:
-                # Drain queue silently; semaphore releases after thread finished
-                while not q.empty():
-                    q.get_nowait()
-                return
-
-            # Drain remaining
-            while not q.empty():
                 try:
-                    line = q.get_nowait()
-                    all_lines.append(line)
-                    if _should_show(line):
-                        yield _sse("reasoning", line)
-                except queue.Empty:
-                    break
+                    result = future.result()
+                except Exception as e:
+                    yield _sse("error", str(e))
+                    return
 
-            try:
-                result = future.result()
-            except Exception as e:
-                yield _sse("error", str(e))
-                return
+                response_text = result.raw if hasattr(result, "raw") else str(result)
+                response_text = re.sub(r"<think>[\s\S]*?</think>\s*", "", response_text).strip()
 
-            response_text = result.raw if hasattr(result, "raw") else str(result)
-            response_text = re.sub(r"<think>[\s\S]*?</think>\s*", "", response_text).strip()
+                # Detect if response contains a score (JSON or XML)
+                has_score = False
+                if '<score-partwise' in response_text or '```xml' in response_text:
+                    has_score = True
+                elif '```json' in response_text and '"parts"' in response_text:
+                    has_score = True
+                elif '"parts"' in response_text and '"measures"' in response_text:
+                    has_score = True
 
-            # Detect if response contains a score (JSON or XML)
-            has_score = False
-            if '<score-partwise' in response_text or '```xml' in response_text:
-                has_score = True
-            elif '```json' in response_text and '"parts"' in response_text:
-                has_score = True
-            elif '"parts"' in response_text and '"measures"' in response_text:
-                has_score = True
-
-            yield _sse(
-                "done",
-                {
-                    "response": response_text,
-                    "reasoning": all_lines,
-                    "has_score": has_score,
-                },
-            )
+                yield _sse(
+                    "done",
+                    {
+                        "response": response_text,
+                        "reasoning": all_lines,
+                        "has_score": has_score,
+                    },
+                )
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -271,7 +280,7 @@ def register_composer_routes(app):
             raise HTTPException(status_code=404, detail="Composer session not found")
 
         uid = user["id"]
-        composer_crew = _get_composer_crew(request, uid)
+        composer_crew = await _get_composer_crew(request, uid)
         context = _build_composer_context(session["messages"])
 
         crew = composer_crew.build_chat_crew(
@@ -301,7 +310,141 @@ def register_composer_routes(app):
             raise HTTPException(status_code=404, detail="Composer session not found")
 
         uid = user["id"]
-        composer_crew = _get_composer_crew(request, uid)
+        composer_crew = await _get_composer_crew(request, uid)
+
+        # ── Specialist path ──────────────────────────────────────────────
+        # A model pre-trained on ABC writes idiomatic music; a general chat
+        # model writes exercises. When one is configured, call it directly:
+        # it has no tools and needs no planning loop, so routing it through
+        # CrewAI would only add minutes and a format it does not speak.
+        from researcher.composer import specialist
+
+        if specialist.COMPOSER_MODEL:
+            from researcher.composer.knowledge.loader import get_genre_block
+
+            style_guide = get_genre_block(req.style or session["genre"]) or ""
+
+            def _sse(event, data):
+                return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+            async def specialist_stream():
+                yield _sse("reasoning",
+                           f"🎼 Composing with {specialist.COMPOSER_MODEL}")
+
+                # Long form is assembled, not requested in one go: a single
+                # model call holds together for 8-16 bars and then repeats.
+                if req.minutes and req.minutes >= 0.5:
+                    yield _sse("reasoning",
+                               f"🏗️ Assembling ~{req.minutes:g} min from recurring "
+                               f"sections with extended harmony")
+                    loop = asyncio.get_running_loop()
+                    # The specialist runs its own crew, so it queues too.
+                    _chosen, _ = await resolve_model(request, uid)
+                    async with GPU.exclusive(
+                            Need("ollama", str(_chosen).replace("ollama/", "")),
+                            "composer", user=uid):
+                        score, info = await loop.run_in_executor(
+                            None,
+                            lambda: specialist.compose_long(
+                                description=req.description,
+                                genre=session["genre"],
+                                key_signature=session["key_signature"],
+                                time_signature=session["time_signature"],
+                                tempo=session["tempo"],
+                                minutes=req.minutes,
+                                style_guide=style_guide,
+                                instruments=req.instruments,
+                            ),
+                        )
+                    if score is None:
+                        yield _sse("error", "Could not assemble the piece.")
+                        return
+                    seeded = ("seeded by the specialist" if info.get("used_specialist")
+                              else "using a default motif")
+                    yield _sse("reasoning",
+                               f"📐 {info['bars']} bars, {info['seconds']/60:.1f} min, "
+                               f"{info['sections']} sections, {seeded}")
+                    import tempfile as _tf
+                    with _tf.NamedTemporaryFile(suffix=".musicxml", delete=False) as t:
+                        xml_path = t.name
+                    score.write("musicxml", fp=xml_path)
+                    xml = pathlib.Path(xml_path).read_text()
+                    pathlib.Path(xml_path).unlink(missing_ok=True)
+                    yield _sse("done", {
+                        "response": (
+                            f"Composed a {info['seconds']/60:.1f}-minute piece: "
+                            f"{info['bars']} bars in {info['sections']} sections.\n\n"
+                            f"```musicxml\n{xml}\n```"
+                        ),
+                        "reasoning": [f"Assembled by realize.py, {seeded}"],
+                        "token_usage": {}, "incomplete": False,
+                    })
+                    return
+                loop = asyncio.get_running_loop()
+                # The specialist runs its own crew, so it queues too.
+                _chosen, _ = await resolve_model(request, uid)
+                async with GPU.exclusive(
+                        Need("ollama", str(_chosen).replace("ollama/", "")),
+                        "composer", user=uid):
+                    abc = await loop.run_in_executor(
+                        None,
+                        lambda: specialist.compose(
+                            description=req.description,
+                            genre=session["genre"],
+                            key_signature=session["key_signature"],
+                            time_signature=session["time_signature"],
+                            tempo=session["tempo"],
+                            bars=req.measures,
+                            style_guide=style_guide,
+                        ),
+                    )
+                if not abc:
+                    yield _sse("error", "The composer model returned nothing.")
+                    return
+                abc, repairs = specialist.sanitize_abc(abc)
+                if repairs:
+                    yield _sse("reasoning", "🧹 Fixed notation: " + ", ".join(repairs))
+                report = composer_crew.validate_abc(abc, session["time_signature"])
+                yield _sse("reasoning",
+                           f"📐 {report['measures']} bars, "
+                           f"{report['stepwise_pct']:.0f}% stepwise, "
+                           f"longest run {report['longest_run']}")
+                if not report["ok"] and report.get("short_bars"):
+                    fixed, bars = composer_crew.repair_bar_lengths(
+                        abc, session["time_signature"])
+                    if fixed:
+                        yield _sse("reasoning",
+                                   f"🔧 Re-barred {report['short_bars']} short bar(s)")
+                        abc = fixed
+
+                # The specialist supplies idiomatic material; this enforces what
+                # it reliably gets wrong — scale runs, and a bare single line.
+                try:
+                    from researcher.composer import realize
+
+                    polished, prep = realize.polish(
+                        abc, genre=session["genre"],
+                        key_name=session["key_signature"],
+                        tempo=session["tempo"])
+                    if polished is not None:
+                        notes = []
+                        if prep["scale_runs_fixed"]:
+                            notes.append(f"broke {prep['scale_runs_fixed']} scale run(s)")
+                        if prep["bass_added"]:
+                            notes.append("added a bass line from the chord symbols")
+                        if notes:
+                            yield _sse("reasoning", "🎹 Polished: " + ", ".join(notes))
+                except Exception as e:
+                    logger.warning("[Composer] polish skipped: %s", e)
+                yield _sse("done", {
+                    "response": f"```abc\n{abc}\n```",
+                    "reasoning": [f"Composed by {specialist.COMPOSER_MODEL}"],
+                    "token_usage": {},
+                    "incomplete": False,
+                })
+
+            return StreamingResponse(specialist_stream(),
+                                     media_type="text/event-stream")
 
         crew = composer_crew.build_score_crew(
             description=req.description,
@@ -332,7 +475,7 @@ def register_composer_routes(app):
             raise HTTPException(status_code=404, detail="Composer session not found")
 
         uid = user["id"]
-        composer_crew = _get_composer_crew(request, uid)
+        composer_crew = await _get_composer_crew(request, uid)
 
         crew = composer_crew.build_harmonize_crew(
             melody=req.melody,
@@ -361,7 +504,7 @@ def register_composer_routes(app):
             raise HTTPException(status_code=404, detail="Composer session not found")
 
         uid = user["id"]
-        composer_crew = _get_composer_crew(request, uid)
+        composer_crew = await _get_composer_crew(request, uid)
 
         crew = composer_crew.build_analyze_crew(
             content=req.content,
@@ -398,7 +541,7 @@ def register_composer_routes(app):
                 time_sig = session.get("time_signature", time_sig)
                 tempo = session.get("tempo", tempo)
 
-        composer_crew = _get_composer_crew(request, user["id"])
+        composer_crew = await _get_composer_crew(request, user["id"])
         musicxml = composer_crew.extract_musicxml(
             response_text, key=key_sig, time_signature=time_sig, tempo=tempo,
         )
@@ -426,7 +569,7 @@ def register_composer_routes(app):
         if not session:
             raise HTTPException(status_code=404, detail="Composer session not found")
 
-        composer_crew = _get_composer_crew(request, user["id"])
+        composer_crew = await _get_composer_crew(request, user["id"])
         response_text = body.get("response", "")
         musicxml = composer_crew.extract_musicxml(
             response_text,
@@ -467,6 +610,77 @@ def register_composer_routes(app):
         if not comp:
             raise HTTPException(status_code=404, detail="Composition not found")
         return comp
+
+    @app.post("/composer/convert-midi")
+    async def composer_convert_midi(request: Request):
+        """Render a response's score to MIDI so it can be played in the browser."""
+        user = await get_current_user(request)
+        body = await request.json()
+        response_text = body.get("response", "")
+        if not response_text:
+            raise HTTPException(status_code=400, detail="No response text")
+
+        key_sig, time_sig, tempo = "C major", "4/4", 120
+        session_id = body.get("session_id", "")
+        if session_id:
+            session = await get_composer_session(request.app.state.db, session_id, user["id"])
+            if session:
+                key_sig = session["key_signature"]
+                time_sig = session["time_signature"]
+                tempo = session["tempo"]
+
+        crew = await _get_composer_crew(request, user["id"])
+        musicxml = crew.extract_musicxml(response_text, key_sig, time_sig, tempo)
+        if not musicxml:
+            raise HTTPException(status_code=422, detail="No score found in that response")
+        midi = crew.musicxml_to_midi(musicxml, tempo)
+        if not midi:
+            raise HTTPException(status_code=500, detail="Could not render MIDI")
+        return Response(
+            content=midi,
+            media_type="audio/midi",
+            headers={"Content-Disposition": 'attachment; filename="composition.mid"'},
+        )
+
+    @app.post("/composer/convert-audio")
+    async def composer_convert_audio(request: Request):
+        """Render a response's score to WAV so it can be played in the browser.
+
+        Falls back to 422 when no synth is available, so the UI can offer the
+        MIDI download instead of failing silently.
+        """
+        user = await get_current_user(request)
+        body = await request.json()
+        response_text = body.get("response", "")
+        if not response_text:
+            raise HTTPException(status_code=400, detail="No response text")
+
+        key_sig, time_sig, tempo = "C major", "4/4", 120
+        session_id = body.get("session_id", "")
+        if session_id:
+            session = await get_composer_session(request.app.state.db, session_id, user["id"])
+            if session:
+                key_sig = session["key_signature"]
+                time_sig = session["time_signature"]
+                tempo = session["tempo"]
+
+        crew = await _get_composer_crew(request, user["id"])
+        musicxml = crew.extract_musicxml(response_text, key_sig, time_sig, tempo)
+        if not musicxml:
+            raise HTTPException(status_code=422, detail="No score found in that response")
+        midi = crew.musicxml_to_midi(musicxml, tempo)
+        if not midi:
+            raise HTTPException(status_code=500, detail="Could not render MIDI")
+
+        loop = asyncio.get_running_loop()
+        # gpu-queue-exempt: fluidsynth renders MIDI on the CPU.
+        audio = await loop.run_in_executor(None, crew.midi_to_audio, midi)
+        if not audio:
+            raise HTTPException(
+                status_code=422,
+                detail="No audio synth available on the server; download the MIDI instead",
+            )
+        return Response(content=audio, media_type="audio/wav")
 
     @app.get("/composer/compositions/{composition_id}/musicxml")
     async def composer_download_musicxml(composition_id: str, request: Request):

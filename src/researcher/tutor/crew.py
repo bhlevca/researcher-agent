@@ -15,6 +15,7 @@ from pathlib import Path
 from crewai import Agent, Crew, Process, Task, LLM
 from crewai.agent.planning_config import PlanningConfig
 
+from researcher.llm_options import is_thinking_model as _is_thinking_model
 from researcher.config import probe_model_capabilities, TOOL_CAPABLE_MODEL
 import researcher.patches as _patches  # noqa: F401 — applies CrewAI compatibility patches
 from researcher.tutor.tools import TUTOR_TOOLS
@@ -61,9 +62,22 @@ class TutorCrew:
         self._model_name = model or os.getenv("MODEL", "ollama/qwen3.5:9b")
         self._llm_params: dict = dict(self.DEFAULT_LLM_PARAMS)
         self._llm = self._make_llm(self._model_name, self._llm_params)
+        # For structured output — quiz JSON, story JSON — reasoning is not
+        # worth an empty answer.
+        self._llm_structured = self._make_llm(
+            self._model_name, self._llm_params, thinking=False)
         self._model_caps = probe_model_capabilities(self._model_name)
         self._agents_config = _load_yaml("agents.yaml")
         self._tasks_config = _load_yaml("tasks.yaml")
+
+    @property
+    def model_name(self) -> str:
+        """The model this crew was built with.
+
+        Used to decide whether a cached crew still matches the person's saved
+        choice; without it the cache can only be invalidated by guesswork.
+        """
+        return self._model_name
 
     def get_llm_params(self) -> dict:
         """Return current LLM parameters."""
@@ -75,17 +89,37 @@ class TutorCrew:
             if k in self.DEFAULT_LLM_PARAMS:
                 self._llm_params[k] = v
         self._llm = self._make_llm(self._model_name, self._llm_params)
+        self._llm_structured = self._make_llm(
+            self._model_name, self._llm_params, thinking=False)
         return dict(self._llm_params)
 
     @staticmethod
-    def _make_llm(model: str, params: dict) -> LLM:
-        """Create an LLM instance with Ollama-compatible options."""
-        is_thinking_model = any(k in model.lower() for k in ("qwen3", "deepseek-r1"))
+    def _make_llm(model: str, params: dict, thinking: bool | None = None) -> LLM:
+        """Create an LLM instance with Ollama-compatible options.
+
+        *thinking* overrides the automatic choice. Pass False for a task whose
+        output must be complete and machine-readable.
+
+        Why this matters: a reasoning model spends its OUTPUT budget on the
+        thinking block, and Ollama then strips that block from the response. A
+        quiz asked of qwen3.5 burned 13,694 characters of reasoning, hit
+        num_predict=4096 mid-thought, and returned an empty string — which
+        CrewAI reports as "Invalid response from LLM call" and retries, so the
+        request appears to hang. With thinking off the same quiz answers in
+        three seconds.
+        """
+        is_thinking_model = _is_thinking_model(model)
+        if thinking is not None:
+            is_thinking_model = is_thinking_model and thinking
         seed = int(params.get("seed", 0))
+        num_predict = int(params.get("num_predict", 4096))
+        if is_thinking_model:
+            # The answer has to fit AFTER the reasoning, so the budget cannot
+            # be the same as for a model that writes its answer immediately.
+            num_predict = max(num_predict, 16384)
         ollama_options = {
             "num_ctx": int(params.get("num_ctx", 32768)),
-            "num_gpu": 99,
-            "num_predict": int(params.get("num_predict", 4096)),
+            "num_predict": num_predict,
             "top_k": int(params.get("top_k", 40)),
             "top_p": float(params.get("top_p", 0.9)),
             "min_p": float(params.get("min_p", 0.0)),
@@ -94,8 +128,11 @@ class TutorCrew:
         if seed > 0:
             ollama_options["seed"] = seed
         extra_body: dict = {"options": ollama_options}
-        if is_thinking_model:
-            extra_body["chat_template_kwargs"] = {"enable_thinking": True}
+        if _is_thinking_model(model):
+            # Ollama's own switch, and the only one it honours:
+            # chat_template_kwargs is silently ignored. Measured in
+            # researcher/llm_options.py.
+            extra_body["think"] = bool(is_thinking_model)
         return LLM(
             model=model,
             base_url="http://localhost:11434",
@@ -115,10 +152,9 @@ class TutorCrew:
             extra_body={
                 "options": {
                     "num_ctx": 8192,
-                    "num_gpu": 99,
-                    "num_predict": 2048,
+                            "num_predict": 2048,
                 },
-                "chat_template_kwargs": {"enable_thinking": False},
+                "think": False,
             },
         )
 
@@ -128,6 +164,7 @@ class TutorCrew:
         native_lang: str,
         level: str,
         tools=None,
+        structured: bool = False,
     ) -> Agent:
         """Build the language tutor agent with language-specific config."""
         agent_cfg = self._agents_config["language_tutor"]
@@ -201,7 +238,7 @@ class TutorCrew:
             goal=_sub(agent_cfg["goal"]),
             backstory=backstory,
             tools=tools,
-            llm=self._llm,
+            llm=self._llm_structured if structured else self._llm,
             verbose=True,
             max_iter=int(self._llm_params.get("max_iter", 15)),
             max_retry_limit=2,
@@ -461,6 +498,128 @@ class TutorCrew:
         },
     }
 
+    def build_passage_crew(
+        self,
+        topic: str,
+        target_lang: str,
+        native_lang: str,
+        level: str,
+        due_words: list[dict] | None = None,
+        word_count: int = 180,
+    ) -> Crew:
+        """Build a Crew that writes a levelled reading passage.
+
+        This is the comprehensible-input half of the tutor: the learner meets
+        due vocabulary *in context* rather than as isolated flashcards, which is
+        what makes spaced repetition stick.
+        """
+        agent = self._build_agent(target_lang, native_lang, level, tools=[])
+
+        if due_words:
+            listed = "\n".join(
+                f"- {w['word']} ({w.get('translation', '')})" for w in due_words
+            )
+        else:
+            # No cards due: still comprehensible input, just unseeded.
+            listed = (
+                "(none due — choose vocabulary appropriate to the level and topic)"
+            )
+
+        desc, exp = self._render_task(
+            "passage_task",
+            {
+                "topic": topic,
+                "target_lang": target_lang,
+                "native_lang": native_lang,
+                "level": level,
+                "due_words": listed,
+                "word_count": str(word_count),
+            },
+        )
+        task = Task(description=desc, expected_output=exp, agent=agent, context=[])
+        return Crew(
+            agents=[agent],
+            tasks=[task],
+            process=Process.sequential,
+            memory=False,
+            verbose=True,
+        )
+
+    def build_lesson_sheet_crew(
+        self,
+        topic: str,
+        target_lang: str,
+        native_lang: str,
+        level: str,
+    ) -> Crew:
+        """A compact lesson sized for one printed sheet.
+
+        The full lesson_task is a teacher's scheme of work — 15-20 vocabulary
+        items, three dialogues, five exercise types — and takes about four
+        minutes to write. That is the right thing for the Lessons panel and the
+        wrong thing for someone waiting at a Print button, so printable sheets
+        get their own, shorter task.
+        """
+        agent = self._build_agent(target_lang, native_lang, level, tools=[])
+        desc, exp = self._render_task(
+            "lesson_sheet_task",
+            {
+                "topic": topic,
+                "target_lang": target_lang,
+                "native_lang": native_lang,
+                "level": level,
+            },
+        )
+        task = Task(description=desc, expected_output=exp, agent=agent, context=[])
+        return Crew(
+            agents=[agent],
+            tasks=[task],
+            process=Process.sequential,
+            memory=False,
+            verbose=True,
+        )
+
+    def build_story_sheet_crew(
+        self,
+        topic: str,
+        target_lang: str,
+        native_lang: str,
+        level: str,
+        num_questions: int = 5,
+        word_count: int = 200,
+        summary_words: int = 40,
+    ) -> Crew:
+        """Build a Crew that writes a story plus comprehension and summary tasks.
+
+        Unlike the grammar sheets, this one genuinely needs a model: a story
+        cannot be derived from a table. The consequence is that its answers are
+        MODEL answers, printed as such, and that the generated text must be
+        stored rather than regenerated — a second run would produce a different
+        story, so a reprint would not match the sheet the child was given.
+        """
+        agent = self._build_agent(target_lang, native_lang, level, tools=[],
+                                  structured=True)
+        desc, exp = self._render_task(
+            "story_sheet_task",
+            {
+                "topic": topic,
+                "target_lang": target_lang,
+                "native_lang": native_lang,
+                "level": level,
+                "num_questions": str(num_questions),
+                "word_count": str(word_count),
+                "summary_words": str(summary_words),
+            },
+        )
+        task = Task(description=desc, expected_output=exp, agent=agent, context=[])
+        return Crew(
+            agents=[agent],
+            tasks=[task],
+            process=Process.sequential,
+            memory=False,
+            verbose=True,
+        )
+
     def build_quiz_crew(
         self,
         quiz_type: str,
@@ -475,7 +634,12 @@ class TutorCrew:
         quiz_type_instruction = self._QUIZ_TYPE_INSTRUCTIONS.get(
             quiz_type, self._QUIZ_TYPE_INSTRUCTIONS["mixed"]
         )
-        agent = self._build_agent(target_lang, native_lang, level)
+        # Parsed as JSON, so reasoning must not eat the answer — and no tools,
+        # because writing quiz questions is composition, not research. Left
+        # attached, the agent looks words up one at a time and the run dies on
+        # "Action Input is not a valid key, value dictionary".
+        agent = self._build_agent(target_lang, native_lang, level, tools=[],
+                                  structured=True)
         desc, exp = self._render_task(
             "quiz_task",
             {
@@ -844,8 +1008,8 @@ class TutorCrew:
                 temperature=0.0,
                 max_tokens=2048,
                 extra_body={
-                    "options": {"num_ctx": 8192, "num_gpu": 99},
-                    "chat_template_kwargs": {"enable_thinking": False},
+                    "options": {"num_ctx": 8192},
+                    "think": False,
                 },
             )
             raw = (response.choices[0].message.content or "").strip()

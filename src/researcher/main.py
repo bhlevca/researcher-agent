@@ -20,8 +20,9 @@ import aiosqlite
 
 from researcher.image import generate_ai_image, preload_sd, preload_zimage, preload_ernie, preload_flux
 from researcher.config import STATIC_DIR, DB_PATH
-from researcher.tutor.storage import init_tutor_tables
+from researcher.tutor.storage import init_tutor_tables, init_sheet_tables
 from researcher.composer.storage import init_composer_tables
+from researcher.mathtutor.storage import init_math_tables
 
 from researcher.auth import (
     register_auth_routes,
@@ -38,7 +39,10 @@ from researcher.routes.sessions import register_session_routes
 from researcher.routes.models import register_model_routes
 from researcher.routes.speech import register_speech_routes
 from researcher.routes.tutor import register_tutor_routes
+from researcher.routes.tutor_sheets import register_tutor_sheet_routes
 from researcher.routes.composer import register_composer_routes
+from researcher.routes.mathtutor import register_mathtutor_routes
+from researcher.routes.gpu import register_gpu_routes
 from researcher.routes.proxy import register_proxy_routes
 from researcher.tts import register_tts_routes
 
@@ -53,6 +57,16 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     # -- Crew / model init --
     model = os.getenv("MODEL", "ollama/qwen3.5:9b")
+    # current_model is mutated by the model picker and so belongs to whoever
+    # touched it last; default_model is the environment's fallback and never
+    # changes. Per-user model resolution uses the latter, so one person's
+    # choice cannot become everybody's default.
+    app.state.current_model = model
+    app.state.default_model = model
+    # A model named in .env may have been deleted since. Say so loudly and
+    # keep working, rather than 404ing on a name nobody chose.
+    from researcher.user_crews import verify_default_model
+    model = await verify_default_model(app)
     app.state.current_model = model
 
     # Per-user crew instances, semaphores, and cancel events.
@@ -129,15 +143,40 @@ async def lifespan(app: FastAPI):
 
     # Tutor tables
     await init_tutor_tables(db)
+    await init_sheet_tables(db)
 
     # Composer tables
     await init_composer_tables(db)
+    await init_math_tables(db)
 
     # Optional image backend warm-up/bootstrap.
     # This can prefill HF cache on startup when missing.
     # Disable with IMAGE_WARMUP=0.
     # Prefer the backend stored in the DB (per-user setting) over the env var,
     # so that switching via the UI is respected on next restart.
+    # A misconfigured image critic degrades silently to "no refinement", so
+    # surface it once at startup instead of leaving it to be noticed never.
+    try:
+        from researcher.image import check_critic_available
+
+        ok, msg = check_critic_available()
+        # Written to stderr, not logger.info: uvicorn leaves the app logger at
+        # WARNING, so an INFO confirmation is invisible — which would defeat a
+        # check whose only job is to be seen. Matches the [ZIMG]/[OCR] convention.
+        sys.stderr.write(f"[IMAGE] {'OK' if ok else 'WARNING'}: {msg}\n")
+        sys.stderr.flush()
+    except Exception as e:
+        logger.warning("[IMAGE] Critic check failed: %s", e)
+
+    # Video warm-up is opt-in (VIDEO_WARMUP=1): it reserves ~16 GiB of system RAM
+    # to save the one-time pipeline load on the first request.
+    try:
+        from researcher.video import preload_video
+
+        preload_video()
+    except Exception as e:
+        logger.warning("[VIDEO] Preload failed: %s", e)
+
     image_warmup = os.getenv("IMAGE_WARMUP", "1") == "1"
     if image_warmup:
         image_backend = os.getenv("IMAGE_BACKEND", "sd").lower()
@@ -184,7 +223,10 @@ register_session_routes(app)
 register_model_routes(app)
 register_speech_routes(app)
 register_tutor_routes(app)
+register_tutor_sheet_routes(app)
 register_composer_routes(app)
+register_mathtutor_routes(app)
+register_gpu_routes(app)
 register_proxy_routes(app)
 register_tts_routes(app)
 
@@ -208,6 +250,11 @@ async def tutor_page():
 @app.get("/composer")
 async def composer_page():
     return FileResponse(STATIC_DIR / "composer.html", headers=_NO_STORE)
+
+
+@app.get("/math")
+async def math_page():
+    return FileResponse(STATIC_DIR / "math.html", headers=_NO_STORE)
 
 
 @app.get("/chat-direct")

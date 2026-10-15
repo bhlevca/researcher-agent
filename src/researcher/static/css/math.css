@@ -1,0 +1,182 @@
+/* Math Tutor — print-first layout.
+   The left column builds the sheet; the right column IS the sheet, rendered as
+   the actual PDF rather than an HTML approximation of it. */
+
+.math-main {
+    display: grid;
+    grid-template-columns: 340px 1fr;
+    gap: 1rem;
+    padding: 1rem;
+    height: calc(100vh - 64px);
+    box-sizing: border-box;
+}
+
+.math-panel {
+    background: #16213e;
+    border: 1px solid #1a3a6e;
+    border-radius: 0.75rem;
+    padding: 0.9rem;
+    overflow-y: auto;
+}
+
+.math-panel h3 {
+    margin: 0 0 0.6rem;
+    font-size: 0.85rem;
+    color: #60a5fa;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.math-field { margin-bottom: 0.75rem; }
+
+.math-field label {
+    display: block;
+    font-size: 0.75rem;
+    color: #94a3b8;
+    margin-bottom: 0.25rem;
+}
+
+.math-field select,
+.math-field input {
+    width: 100%;
+    box-sizing: border-box;
+    background: #0f3460;
+    color: #e2e8f0;
+    border: 1px solid #1a3a6e;
+    border-radius: 0.4rem;
+    padding: 0.4rem 0.5rem;
+    font-size: 0.85rem;
+}
+
+.math-row { display: flex; gap: 0.5rem; }
+
+button.naming {
+    background: #0f3460;
+    color: #94a3b8;
+    border: 1px solid #1a3a6e;
+    border-radius: 0.4rem;
+    padding: 0.4rem;
+    font-size: 0.8rem;
+    cursor: pointer;
+}
+
+button.naming.on { background: #2563eb; color: #fff; border-color: #3b82f6; }
+.math-row > * { flex: 1; }
+
+#math-topics {
+    max-height: 240px;
+    overflow-y: auto;
+    border: 1px solid #1a3a6e;
+    border-radius: 0.4rem;
+    padding: 0.4rem;
+    background: #0f3460;
+}
+
+.math-topic {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.4rem;
+    padding: 0.2rem 0.1rem;
+    font-size: 0.8rem;
+    color: #cbd5e1;
+    cursor: pointer;
+}
+
+.math-topic input { margin-top: 0.15rem; flex: none; width: auto; }
+.math-topic .geo { color: #fbbf24; font-size: 0.72rem; }
+
+.math-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.6rem; }
+
+.math-actions button {
+    flex: 1 1 46%;
+    background: #0f3460;
+    color: #e2e8f0;
+    border: 1px solid #1a3a6e;
+    border-radius: 0.5rem;
+    padding: 0.5rem;
+    font-size: 0.8rem;
+    cursor: pointer;
+}
+
+.math-actions button:hover:not(:disabled) { background: #1a3a6e; }
+.math-actions button:disabled { opacity: 0.5; cursor: default; }
+.math-actions button.primary { background: #2563eb; border-color: #3b82f6; color: #fff; }
+.math-actions button.primary:hover:not(:disabled) { background: #1d4ed8; }
+
+.math-preview {
+    background: #16213e;
+    border: 1px solid #1a3a6e;
+    border-radius: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.math-preview-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid #1a3a6e;
+    font-size: 0.78rem;
+    color: #94a3b8;
+}
+
+.math-preview-bar button {
+    background: #0f3460;
+    color: #94a3b8;
+    border: 1px solid #1a3a6e;
+    border-radius: 0.4rem;
+    padding: 0.3rem 0.6rem;
+    font-size: 0.75rem;
+    cursor: pointer;
+}
+
+.math-preview-bar button.on { background: #2563eb; color: #fff; border-color: #3b82f6; }
+
+#math-frame { flex: 1; width: 100%; border: 0; background: #475569; }
+
+.math-empty {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #64748b;
+    font-size: 0.9rem;
+    text-align: center;
+    padding: 2rem;
+}
+
+.math-hint { font-size: 0.72rem; color: #64748b; margin-top: 0.3rem; line-height: 1.4; }
+
+.math-saved-item {
+    border: 1px solid #1a3a6e;
+    border-radius: 0.5rem;
+    padding: 0.5rem;
+    margin-bottom: 0.4rem;
+    font-size: 0.78rem;
+    color: #cbd5e1;
+}
+
+.math-saved-item .meta { color: #64748b; font-size: 0.7rem; margin-top: 0.15rem; }
+.math-saved-item .btns { display: flex; gap: 0.3rem; margin-top: 0.35rem; }
+
+.math-saved-item .btns button {
+    background: #0f3460;
+    color: #94a3b8;
+    border: 1px solid #1a3a6e;
+    border-radius: 0.3rem;
+    padding: 0.2rem 0.45rem;
+    font-size: 0.7rem;
+    cursor: pointer;
+}
+
+.math-bar { height: 5px; background: #0f3460; border-radius: 3px; overflow: hidden; margin-top: 0.25rem; }
+.math-bar > div { height: 100%; background: #22c55e; }
+.math-bar.weak > div { background: #ef4444; }
+.math-bar.mid > div { background: #f59e0b; }
+
+@media (max-width: 900px) {
+    .math-main { grid-template-columns: 1fr; height: auto; }
+    #math-frame { min-height: 70vh; }
+}

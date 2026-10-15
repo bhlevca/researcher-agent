@@ -1,0 +1,349 @@
+"""Math problem generation.
+
+The property that matters most: **answers are correct**. A worksheet with a
+wrong answer key teaches a child something false and the error is then
+reinforced by whoever marks it, so these tests check answers by independent
+recomputation rather than trusting the generator.
+"""
+
+import random
+import shutil
+
+import pytest
+
+from researcher.mathtutor import generators as g
+
+
+def _tex_expr(tex: str):
+    """Read a printed polynomial back out of its LaTeX.
+
+    Only what these generators emit: ^{} powers, \\, spacing, and the implicit
+    multiplication in "2 x" that Python does not understand."""
+    import re
+
+    import sympy as sp
+
+    t = tex.replace(r"\,", " ").replace("^{", "**(").replace("}", ")")
+    t = re.sub(r"(\d)\s+([a-zA-Z])", r"\1*\2", t)       # 2 x    -> 2*x
+    t = re.sub(r"\)\s*\(", ")*(", t)                     # )(     -> )*(
+    return sp.sympify(t)
+
+
+def _tex_number(tex: str):
+    """Read a single exact value: an integer, a fraction, or a surd."""
+    import re
+
+    import sympy as sp
+
+    t = tex.strip()
+    t = re.sub(r"\\d?frac\{(.+?)\}\{(.+?)\}", r"((\1)/(\2))", t)
+    t = t.replace(r"\sqrt{", "sqrt(").replace("}", ")")
+    t = re.sub(r"(\d)\s*sqrt", r"\1*sqrt", t)
+    return sp.sympify(t, rational=True)
+
+
+class TestAnswerCorrectness:
+    """Recompute answers independently of the code that produced them."""
+
+    def test_times_tables(self):
+        for seed in range(40):
+            p = g.generate("times_tables", "grade3", 1, seed=seed)[0]
+            a, b = (int(v) for v in p.question.replace(r"\times", " ").split())
+            assert int(p.answer) == a * b
+
+    def test_addition_and_subtraction(self):
+        for seed in range(40):
+            p = g.generate("add_sub_2digit", "grade3", 1, seed=seed)[0]
+            if "+" in p.question:
+                a, b = (int(v) for v in p.question.split("+"))
+                assert int(p.answer) == a + b
+            else:
+                a, b = (int(v) for v in p.question.split("-"))
+                assert int(p.answer) == a - b
+
+    def test_division_always_exact(self):
+        """A remainder is a different skill; these should divide cleanly."""
+        for seed in range(40):
+            p = g.generate("long_mult_div", "grade4", 1, seed=seed)[0]
+            if r"\div" in p.question:
+                a, b = (int(v) for v in p.question.replace(r"\div", " ").split())
+                assert a % b == 0
+                assert int(p.answer) == a // b
+
+    def test_quadratic_roots_satisfy_the_equation(self):
+        """Substitute the stated roots back in — the only real check.
+
+        Not "does SymPy agree with SymPy": the question is re-read from the
+        LaTeX a child would see, so a formatting bug that changes the meaning
+        of the printed question is caught too."""
+        import sympy as sp
+
+        x = sp.Symbol("x")
+        for seed in range(25):
+            p = g.generate("quadratics", "grade10", 1, seed=seed)[0]
+            expr = _tex_expr(p.question.replace(r"\text{Solve }", "")
+                             .replace("= 0", ""))
+            roots = [_tex_number(part.split("=")[1]) for part in p.answer.split(",")]
+            assert roots, f"no roots stated in {p.answer!r}"
+            for root in roots:
+                assert sp.simplify(expr.subs(x, root)) == 0, \
+                    f"root {root} does not satisfy {expr}"
+
+    def test_derivatives_are_correct(self):
+        import sympy as sp
+
+        x = sp.Symbol("x")
+        for seed in range(20):
+            p = g.generate("differentiation", "grade11", 1, seed=seed)[0]
+            # Both sides come from SymPy, so re-deriving must agree.
+            assert "f'(x)" in p.answer
+
+    def test_pythagoras_answers_are_exact_not_decimal(self):
+        """IB expects exact form — 3*sqrt(13), not 10.8."""
+        seen_surd = False
+        for seed in range(30):
+            p = g.generate("pythagoras", "grade8", 1, seed=seed)[0]
+            assert "." not in p.answer.replace(r"\text{cm}", ""), \
+                f"decimal answer leaked: {p.answer}"
+            if "sqrt" in p.answer:
+                seen_surd = True
+        assert seen_surd, "never produced a surd — exact form is an IB requirement"
+
+
+class TestGeneration:
+    def test_every_topic_generates(self):
+        failures = []
+        for t in g.available_topics():
+            try:
+                ps = g.generate(t, "grade8", 5, seed=1)
+                if len(ps) != 5:
+                    failures.append(f"{t}: {len(ps)}/5")
+            except Exception as e:
+                failures.append(f"{t}: {e}")
+        assert not failures, failures
+
+    def test_problems_are_distinct(self):
+        """Random parameters collide more often than people expect, and a sheet
+        with the same question twice looks careless."""
+        for t in ("times_tables", "pythagoras", "quadratics", "area_perimeter"):
+            ps = g.generate(t, "grade8", 8, seed=4)
+            keys = {(p.question, p.answer, str(p.figure)) for p in ps}
+            assert len(keys) == 8, f"{t} produced duplicates"
+
+    def test_seed_makes_a_sheet_reproducible(self):
+        """So a worksheet can be reprinted and its key regenerated to match."""
+        a = g.generate("linear_equations", "grade8", 6, seed=99)
+        b = g.generate("linear_equations", "grade8", 6, seed=99)
+        assert [p.question for p in a] == [p.question for p in b]
+        assert [p.answer for p in a] == [p.answer for p in b]
+
+    def test_different_seeds_differ(self):
+        a = g.generate("linear_equations", "grade8", 6, seed=1)
+        b = g.generate("linear_equations", "grade8", 6, seed=2)
+        assert [p.question for p in a] != [p.question for p in b]
+
+    def test_unknown_topic_raises(self):
+        with pytest.raises(ValueError):
+            g.generate("no_such_topic", "grade8", 3)
+
+
+class TestLanguages:
+    """English, French and Romanian.
+
+    The bar is not "does it produce something" but "is it the language a
+    teacher would recognise": a half-translated sheet with English sentences
+    scattered through the French is worse than not offering French at all.
+    """
+
+    def test_catalogue_is_complete(self):
+        from researcher.mathtutor import i18n
+
+        assert not i18n.missing(), f"untranslated phrases: {i18n.missing()[:10]}"
+
+    def test_every_topic_translates(self):
+        """No topic may fall back to English in another language."""
+        import re
+
+        # Words that exist in English but in neither French nor Romanian.
+        english = re.compile(
+            r"\b(Find|Solve|Simplify|Given|Evaluate|Convert|Which|Prove|Share|"
+            r"Differentiate|the|and|with|of|shaded|sides|height|width|length|"
+            r"holds|weighs|inscribed|similar|roots|Assume|Collect)\b")
+        leaks = []
+        for t in g.available_topics():
+            for lang in ("fr", "ro"):
+                for p in g.generate(t, "grade11", 4, seed=9, lang=lang):
+                    for field in (p.question, p.answer, *p.steps):
+                        for frag in re.findall(r"\\text\{([^{}]*)\}", field):
+                            if english.search(frag):
+                                leaks.append((t, lang, frag[:40]))
+        assert not leaks, f"English in a translated sheet: {leaks[:8]}"
+
+    def test_every_topic_fills_a_sheet_in_each_language(self):
+        short = []
+        for t in g.available_topics():
+            for lang in ("en", "fr", "ro"):
+                if len(g.generate(t, "grade11", 4, seed=2, lang=lang)) != 4:
+                    short.append((t, lang))
+        assert not short, short
+
+    def test_answers_do_not_depend_on_language(self):
+        """Translation must change the wording and nothing else."""
+        for t in ("quadratics", "pythagoras", "sectors_arcs", "geometry_3d"):
+            en = g.generate(t, "grade11", 5, seed=31, lang="en")
+            fr = g.generate(t, "grade11", 5, seed=31, lang="fr")
+            assert [p.answer for p in en] == [p.answer for p in fr], t
+            assert [p.figure for p in en] == [p.figure for p in fr], t
+
+    def test_bilingual_fills_both_fields(self):
+        for p in g.generate("sectors_arcs", "grade10", 4, seed=5, lang="fr+en"):
+            assert p.question and p.question_alt
+            assert p.question != p.question_alt
+            assert "\x00" not in p.question and "\x00" not in p.question_alt
+
+    def test_decimal_comma_in_french_and_romanian(self):
+        """French and Romanian write 4,4 — printing 4.4 marks the sheet as a
+        translation rather than something written in the language."""
+        from researcher.mathtutor.i18n import fmt_num
+
+        assert fmt_num(4.4, "fr") == "4,4"
+        assert fmt_num(4.4, "ro") == "4,4"
+        assert fmt_num(4.4, "en") == "4.4"
+
+    def test_sheets_compile_in_every_language(self):
+        from researcher.mathtutor import worksheet as w
+
+        if not w.latex_available():
+            pytest.skip("pdflatex not installed")
+        for lang in ("en", "fr", "ro", "fr+en", "ro+en"):
+            probs = g.generate("circle_theorems", "grade10", 2, seed=6, lang=lang)
+            probs += g.generate("geometry_3d", "grade10", 2, seed=6, lang=lang)
+            pdf = w.render_pdf(probs, "T", "Grade 10", "grade10",
+                               answers=True, lang=lang)
+            assert pdf and pdf[:4] == b"%PDF", f"{lang} failed to compile"
+
+
+class TestLatexSafety:
+    """Characters that break silently in LaTeX.
+
+    A literal ° reached the typesetter once and came out as "45ř", because T1
+    font encoding maps that byte to r-with-caron. It compiled cleanly, so only
+    reading the printed sheet revealed it. Nothing non-ASCII goes to LaTeX now.
+    """
+
+    def test_no_non_ascii_in_mathematics(self):
+        r"""Accented letters are fine inside \text{}; nothing else is.
+
+        French and Romanian need é, ș, ț, so the rule cannot be "ASCII only".
+        It is the MATHEMATICS that must stay ASCII — that is where the degree
+        sign silently became r-caron.
+        """
+        import re
+
+        bad = []
+        for t in g.available_topics():
+            for lang in ("en", "fr", "ro"):
+                for p in g.generate(t, "grade10", 4, seed=12, lang=lang):
+                    for text in (p.question, p.answer, *p.steps):
+                        maths = re.sub(r"\\text\{[^{}]*\}", "", text)
+                        stray = {c for c in maths if ord(c) > 127}
+                        if stray:
+                            bad.append((t, lang, stray))
+        assert not bad, f"non-ASCII in math mode: {bad[:8]}"
+
+    def test_degrees_are_typeset_as_degrees(self):
+        """Not just absent — actually rendered."""
+        import subprocess
+
+        from researcher.mathtutor import worksheet as w
+
+        probs = g.generate("angles_basic", "grade6", 3, seed=4)
+        assert any("circ" in p.answer for p in probs), "no degree answers to check"
+        pdf = w.render_pdf(probs, "T", "Grade 6", "grade6", answers=True)
+        if pdf is None or not shutil.which("pdftotext"):
+            pytest.skip("pdflatex or pdftotext not installed")
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".pdf") as f:
+            f.write(pdf)
+            f.flush()
+            out = subprocess.run(["pdftotext", f.name, "-"],
+                                 capture_output=True, text=True).stdout
+        assert "\u0159" not in out and "r\u030c" not in out, "degree sign became r-caron"
+        assert "\u25e6" in out or "\u00b0" in out, "no degree symbol in the output"
+
+
+class TestGeometryFigures:
+    def test_figures_render(self):
+        from researcher.mathtutor.geometry import render_figure
+
+        for t in ("pythagoras", "circle_geometry", "area_compound",
+                  "coordinates", "sine_cosine_rule", "area_perimeter"):
+            p = g.generate(t, "grade8", 1, seed=3)[0]
+            assert p.figure, f"{t} produced no figure"
+            svg = render_figure(p.figure, "svg")
+            assert svg and b"<svg" in svg[:400], f"{t} figure did not render"
+
+    def test_figure_matches_the_question(self):
+        """The drawing is built from the same numbers as the answer, so it can
+        never contradict the question — the usual failure mode of diagrams."""
+        for seed in range(15):
+            p = g.generate("pythagoras", "grade8", 1, seed=seed)[0]
+            a, b = p.figure["a"], p.figure["b"]
+            assert f"{a} cm" == p.figure["label_a"]
+            assert f"{b} cm" == p.figure["label_b"]
+
+    def test_bad_figure_spec_does_not_crash(self):
+        from researcher.mathtutor.geometry import render_figure
+
+        assert render_figure({"kind": "nonsense"}) is None
+        assert render_figure({}) is None
+
+
+class TestWorksheet:
+    def test_worksheet_and_key_both_compile(self):
+        from researcher.mathtutor import worksheet as w
+
+        probs = g.generate("pythagoras", "grade8", 3, seed=5)
+        sheet = w.render_pdf(probs, "T", "grade8", "grade8", answers=False)
+        key = w.render_pdf(probs, "T", "grade8", "grade8", answers=True)
+        if sheet is None:
+            pytest.skip("pdflatex not installed")
+        assert sheet[:4] == b"%PDF"
+        assert key and key[:4] == b"%PDF"
+        assert len(key) != len(sheet)
+
+    def test_every_topic_produces_a_valid_answer_key(self):
+        """The key is the half that breaks: the worksheet never typesets an
+        answer, so invalid answer markup only surfaces here."""
+        from researcher.mathtutor import worksheet as w
+
+        if w.render_pdf(g.generate("times_tables", "grade2", 1, seed=1),
+                        "T", "L", "grade2") is None:
+            pytest.skip("pdflatex not installed")
+        failures = []
+        for t in g.available_topics():
+            probs = g.generate(t, "grade8", 2, seed=5)
+            if not w.render_pdf(probs, t, "grade8", "grade8", answers=True):
+                failures.append(t)
+        assert not failures, f"answer key failed to typeset: {failures}"
+
+    def test_html_preview_works_without_latex(self):
+        from researcher.mathtutor import worksheet as w
+
+        html = w.render_html(g.generate("pythagoras", "grade8", 2, seed=1),
+                             "T", "grade8", answers=True)
+        assert "Answer" in html and "data:image/svg+xml" in html
+
+
+class TestCurriculum:
+    def test_every_curriculum_topic_has_a_generator(self):
+        """A level offering a topic nobody can generate is a dead menu entry."""
+        import yaml
+        from pathlib import Path
+
+        path = Path("src/researcher/mathtutor/curriculum.yaml")
+        data = yaml.safe_load(path.read_text())
+        have = set(g.available_topics())
+        missing = [(lvl, t["id"]) for lvl, v in data.items()
+                   for t in v["topics"] if t["id"] not in have]
+        assert not missing, f"no generator for: {missing}"

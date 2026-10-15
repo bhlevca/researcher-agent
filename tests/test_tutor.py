@@ -35,14 +35,17 @@ def _patch_external_services(tmp_path, monkeypatch):
 
     # Mock ResearchCrew (now imported in route modules, not main)
     mock_rc = MagicMock()
-    monkeypatch.setattr("researcher.routes.chat.ResearchCrew", mock_rc)
-    monkeypatch.setattr("researcher.routes.ask.ResearchCrew", mock_rc)
+    # Crews are constructed in one place now — user_crews._crew_class,
+    # which imports each class from its own module at call time — so this is
+    # the single point that keeps a real model out of the tests.
+    monkeypatch.setattr("researcher.crew.ResearchCrew", mock_rc)
     monkeypatch.setattr("researcher.routes.models.ResearchCrew", mock_rc)
 
     # Mock TutorCrew — lightweight stub for non-crew tests
     mock_tc = MagicMock(spec=TutorCrew)
     mock_tc.return_value = mock_tc
     mock_tc._model_name = "ollama/test-model"
+    mock_tc.model_name = "ollama/test-model"
     mock_tc.extract_vocabulary_from_response = TutorCrew.extract_vocabulary_from_response
     mock_tc.extract_quiz_json = TutorCrew.extract_quiz_json
     mock_tc.filter_quiz_questions = lambda q, qt: TutorCrew.filter_quiz_questions(mock_tc, q, qt)
@@ -62,7 +65,7 @@ def _patch_external_services(tmp_path, monkeypatch):
             })
         return results
     mock_tc.grade_answers = _mock_grade_answers
-    monkeypatch.setattr("researcher.routes.tutor.TutorCrew", lambda **kw: mock_tc)
+    monkeypatch.setattr("researcher.tutor.crew.TutorCrew", lambda **kw: mock_tc)
     monkeypatch.setattr("researcher.routes.models.TutorCrew", lambda **kw: mock_tc)
 
 
@@ -592,3 +595,135 @@ class TestTranslate:
             json={"text": "Hello", "source_lang": "English", "target_lang": "French"},
         )
         assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# FSRS scheduler (replaces SM-2)
+# ---------------------------------------------------------------------------
+
+
+class TestFsrsScheduler:
+    """The scheduler swap must not disturb cards a learner already knows.
+
+    These run directly against storage rather than the API, since scheduling is
+    internal and has no endpoint of its own.
+    """
+
+    @staticmethod
+    async def _mk_db(tmp_path, word, **cols):
+        import aiosqlite
+        from researcher.tutor import storage as S
+
+        db = await aiosqlite.connect(str(tmp_path / f"srs_{word}.db"))
+        db.row_factory = aiosqlite.Row
+        await S.init_tutor_tables(db)
+        await db.execute(
+            "INSERT INTO tutor_sessions (id,user_id,name,native_lang,target_lang,"
+            "level,created_at,updated_at) VALUES ('s1','u1','n','en','fr','A1','x','x')"
+        )
+        await db.execute(
+            "INSERT INTO vocabulary (id,user_id,session_id,target_lang,word,translation,"
+            "created_at,interval_days,ease_factor,lapses,times_reviewed,next_review) "
+            "VALUES ('v1','u1','s1','fr',?,'w','x',?,?,?,?,'2026-01-01')",
+            (word, cols.get("interval_days", 1), cols.get("ease_factor", 2.5),
+             cols.get("lapses", 0), cols.get("times_reviewed", 0)),
+        )
+        await db.commit()
+        return db
+
+    @staticmethod
+    async def _row(db):
+        cur = await db.execute(
+            "SELECT interval_days, fsrs_stability, fsrs_difficulty, fsrs_state, lapses "
+            "FROM vocabulary WHERE id='v1'"
+        )
+        return await cur.fetchone()
+
+    async def test_mature_card_is_not_reset_on_migration(self, tmp_path):
+        """A 90-day card must keep a long interval, not restart from scratch."""
+        from researcher.tutor import storage as S
+
+        db = await self._mk_db(tmp_path, "mature", interval_days=90, times_reviewed=12)
+        await S.schedule_review(db, "v1", 5)
+        row = await self._row(db)
+        assert row["interval_days"] > 30
+        assert row["fsrs_stability"] > 30
+        await db.close()
+
+    async def test_migration_does_not_explode_the_interval(self, tmp_path):
+        """Regression: a NULL last_review made FSRS see zero elapsed time and
+        schedule a 90-day card ~5000 days out."""
+        from researcher.tutor import storage as S
+
+        db = await self._mk_db(tmp_path, "explode", interval_days=90, times_reviewed=12)
+        await S.schedule_review(db, "v1", 5)
+        row = await self._row(db)
+        assert row["interval_days"] <= S.SRS_MAX_INTERVAL
+        await db.close()
+
+    async def test_new_card_starts_with_a_short_interval(self, tmp_path):
+        from researcher.tutor import storage as S
+
+        db = await self._mk_db(tmp_path, "fresh", interval_days=1, times_reviewed=0)
+        await S.schedule_review(db, "v1", 4)
+        row = await self._row(db)
+        assert row["interval_days"] <= 7
+        await db.close()
+
+    async def test_failed_review_shortens_interval_and_counts_lapse(self, tmp_path):
+        from researcher.tutor import storage as S
+
+        db = await self._mk_db(tmp_path, "lapsed", interval_days=60, times_reviewed=8)
+        await S.schedule_review(db, "v1", 1)
+        row = await self._row(db)
+        assert row["lapses"] == 1
+        assert row["interval_days"] < 60
+        await db.close()
+
+    async def test_interval_is_capped(self, tmp_path):
+        from researcher.tutor import storage as S
+
+        db = await self._mk_db(tmp_path, "capped", interval_days=400,
+                               ease_factor=2.8, times_reviewed=30)
+        await S.schedule_review(db, "v1", 5)
+        row = await self._row(db)
+        assert row["interval_days"] <= S.SRS_MAX_INTERVAL
+        await db.close()
+
+    async def test_sm2_rollback_still_works(self, tmp_path, monkeypatch):
+        """SRS_ALGO=sm2 must bypass FSRS entirely."""
+        from researcher.tutor import storage as S
+
+        monkeypatch.setattr(S, "SRS_ALGO", "sm2")
+        db = await self._mk_db(tmp_path, "rollback", interval_days=10, times_reviewed=3)
+        await S.schedule_review(db, "v1", 5)
+        row = await self._row(db)
+        assert row["fsrs_stability"] is None
+        await db.close()
+
+    def test_grade_mapping_covers_the_sm2_range(self):
+        from fsrs import Rating
+        from researcher.tutor.storage import _grade_to_rating
+
+        assert _grade_to_rating(0) == Rating.Again
+        assert _grade_to_rating(2) == Rating.Again
+        assert _grade_to_rating(3) == Rating.Hard
+        assert _grade_to_rating(4) == Rating.Good
+        assert _grade_to_rating(5) == Rating.Easy
+
+    def test_seed_maps_ease_to_difficulty_inversely(self):
+        """SM-2 ease is high=easy; FSRS difficulty is high=hard."""
+        from researcher.tutor.storage import _seed_fsrs_from_sm2
+
+        _, hard = _seed_fsrs_from_sm2(10, 1.3, 0)
+        _, mid = _seed_fsrs_from_sm2(10, 2.5, 0)
+        _, easy = _seed_fsrs_from_sm2(10, 3.3, 0)
+        assert hard > mid > easy
+        assert 1.0 <= easy and hard <= 10.0
+
+    def test_lapses_increase_seeded_difficulty(self):
+        from researcher.tutor.storage import _seed_fsrs_from_sm2
+
+        _, clean = _seed_fsrs_from_sm2(10, 2.5, 0)
+        _, lapsed = _seed_fsrs_from_sm2(10, 2.5, 5)
+        assert lapsed > clean

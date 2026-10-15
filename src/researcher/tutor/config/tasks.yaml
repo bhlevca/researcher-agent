@@ -223,3 +223,132 @@ appraisal_task:
     Must reference concrete numbers from both current and cross-session
     statistics and provide specific, actionable recommendations.
   agent: language_tutor
+
+passage_task:
+  description: >
+    Write a short READING PASSAGE in {target_lang} for a {level}-level learner
+    (native language: {native_lang}).
+
+    Topic: {topic}
+
+    THIS IS COMPREHENSIBLE INPUT, NOT A LESSON. The learner should be able to
+    read it and understand almost all of it without stopping. Do NOT produce
+    grammar tables, exercises or explanations — write connected prose the
+    learner enjoys reading.
+
+    LENGTH: about {word_count} words.
+
+    LEVEL DISCIPLINE — this is the most important rule:
+    Write so that roughly 90% of the words are ones a {level} learner already
+    knows. Only about one word in ten should be new. If you are unsure whether a
+    word is above {level}, use a simpler one. Short sentences at A1/A2, longer
+    and subordinate clauses only at B1 and above.
+
+    WORDS TO WEAVE IN NATURALLY:
+    {due_words}
+    These are words the learner is due to review. Use each at least once, in a
+    natural context that makes its meaning inferable from the surrounding
+    sentence. Do NOT list them, define them, or draw attention to them — the
+    point is to meet them again in context.
+
+    OUTPUT FORMAT — exactly these sections, in {target_lang} unless stated:
+
+    ## <title in {target_lang}>
+
+    <the passage itself, flowing prose, no bullet points>
+
+    ### Glossary
+    | Word | {native_lang} |
+    |------|---------------|
+    <only the genuinely new or difficult words, 5-10 rows maximum>
+
+    ### Questions
+    1. <comprehension question in {target_lang}>
+    2. <comprehension question in {target_lang}>
+    3. <comprehension question in {target_lang}>
+  expected_output: >
+    A reading passage of roughly {word_count} words in {target_lang} at {level}
+    level, containing every word from the review list used naturally in context,
+    followed by a short glossary and exactly 3 comprehension questions.
+    No grammar drills, no exercises, no explanations.
+  agent: language_tutor
+
+story_sheet_task:
+  agent: language_tutor
+  description: >
+    Write a short STORY in {target_lang} for a {level}-level learner (native
+    language: {native_lang}), together with comprehension questions and a
+    summary task, to be PRINTED on a worksheet.
+
+    Topic: {topic}
+
+    LENGTH: about {word_count} words of connected prose.
+
+    LEVEL DISCIPLINE — the most important rule. Write so that roughly 90% of the
+    words are ones a {level} learner already knows. Short sentences at A1/A2;
+    subordinate clauses only from B1. If unsure whether a word is above {level},
+    use a simpler one.
+
+    IT MUST BE A STORY: something happens, to someone, and it ends. Not a
+    description, not a list of facts, not a dialogue exercise. A child should
+    want to know what happens next.
+
+    Write {num_questions} comprehension questions in {target_lang}, each
+    answerable from the text, ordered from literal to inferential. Give a model
+    answer for each, in {target_lang}, as a full sentence.
+
+    Then write ONE summary task: ask the learner to summarise the story in
+    {summary_words} words, in {target_lang}. Give a model summary of about that
+    length.
+
+    Finally list up to 6 words from the story that a {level} learner is likely
+    NOT to know, each with a short {native_lang} gloss.
+
+    OUTPUT: a single JSON object and nothing else — no preamble, no code fence,
+    no commentary. Use exactly these keys:
+
+    {{"title": "...", "story": "paragraph one\n\nparagraph two",
+      "questions": [{{"q": "...", "a": "..."}}],
+      "summary_prompt": "...", "summary_answer": "...",
+      "glossary": [{{"word": "...", "gloss": "..."}}]}}
+
+    The story field uses \n\n between paragraphs. Every piece of text except
+    the glossary glosses is in {target_lang}.
+  expected_output: >
+    A single valid JSON object with the keys title, story, questions,
+    summary_prompt, summary_answer and glossary. No text outside the JSON.
+
+lesson_sheet_task:
+  agent: language_tutor
+  description: >
+    Create a COMPACT lesson for a {level}-level student learning {target_lang}
+    (native language: {native_lang}), to be PRINTED on a worksheet.
+
+    Topic: {topic}
+
+    This is a sheet a child works through in one sitting, not a teacher's full
+    scheme of work. Keep it tight — a long lesson is a slow lesson, and a child
+    will not read three dialogues.
+
+    Include exactly these sections, in this order, using markdown:
+
+    1. **Objectives** — three bullets, what the student will be able to do.
+    2. **Grammar** — one clear rule with a short conjugation or pattern table.
+       Explain in {native_lang}; give the examples in {target_lang}.
+    3. **Vocabulary** — a table of exactly 10 items:
+       | {target_lang} | {native_lang} | Example sentence |
+    4. **Dialogue** — ONE short exchange, 6 to 8 lines, using the grammar and
+       vocabulary above.
+    5. **Practice** — exactly 8 numbered exercises: four fill-in-the-blank,
+       two translation, one sentence construction, one error correction.
+    6. **Solutions** — the answer to every one of the 8 exercises, numbered to
+       match.
+
+    LEVEL DISCIPLINE: at {level}, keep sentences short and vocabulary common.
+    Do not use grammar the student has not met.
+
+    The Solutions heading must be written exactly as "## Solutions" so it can
+    be separated from the worksheet.
+  expected_output: >
+    A markdown lesson with the six sections above and a "## Solutions" heading
+    before the answers. No preamble or commentary outside the lesson.

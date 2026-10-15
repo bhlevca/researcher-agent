@@ -9,24 +9,41 @@ compose_chat_task:
     User's message: "{message}"
 
     Respond helpfully. If the user asks about music theory, explain clearly.
-    If they ask you to compose, produce a JSON score.
+    If they ask you to compose, write ABC notation in a ```abc block.
 
-    GENRE RULE: Use {genre} style UNLESS the user explicitly requests a
+    GENRE RULE: Use {genre} style UNLESS the user explicitly asks for a
     different style in their message (e.g. "bossa nova", "jazz").
-    Pass the correct style to CompositionPrep.
 
-    MANDATORY TOOL WORKFLOW for composing:
-    Step 1: Call CompositionPrep ONCE (pass the correct style).
-    Step 2: STOP calling tools. Write "Final Answer:" with the complete JSON score.
-    Do NOT call any tool more than once.
-    Compose 16 measures unless the user specifies otherwise.
+    You do NOT need any tool to compose. Write the ABC directly.
+    Compose 16 bars unless the user specifies a different number.
 
-    COMPOSITION APPROACH: Follow the BAR-BY-BAR ROADMAP from the tool output.
-    Create a MOTIF in bars 1-2, then develop it using the techniques provided.
-    Imitate the EXAMPLE BARS for genre-authentic rhythm and voicing.
+    ===== NON-NEGOTIABLE MUSICAL RULES =====
+    These exist because they are the mistakes actually made:
+
+    1. NO SCALES. Running straight up or down the scale is not a melody.
+       "C D E F G A B c" is a scale — never write that. Never move more than
+       four notes in the same direction before turning around or leaping.
+
+    2. VOICES MUST DIFFER. If you write two voices, they must play DIFFERENT
+       material. Copying the melody into the bass is not an arrangement. The
+       bass moves mostly in longer notes, outlines chord roots and approaches
+       the next root by step or half step, and moves in contrary motion to the
+       melody where possible.
+
+    3. DEVELOP A MOTIF. Invent a short idea in the first two bars, then bring
+       it back changed — a step higher, upside down, in longer notes, or just
+       its first half. At least half the bars should be recognisably related to
+       it.
+
+    4. COUNT EVERY BAR. With L:1/8, a {time_signature} bar holds exactly the
+       right number of eighth-note units. A plain note is 1 unit, A2 is 2,
+       A4 is 4, and a broken pair A>B is 2 units TOTAL for the pair.
+
+    5. VARY RHYTHM. A stream of identical note lengths is an exercise.
   expected_output: >
-    A helpful response about music composition. If notation was requested,
-    include a JSON score object. NEVER output XML.
+    A helpful response. If notation was requested, a ```abc block containing a
+    tune that develops a motif, has independent voices if more than one, and
+    contains no long scale runs. NEVER output JSON or XML.
   agent: music_composer
 
 compose_score_task:
@@ -107,4 +124,116 @@ analyze_task:
     A detailed, structured musical analysis in markdown with all 8 sections.
     Include specific measure references and musical examples where helpful.
     Be precise with music theory terminology.
+  agent: music_composer
+
+compose_abc_task:
+  description: >
+    Compose {measures} bars of {genre} music in ABC notation.
+
+    Request: {description}
+
+    SETTINGS FROM THE INTERFACE — these are not suggestions:
+      Key: {key_signature}     Time: {time_signature}     Tempo: {tempo} BPM
+      Style: {style}
+
+    ===== HOW THIS STYLE WORKS =====
+    {style_guide}
+
+    ===== COMPOSE, DO NOT GENERATE =====
+    Random notes that fit the key are not music. Follow this method:
+
+    1. MOTIF. Invent a 2-bar melodic idea with a clear rhythmic shape and a
+       memorable contour. Everything else grows from it.
+    2. DEVELOP it — do NOT invent unrelated new material every bar. Use:
+         - sequence      (the same shape starting a step higher or lower)
+         - inversion     (the same shape with the intervals turned upside down)
+         - fragmentation (take just the first half and repeat it)
+         - augmentation  (the same shape in longer note values)
+    3. PHRASE. Build 4-bar phrases that answer each other: an antecedent that
+       rises and stays open, a consequent that falls and closes.
+    4. SHAPE. Place ONE clear high point about two thirds of the way through,
+       and approach it stepwise rather than leaping to it.
+    5. CADENCE. End phrases on chord tones. Finish the piece on the tonic.
+
+    ===== BAR LENGTH — GET THIS RIGHT =====
+    With L:1/8, every eighth note is one unit. A {time_signature} bar holds
+    exactly {units_per_bar} units. Count them in every single bar before moving on.
+      - a plain note (A) = 1 unit
+      - A2 = 2 units, A3 = 3 units, A4 = 4 units
+      - a broken pair A>B = 2 units TOTAL (not 2 each)
+    A bar that is short will not play correctly. This is the single most common
+    mistake — count, do not estimate.
+
+    ===== DO NOT WRITE SCALES =====
+    Running straight up or down the scale is not a melody. Never write more than
+    five notes moving in the same direction without turning around. Each phrase
+    needs at least one leap of a third or more, and the leap should be answered
+    by stepwise motion the other way.
+
+    ===== RULES THAT KEEP IT LISTENABLE =====
+    - Mostly stepwise motion, but NOT exclusively — see above.
+    - After any leap larger than a fourth, move back by step in the opposite
+      direction.
+    - Stay inside a single octave and a half unless the style says otherwise.
+    - Repeat material deliberately: a listener needs to hear an idea more than
+      once to recognise it. Aim for at least half the bars to be a recognisable
+      variant of the motif.
+    - Vary note lengths. A stream of identical durations is an exercise, not a
+      melody.
+    - Put chord symbols in "quotes" above the melody where the style uses them.
+
+    ===== OUTPUT FORMAT =====
+    Output ONLY ABC notation inside a single ```abc code block. Nothing else —
+    no explanation before or after.
+
+    The header must be exactly:
+    X:1
+    T:<a short title>
+    M:{time_signature}
+    L:1/8
+    Q:1/4={tempo}
+    K:{key_signature_abc}
+
+    Then the music, using | for barlines and |: :| for repeated sections.
+    Write exactly {measures} bars.
+  expected_output: >
+    A single ```abc block containing valid ABC notation: the required header
+    followed by exactly {measures} bars in {key_signature}, {time_signature}.
+    The music must develop a single recognisable motif rather than presenting
+    unrelated material each bar. No prose outside the code block.
+  agent: music_composer
+
+fix_abc_task:
+  description: >
+    Your previous attempt has specific, measured faults. Fix them.
+
+    ===== WHAT YOU WROTE =====
+    {previous_abc}
+
+    ===== WHAT IS WRONG =====
+    {issues}
+
+    ===== HOW TO FIX EACH FAULT =====
+    SHORT BARS: with L:1/8 a {time_signature} bar must contain exactly
+    {units_per_bar} units. Count every bar. A plain note is 1 unit, A2 is 2,
+    A3 is 3, A4 is 4, and a broken pair A>B is 2 units TOTAL for the pair.
+    Add or lengthen notes so each bar reaches exactly {units_per_bar}.
+
+    LONG SCALE RUNS: you wrote a long line of notes all moving the same way.
+    Break it. After at most four notes in one direction, turn around or leap.
+    Replace part of the run with a repetition of your motif, or with a leap of
+    a third/fourth answered by stepwise motion the other way.
+
+    TOO MUCH STEPWISE MOTION: add leaps. Each phrase needs at least one leap of
+    a third or more.
+
+    ===== KEEP WHAT WORKS =====
+    Do NOT start from scratch. Keep the key, metre, title, the motif and the
+    overall shape. Change only what is needed to clear the faults listed above.
+
+    Output ONLY the corrected ABC inside a single ```abc block. No commentary.
+  expected_output: >
+    A single ```abc block containing the corrected tune: same key, metre and
+    musical material as before, with every listed fault fixed and every bar
+    exactly {units_per_bar} units long.
   agent: music_composer

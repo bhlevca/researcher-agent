@@ -1,0 +1,178 @@
+# Mathematics curriculum, Grade 1 to Grade 12.
+#
+# Grades are the selector because that is how a parent thinks about a child,
+# but the CONTENT is International Baccalaureate, not the North American
+# sequence. Concretely, that means:
+#   - algebra starts in Grade 6, not Grade 9
+#   - Pythagoras and circle geometry land in Grade 8
+#   - exact form (surds, fractions) is expected throughout; decimals are not
+#     an acceptable answer where an exact one exists
+#   - proof and reasoning appear from Grade 8 onward rather than being deferred
+#   - Grade 11-12 is Diploma Programme Analysis & Approaches: calculus,
+#     complex numbers, induction, differential equations, Maclaurin series
+# Every grade carries its IB equivalent (ib / ib_label) so either naming can be
+# used to choose a level and the equivalence is visible rather than assumed.
+# Note that PYP and MYP number their years from the start of the PROGRAMME, not
+# from Grade 1 — Grade 8 is MYP 3, not MYP 8 — which is the usual confusion.
+
+grade1:
+  label: "Grade 1 (age 6-7)"
+  ib: PYP2
+  ib_label: "PYP Year 2"
+  topics:
+    - {id: number_bonds,      name: "Number bonds and counting to 20"}
+    - {id: shapes_2d,         name: "Naming and sorting 2D shapes", geometry: true}
+    - {id: measure_length,    name: "Comparing length and mass", geometry: true}
+
+grade2:
+  label: "Grade 2 (age 7-8)"
+  ib: PYP3
+  ib_label: "PYP Year 3"
+  topics:
+    - {id: number_bonds,      name: "Addition and subtraction within 100"}
+    - {id: times_tables,      name: "Multiplication facts (2, 5, 10)"}
+    - {id: fractions_unit,    name: "Halves, thirds and quarters"}
+    - {id: shapes_2d,         name: "Properties of 2D shapes", geometry: true}
+    - {id: measure_length,    name: "Length, mass and capacity", geometry: true}
+
+grade3:
+  label: "Grade 3 (age 8-9)"
+  ib: PYP4
+  ib_label: "PYP Year 4"
+  topics:
+    - {id: add_sub_2digit,    name: "Addition and subtraction to 1000"}
+    - {id: times_tables,      name: "Multiplication facts to 12"}
+    - {id: fractions_unit,    name: "Unit fractions of quantities"}
+    - {id: measure_length,    name: "Measurement and units", geometry: true}
+    - {id: angles_basic,      name: "Angles, turns and right angles", geometry: true}
+
+grade4:
+  label: "Grade 4 (age 9-10)"
+  ib: PYP5
+  ib_label: "PYP Year 5"
+  topics:
+    - {id: long_mult_div,     name: "Long multiplication and division"}
+    - {id: fractions_ops,     name: "Adding and subtracting fractions"}
+    - {id: decimals,          name: "Decimals and place value"}
+    - {id: area_perimeter,    name: "Area and perimeter", geometry: true}
+    - {id: angles_basic,      name: "Measuring and drawing angles", geometry: true}
+
+grade5:
+  label: "Grade 5 (age 10-11)"
+  ib: PYP6
+  ib_label: "PYP Year 6"
+  topics:
+    - {id: long_mult_div,     name: "Written methods, including remainders"}
+    - {id: fractions_ops,     name: "Fraction arithmetic"}
+    - {id: decimals,          name: "Decimal operations"}
+    - {id: percentages,       name: "Percentages of amounts"}
+    - {id: area_perimeter,    name: "Area, perimeter and compound shapes", geometry: true}
+    - {id: coordinates,       name: "Coordinates in four quadrants", geometry: true}
+
+grade6:
+  label: "Grade 6 (age 11-12)"
+  ib: MYP1
+  ib_label: "MYP Year 1"
+  topics:
+    - {id: integers,          name: "Negative numbers and integer operations"}
+    - {id: ratio_proportion,  name: "Ratio and direct proportion"}
+    - {id: linear_simple,     name: "One-step and two-step equations"}
+    - {id: percentages,       name: "Percentage increase and decrease"}
+    - {id: area_compound,     name: "Area of compound shapes", geometry: true}
+    - {id: coordinates,       name: "Coordinates and plotting", geometry: true}
+    - {id: angle_rules,      name: "Angle rules and polygon angles", geometry: true}
+
+grade7:
+  label: "Grade 7 (age 12-13)"
+  ib: MYP2
+  ib_label: "MYP Year 2"
+  topics:
+    - {id: integers,          name: "Order of operations with integers"}
+    - {id: ratio_proportion,  name: "Proportional reasoning and scale"}
+    - {id: linear_simple,     name: "Equations with brackets"}
+    - {id: fractions_ops,     name: "Multiplying and dividing fractions"}
+    - {id: area_compound,     name: "Area, surface area and volume", geometry: true}
+    - {id: angles_basic,      name: "Angle rules in parallel lines", geometry: true}
+    - {id: angle_rules,      name: "Angles in parallel lines", geometry: true}
+    - {id: geometry_3d,      name: "Volume and surface area of solids", geometry: true}
+
+grade8:
+  label: "Grade 8 (age 13-14)"
+  ib: MYP3
+  ib_label: "MYP Year 3"
+  topics:
+    - {id: linear_equations,  name: "Linear equations and rearrangement"}
+    - {id: indices,           name: "Index laws"}
+    - {id: sequences,         name: "Arithmetic sequences and nth term"}
+    - {id: pythagoras,        name: "Pythagoras' theorem", geometry: true}
+    - {id: circle_geometry,   name: "Circles: circumference and area", geometry: true}
+    - {id: angle_rules,      name: "Polygon angles and angle reasoning", geometry: true}
+    - {id: inscribed_shapes, name: "Shaded areas: circles in shapes", geometry: true}
+    - {id: geometry_3d,      name: "Volume and surface area, including cylinders", geometry: true}
+
+grade9:
+  label: "Grade 9 (age 14-15)"
+  ib: MYP4
+  ib_label: "MYP Year 4"
+  topics:
+    - {id: linear_equations,  name: "Equations with unknowns on both sides"}
+    - {id: simultaneous,      name: "Simultaneous linear equations"}
+    - {id: indices,           name: "Index laws and standard form"}
+    - {id: probability,       name: "Probability and tree diagrams"}
+    - {id: pythagoras,        name: "Pythagoras in two and three dimensions", geometry: true}
+    - {id: straight_line,     name: "Gradient and equation of a line", geometry: true}
+    - {id: circle_theorems,  name: "Circle theorems with reasons", geometry: true}
+    - {id: similar_triangles, name: "Similar figures and scale factors", geometry: true}
+    - {id: sectors_arcs,     name: "Arc length and sector area", geometry: true}
+    - {id: analytic_geometry, name: "Coordinate geometry: distance, midpoint, gradient", geometry: true}
+    - {id: geometry_3d,      name: "Solids and the space diagonal", geometry: true}
+
+grade10:
+  label: "Grade 10 (age 15-16)"
+  ib: MYP5
+  ib_label: "MYP Year 5"
+  topics:
+    - {id: quadratics,        name: "Quadratic equations: factorising and formula"}
+    - {id: surds,             name: "Surds and exact values"}
+    - {id: sequences,         name: "Arithmetic and geometric sequences"}
+    - {id: trigonometry,      name: "Right-angled trigonometry", geometry: true}
+    - {id: sine_cosine_rule,  name: "Sine and cosine rules", geometry: true}
+    - {id: transformations,   name: "Transformations of the plane", geometry: true}
+    - {id: circle_theorems,  name: "Circle theorems and proof", geometry: true}
+    - {id: similar_triangles, name: "Similar figures: area and volume ratios", geometry: true}
+    - {id: sectors_arcs,     name: "Sectors, arcs and perimeters", geometry: true}
+    - {id: analytic_geometry, name: "Perpendicular bisectors and line equations", geometry: true}
+    - {id: inscribed_shapes, name: "Shaded areas in exact form", geometry: true}
+    - {id: geometry_3d,      name: "3D trigonometry and angles to a plane", geometry: true}
+
+grade11:
+  label: "Grade 11 (age 16-17)"
+  ib: DP_AA_SL
+  ib_label: "DP 1 — Analysis & Approaches SL"
+  topics:
+    - {id: functions,         name: "Functions, domain, range and composition"}
+    - {id: quadratic_theory,  name: "Discriminant and quadratic theory"}
+    - {id: logs_exp,          name: "Logarithms and exponentials"}
+    - {id: trig_identities,   name: "Trigonometric identities and equations"}
+    - {id: binomial,          name: "Binomial theorem"}
+    - {id: differentiation,   name: "Differentiation and tangents"}
+    - {id: integration,       name: "Integration and area under a curve"}
+    - {id: vectors_2d,        name: "Vectors in two dimensions", geometry: true}
+    - {id: circle_equations, name: "The equation of a circle", geometry: true}
+    - {id: sectors_arcs,     name: "Sectors, segments and radian measure", geometry: true}
+    - {id: analytic_geometry, name: "Analytical geometry of the line", geometry: true}
+    - {id: geometry_3d,      name: "Solids, volumes and 3D angles", geometry: true}
+
+grade12:
+  label: "Grade 12 (age 17-18)"
+  ib: DP_AA_HL
+  ib_label: "DP 2 — Analysis & Approaches HL"
+  topics:
+    - {id: complex_numbers,   name: "Complex numbers and De Moivre"}
+    - {id: proof_induction,   name: "Proof by induction"}
+    - {id: calculus_advanced, name: "Implicit differentiation"}
+    - {id: integration_parts, name: "Integration by parts and substitution"}
+    - {id: differential_eq,   name: "First-order differential equations"}
+    - {id: maclaurin,         name: "Maclaurin series"}
+    - {id: vectors_3d,        name: "Vectors, lines and planes in 3D", geometry: true}
+    - {id: circle_equations, name: "Circles, lines and loci in the plane", geometry: true}

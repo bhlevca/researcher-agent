@@ -12,7 +12,10 @@ import tempfile
 import threading
 import logging
 import unicodedata
+from difflib import SequenceMatcher
 from pathlib import Path
+
+from researcher.gpu_broker import GPU, Need
 
 from fastapi import HTTPException, UploadFile, File, Form, Request
 
@@ -50,6 +53,107 @@ def _wer(reference: str, hypothesis: str) -> float:
             else:
                 dp[j] = 1 + min(prev[j], dp[j - 1], prev[j - 1])
     return dp[m] / len(ref)
+
+
+# Language name / code -> epitran script code. Only languages epitran handles
+# rule-based (no external lexicon) are listed; anything else falls back to WER.
+_EPITRAN_CODES = {
+    "fr": "fra-Latn", "french": "fra-Latn",
+    "es": "spa-Latn", "spanish": "spa-Latn",
+    "de": "deu-Latn", "german": "deu-Latn",
+    "it": "ita-Latn", "italian": "ita-Latn",
+    "pt": "por-Latn", "portuguese": "por-Latn",
+    "ro": "ron-Latn", "romanian": "ron-Latn",
+    "nl": "nld-Latn", "dutch": "nld-Latn",
+    "pl": "pol-Latn", "polish": "pol-Latn",
+    "tr": "tur-Latn", "turkish": "tur-Latn",
+}
+
+_epitran_cache: dict = {}
+_panphon_dist = None
+
+
+def _to_ipa(text: str, lang: str) -> str | None:
+    """Transcribe text to IPA, or None if the language is unsupported."""
+    code = _EPITRAN_CODES.get((lang or "").strip().lower())
+    if not code:
+        return None
+    try:
+        if code not in _epitran_cache:
+            import epitran
+
+            _epitran_cache[code] = epitran.Epitran(code)
+        return _epitran_cache[code].transliterate(text.lower())
+    except Exception as e:  # pragma: no cover - depends on optional data
+        logger.warning("[PRON] IPA transcription failed for %s: %s", code, e)
+        return None
+
+
+def _phoneme_score(reference: str, hypothesis: str, lang: str) -> tuple[float, str] | None:
+    """Score pronunciation by ARTICULATORY FEATURE distance between IPA forms.
+
+    Returns ``(score, detail)`` or None when the language is unsupported.
+
+    Word Error Rate answers "did Whisper recognise the words", which is the
+    wrong question: a heavy accent that Whisper still decodes scores a perfect
+    1.0. Feature distance answers "how far is this from the target sound", so a
+    near-miss like French /\u0281/ realised as /\u027e/ is penalised proportionally rather
+    than being invisible.
+    """
+    ref_ipa = _to_ipa(reference, lang)
+    hyp_ipa = _to_ipa(hypothesis, lang)
+    if not ref_ipa or not hyp_ipa:
+        return None
+
+    global _panphon_dist
+    try:
+        if _panphon_dist is None:
+            import panphon.distance
+
+            _panphon_dist = panphon.distance.Distance()
+        # Normalised by length so the score is comparable across utterances.
+        dist = _panphon_dist.feature_edit_distance_div_maxlen(ref_ipa, hyp_ipa)
+    except Exception as e:  # pragma: no cover
+        logger.warning("[PRON] Feature distance failed: %s", e)
+        return None
+
+    # Feature distance alone is too forgiving for a single-segment swap: /ʒ/ and
+    # /z/ differ by roughly one articulatory feature, so replacing one in a
+    # six-segment word barely moves a length-normalised score (~0.98) even though
+    # it is a distinct, teachable phoneme error.
+    #
+    # So combine two views: how ACOUSTICALLY close the attempt is (feature
+    # distance) and how many segments are outright wrong (segment accuracy). The
+    # first stops us punishing near-misses like WER does; the second stops us
+    # waving through a substituted phoneme.
+    closeness = max(0.0, min(1.0, 1.0 - float(dist)))
+
+    try:
+        ref_segs = _panphon_dist.fm.ipa_segs(ref_ipa)
+        hyp_segs = _panphon_dist.fm.ipa_segs(hyp_ipa)
+    except Exception:
+        ref_segs, hyp_segs = list(ref_ipa), list(hyp_ipa)
+
+    matcher = SequenceMatcher(None, ref_segs, hyp_segs)
+    matched = sum(bl.size for bl in matcher.get_matching_blocks())
+    seg_accuracy = matched / max(1, len(ref_segs))
+
+    score = round(0.5 * closeness + 0.5 * seg_accuracy, 3)
+
+    # Name the actual substitutions so feedback can be specific rather than
+    # "try again": a learner can act on "you said /z/ where /ʒ/ was expected".
+    subs = []
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "replace":
+            subs.append(f"/{''.join(ref_segs[i1:i2])}/ -> /{''.join(hyp_segs[j1:j2])}/")
+        elif tag == "delete":
+            subs.append(f"missing /{''.join(ref_segs[i1:i2])}/")
+        elif tag == "insert":
+            subs.append(f"extra /{''.join(hyp_segs[j1:j2])}/")
+    detail = f"/{ref_ipa}/ vs /{hyp_ipa}/"
+    if subs:
+        detail += " — " + "; ".join(subs[:4])
+    return score, detail
 
 
 def _pronunciation_score(reference: str, hypothesis: str) -> float:
@@ -108,6 +212,57 @@ def _has_script_mismatch(text: str, lang: str) -> bool:
     if dominant is None:
         return False
     return dominant not in expected
+
+
+def get_whisper_params() -> dict:
+    """Current speech-to-text settings, for the Params panel."""
+    device = os.getenv("WHISPER_DEVICE", "cpu")
+    return {
+        "whisper_model": os.getenv("WHISPER_MODEL", "small"),
+        "whisper_device": device,
+        "whisper_compute_type": os.getenv(
+            "WHISPER_COMPUTE_TYPE", "int8" if device == "cpu" else "float16"
+        ),
+        "whisper_vad": _WHISPER_VAD,
+    }
+
+
+def update_whisper_params(params: dict) -> dict:
+    """Update speech-to-text settings at runtime.
+
+    Model, device and compute type are baked into the loaded WhisperModel, so
+    changing any of them drops the cached instance; the next transcription
+    reloads it. VAD is applied per call and needs no reload.
+    """
+    global _whisper_model, _WHISPER_VAD
+
+    reload_needed = False
+    if "whisper_model" in params:
+        val = str(params["whisper_model"]).strip()
+        if val in {"tiny", "base", "small", "medium", "large-v2", "large-v3"}:
+            os.environ["WHISPER_MODEL"] = val
+            reload_needed = True
+    if "whisper_device" in params:
+        val = str(params["whisper_device"]).strip().lower()
+        if val in {"cpu", "cuda"}:
+            os.environ["WHISPER_DEVICE"] = val
+            # int8 is meaningless on cuda and float16 is wrong on cpu, so keep
+            # the pair consistent unless the caller overrides it below.
+            os.environ["WHISPER_COMPUTE_TYPE"] = "int8" if val == "cpu" else "float16"
+            reload_needed = True
+    if "whisper_compute_type" in params:
+        val = str(params["whisper_compute_type"]).strip().lower()
+        if val in {"int8", "int8_float16", "float16", "float32"}:
+            os.environ["WHISPER_COMPUTE_TYPE"] = val
+            reload_needed = True
+    if "whisper_vad" in params:
+        _WHISPER_VAD = bool(params["whisper_vad"])
+
+    if reload_needed:
+        with _whisper_lock:
+            _whisper_model = None
+        logger.info("[STT] Settings changed — model will reload on next request")
+    return get_whisper_params()
 
 
 class _FasterWhisperAdapter:
@@ -190,7 +345,7 @@ def register_speech_routes(app):
 
         Pass language=auto to let Whisper auto-detect the spoken language.
         """
-        await get_current_user(request)
+        _user = await get_current_user(request)
         raw_lang = (language or "").strip().lower()
         # "auto" means let Whisper detect; otherwise take first 2 chars
         lang = None if raw_lang in ("auto", "") else raw_lang[:2]
@@ -237,7 +392,15 @@ def register_speech_routes(app):
 
                 return " ".join(filtered).strip() if filtered else ""
 
-            text = await loop.run_in_executor(None, _transcribe)
+            # Whisper defaults to CPU precisely to stay out of this queue.
+            # If it has been pointed at CUDA it contends like anything else.
+            if get_whisper_params()["whisper_device"] == "cpu":
+                # gpu-queue-exempt: the CUDA branch below takes its turn.
+                text = await loop.run_in_executor(None, _transcribe)
+            else:
+                async with GPU.exclusive(Need("torch", "whisper"), "speech",
+                                         user=_user["id"]):
+                    text = await loop.run_in_executor(None, _transcribe)
             return {"text": text}
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Transcription failed: {e}")
@@ -254,9 +417,11 @@ def register_speech_routes(app):
     ):
         """Transcribe audio and score pronunciation against an expected sentence.
 
-        Returns transcript, WER-based score (0–1), and a feedback string.
+        Scores at PHONEME level where the language is supported, falling back to
+        word-level WER otherwise. Returns transcript, score (0–1), feedback, the
+        method used, and an IPA comparison naming any substituted sounds.
         """
-        await get_current_user(request)
+        _user = await get_current_user(request)
         if not expected.strip():
             raise HTTPException(status_code=400, detail="expected text is required")
 
@@ -291,23 +456,52 @@ def register_speech_routes(app):
                 ]
                 return " ".join(parts).strip()
 
-            transcript = await loop.run_in_executor(None, _transcribe_for_score)
-            score = _pronunciation_score(expected, transcript)
+            # Same model, same card, same queue as plain transcription.
+            if get_whisper_params()["whisper_device"] == "cpu":
+                # gpu-queue-exempt: the CUDA branch below takes its turn.
+                transcript = await loop.run_in_executor(
+                    None, _transcribe_for_score)
+            else:
+                async with GPU.exclusive(Need("torch", "whisper"), "speech",
+                                         user=_user["id"]):
+                    transcript = await loop.run_in_executor(
+                        None, _transcribe_for_score)
 
-            if score >= 0.9:
+            # Prefer phoneme-level scoring where the language supports it. Word
+            # Error Rate scores RECOGNITION, so it gives 0.00 both to a perfect
+            # utterance spelled differently and to an entirely wrong word — the
+            # learner cannot tell those apart from the number.
+            method, detail = "wer", ""
+            phon = _phoneme_score(expected, transcript, lang or language)
+            if phon is not None:
+                score, detail = phon
+                method = "phoneme"
+            else:
+                score = _pronunciation_score(expected, transcript)
+
+            if not transcript.strip():
+                score, feedback = 0.0, "No speech detected — try recording again."
+            elif score >= 0.9:
                 feedback = "Excellent pronunciation!"
-            elif score >= 0.7:
-                feedback = "Good — a few small differences from the target."
-            elif score >= 0.4:
-                feedback = "Getting there — try again, focusing on each word."
+            elif score >= 0.75:
+                feedback = "Good — very close to the target."
+            elif score >= 0.5:
+                feedback = "Getting there — focus on the sounds marked below."
             else:
                 feedback = "Needs practice — compare your recording to the target."
+
+            # Name the specific substitutions: "you said /z/ where /ʒ/ was
+            # expected" is actionable in a way that a score is not.
+            if detail and score < 0.9 and " — " in detail:
+                feedback += " " + detail.split(" — ", 1)[1]
 
             return {
                 "transcript": transcript,
                 "expected": expected,
                 "score": score,
                 "feedback": feedback,
+                "method": method,
+                "detail": detail,
             }
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Scoring failed: {e}")

@@ -138,7 +138,7 @@ async function generateAppraisal() {
         }
 
         const result = await processTutorSSE(resp, liveBox, []);
-        liveWrapper.remove();
+        collapseThinking(liveWrapper, liveBox, 'Thinking — appraisal');
 
         if (result && result.response) {
             const viewer = document.createElement('div');

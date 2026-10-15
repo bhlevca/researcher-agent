@@ -496,3 +496,138 @@ header h1 { font-size: 1.2rem; font-weight: 600; color: #e94560; }
     background: none; border: none; color: #64748b; cursor: pointer; font-size: 0.75rem; margin-left: 0.3rem;
 }
 .file-item button:hover { color: #fca5a5; }
+
+/* ── The GPU panel ───────────────────────────────────────────────────────
+   Always on screen, on every tab. Deliberately permanent: a panel that only
+   appears under contention cannot be trusted, because its absence is
+   ambiguous between "queue empty" and "queue broken".
+
+   It sits in the document flow as the last flex item of <body>, which on
+   every page here is a 100vh flex column — so it gets its own line below the
+   typing box. It was a fixed overlay first, and that covered the input on all
+   four tabs. */
+.gpu-panel {
+    flex: 0 0 auto;
+    border-top: 1px solid #0f3460;
+    background: #16213e;
+    color: #cbd5e1;
+    font-size: 0.74rem;
+}
+
+/* A coloured edge so state reads without expanding anything. */
+.gpu-panel.is-busy .gpu-panel-title { color: #f59e0b; }
+.gpu-panel.is-queued .gpu-panel-title { color: #ef4444; }
+
+.gpu-panel-head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.3rem 1.5rem;
+}
+
+.gpu-panel-title { color: #64748b; flex: 0 0 auto; }
+.gpu-panel-now {
+    flex: 1 1 auto;
+    color: #fbbf24;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.gpu-panel-toggle {
+    flex: 0 0 auto;
+    background: none;
+    border: none;
+    color: #64748b;
+    cursor: pointer;
+    font-size: 0.8rem;
+    padding: 0 0.2rem;
+}
+
+.gpu-panel-toggle:hover { color: #fbbf24; }
+
+.gpu-panel-body {
+    border-top: 1px solid #0f3460;
+    padding: 0.4rem 1.5rem 0.5rem;
+    max-height: 14rem;
+    overflow-y: auto;
+}
+
+.gpu-panel-row {
+    padding: 0.1rem 0;
+    display: flex;
+    align-items: baseline;
+    gap: 0.3rem;
+    flex-wrap: wrap;
+}
+
+.gpu-panel-row.is-running { color: #fbbf24; }
+.gpu-panel-row.is-you { font-weight: 600; }
+.gpu-panel-idle { color: #64748b; font-style: italic; }
+.gpu-panel-row em { color: #93c5fd; font-style: italic; }
+
+.gpu-panel-row button {
+    margin-left: auto;
+    background: #0f3460;
+    color: #fbbf24;
+    border: 1px solid #f59e0b;
+    border-radius: 0.3rem;
+    padding: 0.08rem 0.4rem;
+    font-size: 0.68rem;
+    cursor: pointer;
+}
+
+.gpu-panel-row button:hover:not(:disabled) { background: #1a3a6e; }
+.gpu-panel-row button:disabled { opacity: 0.6; cursor: default; }
+
+/* The session history. Nothing is erased until the tab closes: a wait that
+   has passed is still the explanation for why something took 90 seconds. */
+.gpu-panel-logwrap { margin-top: 0.35rem; }
+.gpu-panel-loghead {
+    color: #475569;
+    border-top: 1px solid #0f3460;
+    padding-top: 0.25rem;
+    margin-bottom: 0.15rem;
+}
+
+.gpu-panel-log {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: 0.7rem;
+}
+
+.gpu-panel-log li { padding: 0.04rem 0; }
+.gpu-panel-log .gpu-log-at { color: #475569; }
+.gpu-panel-log .gpu-log-empty { color: #475569; font-style: italic; }
+
+/* ── The inline queue note ───────────────────────────────────────────────
+   Sits in the tab you are actually looking at, above the streaming box. The
+   panel is the permanent view; this one is where your eyes already are. */
+.gpu-queue-note {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin: 0.3rem 0;
+    padding: 0.4rem 0.6rem;
+    border: 1px solid #1a3a6e;
+    border-left: 3px solid #f59e0b;
+    border-radius: 0.4rem;
+    background: #0f3460;
+    color: #fbbf24;
+    font-size: 0.78rem;
+}
+
+.gpu-queue-note button {
+    margin-left: auto;
+    background: #16213e;
+    color: #fbbf24;
+    border: 1px solid #f59e0b;
+    border-radius: 0.35rem;
+    padding: 0.2rem 0.55rem;
+    font-size: 0.72rem;
+    cursor: pointer;
+}
+
+.gpu-queue-note button:hover:not(:disabled) { background: #1a3a6e; }
+.gpu-queue-note button:disabled { opacity: 0.6; cursor: default; }

@@ -4,6 +4,7 @@ import sys
 import io
 import re
 import json
+import os
 import asyncio
 import queue
 import threading
@@ -12,6 +13,8 @@ import logging
 from fastapi import HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from researcher.gpu_broker import GPU, Need, queue_message
+from researcher.user_crews import get_crew, resolve_model
 from researcher.config import (
     ChatRequest,
     ContinueRequest,
@@ -31,7 +34,6 @@ from researcher.ingestion import (
     is_extraction_request,
 )
 from researcher.image import load_image_params_from_json
-from researcher.crew import ResearchCrew
 
 from crewai.agents.parser import AgentAction, AgentFinish
 from crewai.events.event_bus import crewai_event_bus
@@ -237,9 +239,18 @@ def register_chat_routes(app):
             semaphore = request.app.state.crew_semaphores[uid]
 
             async def media_stream():
-                # Hold the per-user semaphore: this is GPU work, and letting it
-                # run alongside a crew would put two models on one card.
-                async with semaphore:
+                # Image and video are torch work: the broker releases Ollama
+                # for them, and — unlike the old context manager — does not
+                # reinstate it afterwards. The next task says what it wants.
+                _backend = os.getenv("IMAGE_BACKEND", "zimage")
+                _need = Need("torch", "video" if kind == "video" else _backend)
+                async with semaphore, GPU.reserve(_need, kind, user=uid) as _res:
+                    async for _n in _res.wait():
+                        if _n["position"]:
+                            yield _sse_media(
+                                "reasoning",
+                                f"\u23f3 Waiting for the GPU \u2014 "
+                                f"{_n['position']} ahead of you")
                     yield _sse_media(
                         "reasoning",
                         f"🎬 Direct {kind} generation (agent bypassed): {direct_prompt[:80]}",
@@ -299,24 +310,12 @@ def register_chat_routes(app):
         if uid not in request.app.state.cancel_events:
             request.app.state.cancel_events[uid] = threading.Event()
 
-        # Ensure runtime model matches the user's saved model.
-        cursor_model = await db.execute(
-            "SELECT model, llm_params FROM users WHERE id = ?", (uid,)
-        )
-        row_model = await cursor_model.fetchone()
-        saved_model = row_model[0] if row_model and row_model[0] else None
-        effective_model = saved_model or request.app.state.current_model
-
-        existing_crew = request.app.state.research_crews.get(uid)
-        if existing_crew is None or effective_model != request.app.state.current_model:
-            new_crew = ResearchCrew(model=effective_model)
-            if row_model and row_model[1]:
-                try:
-                    new_crew.update_llm_params(json.loads(row_model[1]))
-                except (json.JSONDecodeError, TypeError):
-                    pass
-            request.app.state.research_crews[uid] = new_crew
-            request.app.state.current_model = effective_model
+        # The model this person chose, which is held in the database. The
+        # comparison this used to make was against app.state.current_model —
+        # process-wide, so the last person to use the picker decided what
+        # everybody else ran.
+        research_crew = await get_crew(request, uid, "research")
+        effective_model = research_crew.model_name
 
         # Prepend attached file contents
         file_context = ""
@@ -325,15 +324,13 @@ def register_chat_routes(app):
             file_context = await get_file_context(db, user["id"], req.file_ids)
 
         # Build context from conversation history (3-tier strategy)
-        model = request.app.state.current_model
+        model = effective_model
         conv_context = _build_conversation_context(req.history, model)
 
         if conv_context:
             topic = file_context + conv_context + "\n\nNew request: " + req.message
         else:
             topic = file_context + req.message
-
-        research_crew = request.app.state.research_crews[uid]
 
         # Ensure image params from DB are applied before generation
         cursor = await db.execute(
@@ -376,96 +373,109 @@ def register_chat_routes(app):
                 "crew_timeout_sec", request.app.state.crew_timeout
             )
             async with semaphore:
-                loop = asyncio.get_running_loop()
-                future = loop.run_in_executor(None, _run_crew)
-                all_lines: list[str] = []
+                # One card, several people. Reserve before the crew starts,
+                # because kickoff() is what loads the model: without this two
+                # people simply both load, and Ollama spills one of them to
+                # CPU rather than queueing. Consuming wait() is what queues,
+                # and because it is an async generator the position reaches
+                # the browser while we are still waiting.
+                _need = Need("ollama",
+                             str(effective_model).replace("ollama/", ""))
+                async with GPU.reserve(_need, "research", user=uid) as _res:
+                    async for _notice in _res.wait():
+                        yield _sse("queue", queue_message(
+                            _notice["position"], _notice["estimate"],
+                            _notice["ticket"]))
+                    loop = asyncio.get_running_loop()
+                    future = loop.run_in_executor(None, _run_crew)
+                    all_lines: list[str] = []
 
-                _skip_history = False
+                    _skip_history = False
 
-                _verbose_noise = re.compile(
-                    r"^(Agent:|Task:|Thought:|Action:|Action Input:|Observation:|"
-                    r"Entering new CrewAgentExecutor|Finished chain|"
-                    r"> |I encountered an error|Tool .* accepts these inputs|"
-                    r"Tool Name:|Tool Arguments:|Tool Description:|"
-                    r"\[1m|> Entering|> Finished|Moving on then)",
-                    re.IGNORECASE,
-                )
+                    _verbose_noise = re.compile(
+                        r"^(Agent:|Task:|Thought:|Action:|Action Input:|Observation:|"
+                        r"Entering new CrewAgentExecutor|Finished chain|"
+                        r"> |I encountered an error|Tool .* accepts these inputs|"
+                        r"Tool Name:|Tool Arguments:|Tool Description:|"
+                        r"\[1m|> Entering|> Finished|Moving on then)",
+                        re.IGNORECASE,
+                    )
 
-                def _should_show(line: str) -> bool:
-                    nonlocal _skip_history
-                    if "Previous conversation:" in line:
-                        _skip_history = True
-                        return False
-                    if _skip_history:
-                        if "New request:" in line:
-                            _skip_history = False
-                        return False
-                    if line and line[0] in "💭🔧📋✅🧠📝⚠️👁️🎯":
+                    def _should_show(line: str) -> bool:
+                        nonlocal _skip_history
+                        if "Previous conversation:" in line:
+                            _skip_history = True
+                            return False
+                        if _skip_history:
+                            if "New request:" in line:
+                                _skip_history = False
+                            return False
+                        if line and line[0] in "💭🔧📋✅🧠📝⚠️👁️🎯":
+                            return True
+                        if _verbose_noise.search(line):
+                            return False
                         return True
-                    if _verbose_noise.search(line):
-                        return False
-                    return True
 
-                elapsed = 0.0
-                early_exit: str | None = None  # "cancelled" | "timeout"
+                    elapsed = 0.0
+                    early_exit: str | None = None  # "cancelled" | "timeout"
 
-                while not future.done():
-                    if cancel.is_set() and early_exit is None:
-                        early_exit = "cancelled"
-                        yield _sse("cancelled", "Request cancelled by user")
-                    if elapsed >= timeout_sec and early_exit is None:
-                        early_exit = "timeout"
-                        yield _sse("error", f"Request timed out after {timeout_sec}s")
-                    await asyncio.sleep(0.15)
-                    elapsed += 0.15
+                    while not future.done():
+                        if cancel.is_set() and early_exit is None:
+                            early_exit = "cancelled"
+                            yield _sse("cancelled", "Request cancelled by user")
+                        if elapsed >= timeout_sec and early_exit is None:
+                            early_exit = "timeout"
+                            yield _sse("error", f"Request timed out after {timeout_sec}s")
+                        await asyncio.sleep(0.15)
+                        elapsed += 0.15
+                        while not q.empty():
+                            try:
+                                line = q.get_nowait()
+                                all_lines.append(line)
+                                if early_exit is None and _should_show(line):
+                                    yield _sse("reasoning", line)
+                            except queue.Empty:
+                                break
+
+                    if early_exit is not None:
+                        # Drain queue silently; semaphore releases after thread finished
+                        while not q.empty():
+                            q.get_nowait()
+                        return
+
+                    # Drain remaining
                     while not q.empty():
                         try:
                             line = q.get_nowait()
                             all_lines.append(line)
-                            if early_exit is None and _should_show(line):
+                            if _should_show(line):
                                 yield _sse("reasoning", line)
                         except queue.Empty:
                             break
 
-                if early_exit is not None:
-                    # Drain queue silently; semaphore releases after thread finished
-                    while not q.empty():
-                        q.get_nowait()
-                    return
-
-                # Drain remaining
-                while not q.empty():
                     try:
-                        line = q.get_nowait()
-                        all_lines.append(line)
-                        if _should_show(line):
-                            yield _sse("reasoning", line)
-                    except queue.Empty:
-                        break
+                        result = future.result()
+                    except Exception as e:
+                        yield _sse("error", str(e))
+                        return
 
-                try:
-                    result = future.result()
-                except Exception as e:
-                    yield _sse("error", str(e))
-                    return
+                    response_text = _postprocess(
+                        research_crew.postprocess(result), "\n".join(all_lines)
+                    )
+                    usage = _extract_usage(result)
+                    incomplete = _is_incomplete(response_text, "\n".join(all_lines))
 
-                response_text = _postprocess(
-                    research_crew.postprocess(result), "\n".join(all_lines)
-                )
-                usage = _extract_usage(result)
-                incomplete = _is_incomplete(response_text, "\n".join(all_lines))
+                    yield _sse(
+                        "done",
+                        {
+                            "response": response_text,
+                            "reasoning": all_lines,
+                            "token_usage": usage,
+                            "incomplete": incomplete,
+                        },
+                    )
 
-                yield _sse(
-                    "done",
-                    {
-                        "response": response_text,
-                        "reasoning": all_lines,
-                        "token_usage": usage,
-                        "incomplete": incomplete,
-                    },
-                )
-
-                _maybe_unload_ollama()
+                    _maybe_unload_ollama()
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -491,7 +501,7 @@ def register_chat_routes(app):
             db = request.app.state.db
             file_context = await get_file_context(db, user["id"], req.file_ids)
 
-        model = request.app.state.current_model
+        model, _ = await resolve_model(request, user["id"])
         if model.startswith("ollama/"):
             litellm_model = "ollama_chat/" + model[len("ollama/"):]
         else:
@@ -539,7 +549,11 @@ def register_chat_routes(app):
                 len(req.original_query),
                 len(req.partial_response),
             )
-            response = await loop.run_in_executor(None, _call_llm)
+            # Continuing an answer is another model call, so it waits its
+            # turn like everything else.
+            async with GPU.exclusive(Need("ollama", model.replace("ollama/", "")),
+                                     "continue", user=user["id"]):
+                response = await loop.run_in_executor(None, _call_llm)
             text = response.choices[0].message.content or ""
             logger.info("[chat/continue] LLM returned %d chars", len(text))
             text = re.sub(r"<think>[\s\S]*?</think>\s*", "", text).strip()

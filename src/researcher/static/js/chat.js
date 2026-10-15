@@ -91,13 +91,19 @@ async function sendMessage() {
                     else if (line.startsWith('data: ')) dataStr += line.slice(6);
                 }
 
-                if (eventType === 'reasoning' && dataStr) {
+                if (eventType === 'queue' && dataStr) {
+                    // One card, several people: a wait is normal. Saying so is
+                    // the difference between "queued" and "apparently hung".
+                    try { gpuShowQueueNote(liveBox, JSON.parse(dataStr)); }
+                    catch (e) { /* malformed event: ignore */ }
+                } else if (eventType === 'reasoning' && dataStr) {
                     const line = JSON.parse(dataStr);
                     reasoningLines.push(line);
                     liveBox.textContent = reasoningLines.join('\n');
                     liveBox.scrollTop = liveBox.scrollHeight;
                     chat.scrollTop = chat.scrollHeight;
                 } else if (eventType === 'done' && dataStr) {
+                    gpuShowQueueNote(liveBox, null);
                     const result = JSON.parse(dataStr);
                     liveWrapper.remove();
                     const msgWrapper = addAssistantMessage(
@@ -132,10 +138,12 @@ async function sendMessage() {
                         });
                     }
                 } else if (eventType === 'cancelled' && dataStr) {
+                    gpuShowQueueNote(liveBox, null);
                     liveWrapper.remove();
                     addSimpleMsg('error', 'Request cancelled.');
                     return;
                 } else if (eventType === 'error' && dataStr) {
+                    gpuShowQueueNote(liveBox, null);
                     // Preserve reasoning lines and show error below them
                     liveWrapper.remove();
                     const errText = 'Error: ' + JSON.parse(dataStr);
@@ -144,11 +152,8 @@ async function sendMessage() {
                         const w = document.createElement('div');
                         w.className = 'msg-wrapper assistant';
 
-                        const errMsg = document.createElement('div');
-                        errMsg.className = 'message error';
-                        errMsg.textContent = errText;
-                        w.appendChild(errMsg);
-
+                        // Reasoning above, same as a successful answer: it is
+                        // where the live box already was.
                         const det = document.createElement('details');
                         det.className = 'reasoning-toggle';
                         det.setAttribute('open', '');
@@ -160,6 +165,11 @@ async function sendMessage() {
                         c.textContent = reasoningLines.join('\n');
                         det.appendChild(c);
                         w.appendChild(det);
+
+                        const errMsg = document.createElement('div');
+                        errMsg.className = 'message error';
+                        errMsg.textContent = errText;
+                        w.appendChild(errMsg);
 
                         chat.appendChild(w);
                         chat.scrollTop = chat.scrollHeight;

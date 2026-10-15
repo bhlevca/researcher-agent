@@ -35,14 +35,17 @@ def _patch_external_services(tmp_path, monkeypatch):
 
     # Mock ResearchCrew (now imported in route modules, not main)
     mock_rc = MagicMock()
-    monkeypatch.setattr("researcher.routes.chat.ResearchCrew", mock_rc)
-    monkeypatch.setattr("researcher.routes.ask.ResearchCrew", mock_rc)
+    # Crews are constructed in one place now — user_crews._crew_class,
+    # which imports each class from its own module at call time — so this is
+    # the single point that keeps a real model out of the tests.
+    monkeypatch.setattr("researcher.crew.ResearchCrew", mock_rc)
     monkeypatch.setattr("researcher.routes.models.ResearchCrew", mock_rc)
 
     # Mock TutorCrew — lightweight stub for non-crew tests
     mock_tc = MagicMock(spec=TutorCrew)
     mock_tc.return_value = mock_tc
     mock_tc._model_name = "ollama/test-model"
+    mock_tc.model_name = "ollama/test-model"
     mock_tc.extract_vocabulary_from_response = TutorCrew.extract_vocabulary_from_response
     mock_tc.extract_quiz_json = TutorCrew.extract_quiz_json
     mock_tc.filter_quiz_questions = lambda q, qt: TutorCrew.filter_quiz_questions(mock_tc, q, qt)
@@ -62,7 +65,7 @@ def _patch_external_services(tmp_path, monkeypatch):
             })
         return results
     mock_tc.grade_answers = _mock_grade_answers
-    monkeypatch.setattr("researcher.routes.tutor.TutorCrew", lambda **kw: mock_tc)
+    monkeypatch.setattr("researcher.tutor.crew.TutorCrew", lambda **kw: mock_tc)
     monkeypatch.setattr("researcher.routes.models.TutorCrew", lambda **kw: mock_tc)
 
 

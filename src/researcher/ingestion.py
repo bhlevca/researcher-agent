@@ -21,6 +21,8 @@ import logging
 from pathlib import Path
 from datetime import datetime, timezone
 
+from researcher.gpu_broker import GPU, Need
+
 from fastapi import HTTPException, Request, UploadFile, File
 from fastapi.responses import Response
 from pydantic import BaseModel
@@ -757,10 +759,13 @@ def register_ingestion_routes(app):
                 continue
 
             try:
-                # OCR can take seconds per page, so keep it off the event loop.
-                extracted, ocr_used = await asyncio.get_running_loop().run_in_executor(
-                    None, _extract_text, data, ext
-                )
+                # OCR can take seconds per page, so keep it off the event
+                # loop — and take a turn in the GPU queue, because it runs a
+                # vision model on the same card as everything else.
+                async with GPU.exclusive(Need("ollama", OCR_MODEL), "OCR",
+                                         user=user["id"]):
+                    extracted, ocr_used = await asyncio.get_running_loop(
+                    ).run_in_executor(None, _extract_text, data, ext)
             except HTTPException as e:
                 results.append({"filename": name, "error": e.detail})
                 continue

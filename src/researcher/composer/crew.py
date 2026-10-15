@@ -14,6 +14,7 @@ from pathlib import Path
 from crewai import Agent, Crew, Process, Task, LLM
 from crewai.agent.planning_config import PlanningConfig
 
+from researcher.llm_options import extra_body as _extra_body
 from researcher.config import probe_model_capabilities, TOOL_CAPABLE_MODEL
 import researcher.patches as _patches  # noqa: F401 — applies CrewAI compatibility patches
 from researcher.composer.tools import COMPOSER_TOOLS
@@ -63,6 +64,15 @@ class ComposerCrew:
         self._agents_config = _load_yaml("agents.yaml")
         self._tasks_config = _load_yaml("tasks.yaml")
 
+    @property
+    def model_name(self) -> str:
+        """The model this crew was built with.
+
+        Used to decide whether a cached crew still matches the person's saved
+        choice; without it the cache can only be invalidated by guesswork.
+        """
+        return self._model_name
+
     def get_llm_params(self) -> dict:
         """Return current LLM parameters."""
         return dict(self._llm_params)
@@ -77,23 +87,13 @@ class ComposerCrew:
 
     @staticmethod
     def _make_llm(model: str, params: dict) -> LLM:
-        is_thinking_model = any(k in model.lower() for k in ("qwen3", "deepseek-r1"))
-        seed = int(params.get("seed", 0))
-        num_predict = int(params.get("num_predict", 16384))
-        ollama_options = {
-            "num_ctx": int(params.get("num_ctx", 32768)),
-            "num_gpu": 99,
-            "num_predict": num_predict,
-            "top_k": int(params.get("top_k", 40)),
-            "top_p": float(params.get("top_p", 0.9)),
-            "min_p": float(params.get("min_p", 0.0)),
-            "repeat_penalty": float(params.get("repeat_penalty", 1.0)),
-        }
-        if seed > 0:
-            ollama_options["seed"] = seed
-        extra_body: dict = {"options": ollama_options}
-        if is_thinking_model:
-            extra_body["chat_template_kwargs"] = {"enable_thinking": True}
+        # Thinking off: the output has to be ABC notation we can parse, and a
+        # model that spends its budget in the thinking channel returns an
+        # empty score. See researcher/llm_options.py.
+        extra_body = _extra_body(
+            model, params, thinking=False,
+            num_predict=int(params.get("num_predict", 16384)),
+            repeat_penalty=float(params.get("repeat_penalty", 1.0)))
         return LLM(
             model=model,
             base_url="http://localhost:11434",
@@ -114,12 +114,8 @@ class ComposerCrew:
             base_url="http://localhost:11434",
             temperature=0.2,
             extra_body={
-                "options": {
-                    "num_ctx": 8192,
-                    "num_gpu": 99,
-                    "num_predict": 1024,
-                },
-                "chat_template_kwargs": {"enable_thinking": False},
+                "options": {"num_ctx": 8192, "num_predict": 1024},
+                "think": False,
             },
         )
 

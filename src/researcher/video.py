@@ -584,9 +584,15 @@ def _generate_video_once(prompt: str, progress=None) -> str:
 
 @tool("GenerateAIVideo")
 def generate_ai_video(prompt: str) -> str:
-    """Generate a short video clip from a text prompt. Use for motion, b-roll,
-    animated scenes. Describe the subject, the action, and the camera movement.
-    Copy the returned video tag EXACTLY into your Final Answer."""
+    """Generate a short video clip. ONLY use this when the person explicitly
+    asked for a video, clip or animation.
+
+    Calling this ENDS the request: the clip becomes the entire answer and no
+    text is written, and it takes minutes. Never call it to illustrate a
+    written answer. If in doubt, do not call it.
+
+    Input: the subject, the action, and the camera movement. Copy the returned
+    video tag EXACTLY into your Final Answer."""
     return _generate_video_once(prompt)
 
 

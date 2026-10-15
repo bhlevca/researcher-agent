@@ -15,6 +15,8 @@ import unicodedata
 from difflib import SequenceMatcher
 from pathlib import Path
 
+from researcher.gpu_broker import GPU, Need
+
 from fastapi import HTTPException, UploadFile, File, Form, Request
 
 from researcher.auth import get_current_user
@@ -343,7 +345,7 @@ def register_speech_routes(app):
 
         Pass language=auto to let Whisper auto-detect the spoken language.
         """
-        await get_current_user(request)
+        _user = await get_current_user(request)
         raw_lang = (language or "").strip().lower()
         # "auto" means let Whisper detect; otherwise take first 2 chars
         lang = None if raw_lang in ("auto", "") else raw_lang[:2]
@@ -390,7 +392,15 @@ def register_speech_routes(app):
 
                 return " ".join(filtered).strip() if filtered else ""
 
-            text = await loop.run_in_executor(None, _transcribe)
+            # Whisper defaults to CPU precisely to stay out of this queue.
+            # If it has been pointed at CUDA it contends like anything else.
+            if get_whisper_params()["whisper_device"] == "cpu":
+                # gpu-queue-exempt: the CUDA branch below takes its turn.
+                text = await loop.run_in_executor(None, _transcribe)
+            else:
+                async with GPU.exclusive(Need("torch", "whisper"), "speech",
+                                         user=_user["id"]):
+                    text = await loop.run_in_executor(None, _transcribe)
             return {"text": text}
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Transcription failed: {e}")
@@ -411,7 +421,7 @@ def register_speech_routes(app):
         word-level WER otherwise. Returns transcript, score (0–1), feedback, the
         method used, and an IPA comparison naming any substituted sounds.
         """
-        await get_current_user(request)
+        _user = await get_current_user(request)
         if not expected.strip():
             raise HTTPException(status_code=400, detail="expected text is required")
 
@@ -446,7 +456,16 @@ def register_speech_routes(app):
                 ]
                 return " ".join(parts).strip()
 
-            transcript = await loop.run_in_executor(None, _transcribe_for_score)
+            # Same model, same card, same queue as plain transcription.
+            if get_whisper_params()["whisper_device"] == "cpu":
+                # gpu-queue-exempt: the CUDA branch below takes its turn.
+                transcript = await loop.run_in_executor(
+                    None, _transcribe_for_score)
+            else:
+                async with GPU.exclusive(Need("torch", "whisper"), "speech",
+                                         user=_user["id"]):
+                    transcript = await loop.run_in_executor(
+                        None, _transcribe_for_score)
 
             # Prefer phoneme-level scoring where the language supports it. Word
             # Error Rate scores RECOGNITION, so it gives 0.00 both to a perfect

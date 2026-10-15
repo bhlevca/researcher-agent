@@ -10,11 +10,12 @@ import json
 from fastapi import HTTPException, Request
 
 from researcher.config import AskRequest, _QueueWriter, _maybe_unload_ollama
+from researcher.gpu_broker import GPU, Need
+from researcher.user_crews import get_crew
 from researcher.postprocess import _extract_usage
 from researcher.auth import get_current_user
 from researcher.ingestion import get_file_context
 from researcher.image import load_image_params_from_json
-from researcher.crew import ResearchCrew
 
 logger = logging.getLogger(__name__)
 
@@ -28,25 +29,11 @@ def register_ask_routes(app):
         user = await get_current_user(request)
         uid = user["id"]
 
-        # Ensure runtime model matches the user's saved model.
+        # The model this person chose, which is held in the database rather
+        # than in app.state.current_model — that global is reset from .env on
+        # every restart and is shared between everyone.
         db = request.app.state.db
-        cursor_model = await db.execute(
-            "SELECT model, llm_params FROM users WHERE id = ?", (uid,)
-        )
-        row_model = await cursor_model.fetchone()
-        saved_model = row_model[0] if row_model and row_model[0] else None
-        effective_model = saved_model or request.app.state.current_model
-
-        existing_crew = request.app.state.research_crews.get(uid)
-        if existing_crew is None or effective_model != request.app.state.current_model:
-            new_crew = ResearchCrew(model=effective_model)
-            if row_model and row_model[1]:
-                try:
-                    new_crew.update_llm_params(json.loads(row_model[1]))
-                except (json.JSONDecodeError, TypeError):
-                    pass
-            request.app.state.research_crews[uid] = new_crew
-            request.app.state.current_model = effective_model
+        research_crew = await get_crew(request, uid, "research")
 
         if uid not in request.app.state.crew_semaphores:
             request.app.state.crew_semaphores[uid] = asyncio.Semaphore(1)
@@ -56,7 +43,6 @@ def register_ask_routes(app):
             file_context = await get_file_context(db, uid, req.file_ids)
 
         topic = file_context + req.topic
-        research_crew = request.app.state.research_crews[uid]
 
         # Ensure image params from DB are applied before generation
         cursor = await db.execute(
@@ -90,7 +76,10 @@ def register_ask_routes(app):
         async with semaphore:
             loop = asyncio.get_running_loop()
             try:
-                result = await loop.run_in_executor(None, _run)
+                _need = Need("ollama",
+                             research_crew.model_name.replace("ollama/", ""))
+                async with GPU.exclusive(_need, "ask", user=uid):
+                    result = await loop.run_in_executor(None, _run)
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"Agent error: {e}")
 
@@ -108,5 +97,5 @@ def register_ask_routes(app):
             "response": research_crew.postprocess(result),
             "reasoning": reasoning,
             "token_usage": _extract_usage(result),
-            "model": request.app.state.current_model,
+            "model": research_crew.model_name,
         }

@@ -2,7 +2,7 @@
 
 A CrewAI-powered research agent with a browser-based chat UI, voice dialog, image generation, and session management. Runs locally using Ollama — the **client only needs a web browser**.
 
-**Version 2.16.0**
+**Version 3.0.0**
 
 ## Architecture
 

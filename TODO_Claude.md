@@ -6,44 +6,179 @@ Statuses re-verified against the code, not against previous checkboxes.
 
 ---
 
-## ▶ TOMORROW (2026-10-14)
+## COMPOSER — full-song generation with audio (researched 2026-10-14)
 
-### 1. Multi-user with one GPU — queue and tell people they are waiting
+The composer writes scores. This would be the other half: actual rendered
+audio with vocals. Researched against the official repos, because the
+secondary sources contradict each other badly on VRAM.
 
-The card holds one model. Two users generating at once means swapping, or an
-out-of-memory, or minutes of CPU offload. Today nothing says so: the second
-request simply appears to hang.
+### Recommendation: ACE-Step 1.5, not YuE
 
-Worth building:
-- A single in-process semaphore around every model call (chat, lessons,
-  reading, quiz, story, sheets, composer, image, video). One at a time.
-- Position in the queue pushed to the browser — the SSE channel already
-  exists, so "2 ahead of you, about 40s" is an event, not a redesign.
-- A guard on model switching: swapping models mid-queue evicts the loaded one
-  and costs everyone the reload.
-- Decide what a *fair* unit is. Per request is simplest; per user is fairer
-  when one person asks for a 60-question exam.
+**ACE-Step 1.5** (github.com/ace-step/ACE-Step-1.5)
+- The 8-16GB tier is explicitly "2B turbo/sft" — the 5070 Ti's 15.5GB sits in
+  it comfortably, with the XL 4B as a stretch (">=12GB with offload +
+  quantization", ">=20GB without").
+- "under 10 seconds on an RTX 3090" for a full song. The 5070 Ti is in that
+  class, so this is interactive rather than a batch job — unlike video.
+- MIT licensed. Note: the README states MIT for the project and says nothing
+  separate about the weights, so confirm the model card before any
+  distribution.
+- Ships a Python API alongside Gradio/REST/CLI, so it integrates like the
+  diffusers pipelines already do rather than needing a subprocess.
+- Runs on CUDA, ROCm, Intel XPU and Apple.
 
-Check first whether `app.state.tutor_crews` being per-user already serialises
-anything, and whether Ollama's own queue is enough — it may be, in which case
-this is a UI problem only: say "waiting for the model", not nothing.
+**YuE / YuE2** — does not fit this machine
+- YuE 7B: ~16GB for a single segment, and the README recommends 80GB-class
+  GPUs for full songs. Apache 2.0.
+- YuE2 (Sept 2026): official requirement ~24GB. Secondary sources claim far
+  less; treat with suspicion. Weights reportedly CC BY-NC 4.0, which would
+  rule out anything commercial — verify before investing.
 
-### 2. Tag
+### How it would fit the existing design
 
-v2.17.0 once the above is settled. Today's work is committed but untagged.
+The composer's rule is deterministic realisation for correctness, model for
+variety. Audio generation does not fit that: there is no deterministic path to
+a sung vocal. So it belongs beside the score, not instead of it — "render this
+composition as audio" as a separate artefact, with the MusicXML remaining the
+thing that is correct.
 
-### 3. Quiz — believed fixed, needs confirming in the browser
+Practical notes:
+- It must take a slot in GPU_QUEUE. It is a diffusion model and will want the
+  card exclusively; `_gpu_inference_ctx` already does the Ollama-unload dance
+  that image and video use, and this should reuse it rather than invent a
+  second one.
+- Audio is large. Decide retention before building: the composer already
+  stores MusicXML and MIDI, and WAV at song length is a different order.
+- Check whether ACE-Step takes a melody or score as conditioning, or only
+  text and lyrics. If only text, it is a parallel generator rather than a
+  renderer of the composed score, which is a weaker fit and worth saying so
+  before building.
 
-Two causes, both now addressed:
-- A reasoning model spent its whole num_predict budget thinking and returned
-  an empty string. Quiz and story now use a non-thinking LLM; when thinking is
-  on, num_predict is raised to 16384 so the answer still fits.
-- The quiz agent carried all four tutor tools and would wander off looking
-  words up, dying on "Action Input is not a valid key, value dictionary".
-  Writing quiz questions is composition, not research — tools removed.
+---
 
-Three consecutive runs with gpt-oss:20b: 13s, 5s, 9s, four questions each.
-Bogdan has not yet confirmed it in the UI.
+## ▶ RELEASED v3.0.0 (2026-10-14)
+
+Major, because the model a request runs on and the order requests run in both
+changed shape.
+
+### Multi-user with one GPU — done
+
+`gpu_broker.py` owns GPU residency and the queue. A task declares what it
+needs (`Need("ollama", "gpt-oss:20b")`, `Need("torch", "zimage")`); when its
+turn comes the broker makes that true, runs it, and stands aside. No restore
+step — the next task declares its own need, which is what stopped the old path
+reloading 10.5 GiB nobody wanted.
+
+Order is first come, first served. Priority is self-declared and carries a
+reason everyone waiting can read; whoever is running is never interrupted.
+
+Verified with two real users on two models through the Research tab:
+
+```
+  resident: ollama:gpt-oss:20b
+  ▶ rbogdan — research, 24.8s in
+  · rraluca — research, waiting 20.9s
+  ollama ps -> gpt-oss:20b only, count: 1
+```
+
+Before: both models loaded and Ollama spilled one to CPU — `ollama ps` showed
+`21%/79% CPU/GPU` with 1.6 GB resident.
+
+**Every path queues**, which is the part that matters. A queue covering some
+paths is worse than none, because it looks like it works. `test_gpu_coverage.py`
+walks the AST and fails if any `run_in_executor` sits outside a reservation
+without an explicit `# gpu-queue-exempt: <reason>`.
+
+### The three bugs that made it look broken
+
+1. **The GUI model choice was ignored.** The picker wrote to `users.model` *and*
+   to `app.state.current_model`; crews were built from the latter, which is
+   re-read from `.env` on every restart. After a restart the picker showed the
+   saved model while crews ran the one from `.env` — deleted months earlier,
+   hence a 404 for `huihui_ai/mistral-small-abliterated`. The global was also
+   process-wide, so the last person to touch the picker changed everybody
+   else's default. `user_crews.py` now resolves per-user from the database.
+
+2. **`chat_template_kwargs: {"enable_thinking": ...}` is silently ignored by
+   Ollama.** It was used in three places. The switch Ollama honours is
+   top-level `think`. Measured on qwen3.5:9b, `num_predict: 24`, prompt "Say
+   exactly: READY":
+
+   | setting | visible output |
+   |---|---|
+   | default | `''` |
+   | `chat_template_kwargs` | `''` — ignored |
+   | `think: False` | `'READY'` |
+
+   So thinking was on for every thinking-capable model regardless of intent,
+   and the model spent its whole budget in a channel Ollama returns
+   separately. gemma4:26b: 2031 chars of thinking, zero of response,
+   `done_reason: length`. From outside that is an agent that writes a plan and
+   stops. All three crews now share `llm_options.py`.
+
+3. **`num_gpu: 99`** pinned every layer to the card. gemma4:26b then asks for a
+   17 GB buffer on 15.5 GiB: `cudaMalloc failed: out of memory`, or the
+   lopsided split above. Ollama decides the split now.
+
+### Tool calling — by capability, not by name
+
+P1 forced every Ollama model into ReAct text. Measured with thinking off, the
+tools-capable models all emit correct structured calls:
+
+| model | capability | native call |
+|---|---|---|
+| gpt-oss:20b | tools | yes |
+| gemma4:26b | tools | yes |
+| gemma4:12b | tools | yes |
+| qwen3.5:9b | tools | yes |
+| phi4:14b | — | no tool support |
+
+Forcing them into ReAct broke two of them. gpt-oss emitted a structured call
+anyway, CrewAI returned the list, and it was stringified into the answer —
+`[ChatCompletionMessageFunctionToolCall(...)]`, a run that "succeeded" in two
+seconds having done nothing. gemma4 wrote a plan, never an `Action:`, and
+looped until its step budget ran out.
+
+P1 now asks Ollama (`/api/show` → `capabilities`), cached, falling back to
+ReAct when Ollama cannot answer. `_FORCE_REACT_MODELS` is the escape hatch for
+a model that advertises tools but answers in prose. P6 translates a native
+call into ReAct text as a net for anything still in ReAct mode.
+
+On the same prompt: gemma4 went from one Thought to 5839 chars with
+comparison tables; gpt-oss from a raw tool-call object to 4351 chars.
+
+### Also fixed
+
+- `reset_memory()` deleted CrewAI's kickoff-outputs database *file*; the next
+  `kickoff()` reconnected, SQLite made an empty database, and CrewAI's DELETE
+  found no table and raised — killing a run that had already produced an
+  answer. Roughly every second request with two people taking turns. Now
+  cleared through CrewAI's own API.
+- `generate_ai_image.result_as_answer = True`, so one call ends the run and
+  the image becomes the whole answer — and the description never said when not
+  to use it. gemma4 drew a picture for a travel question and stopped. Both
+  media tool descriptions now say so explicitly.
+- The GPU panel was a fixed overlay and covered the typing box on all four
+  tabs. It is in the document flow now, last flex item of `<body>`.
+- The collapsed reasoning box moved above the answer, where the live one
+  already is. Below, it jumped across the answer when the result arrived.
+
+### The lesson, again
+
+A green suite is not evidence a feature works, and this time it was sharper
+than usual: the queue was correct and `TestClient` was buffering the stream,
+so my own measurement said it was broken. Two concurrent `curl -N` against a
+real uvicorn proved it worked. **Verify streaming against a real server, never
+through TestClient.**
+
+### Still open
+
+- ACE-Step integration as a composer side-feature: researched and approved,
+  not started. See the top of this file.
+- The composer's long-form score path reserves the GPU but does not render a
+  queue position.
+- `ollama ps` can read zero models mid-swap; `/gpu/queue`'s `resident` is the
+  reliable answer.
 
 ---
 
@@ -126,10 +261,10 @@ to point out that it was a pattern. **When an encoding bug appears, check the
 other boundaries in the same path** — file write, subprocess, HTTP header,
 font encoding — rather than fixing the one instance.
 
-### Uncommitted
+### Release state
 
-12 files, nothing committed. `v2.16.0` is the last tag and does NOT include any
-of today's fixes.
+Released as `v3.0.0`. The previous tag `v2.16.0` does not include any
+of this work.
 
 ### Also noticed
 

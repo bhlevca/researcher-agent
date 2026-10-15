@@ -15,14 +15,28 @@ from researcher.main import app
 from researcher import auth as auth_module
 
 
+def _async_stub(fn):
+    """Wrap a stub so it can stand in for a coroutine function.
+
+    _tutor_crew reads the person's saved model from the database, so it is
+    async; a plain lambda in its place fails with "object MagicMock can't be
+    used in 'await' expression".
+    """
+    async def stub(*a, **k):
+        return fn(*a, **k)
+    return stub
+
+
 @pytest.fixture(autouse=True)
 def _temp_db(tmp_path, monkeypatch):
     test_db = tmp_path / "tutor_sheets_test.db"
     monkeypatch.setattr("researcher.config.DB_PATH", test_db)
     monkeypatch.setattr("researcher.main.DB_PATH", test_db)
     mock_rc = MagicMock()
-    monkeypatch.setattr("researcher.routes.chat.ResearchCrew", mock_rc)
-    monkeypatch.setattr("researcher.routes.ask.ResearchCrew", mock_rc)
+    # Crews are constructed in one place now — user_crews._crew_class,
+    # which imports each class from its own module at call time — so this is
+    # the single point that keeps a real model out of the tests.
+    monkeypatch.setattr("researcher.crew.ResearchCrew", mock_rc)
     monkeypatch.setattr("researcher.routes.models.ResearchCrew", mock_rc)
 
 
@@ -266,7 +280,7 @@ class TestStorySheets:
         tutor.build_story_sheet_crew.return_value = crew
         tutor.get_llm_params.return_value = {"crew_timeout_sec": 30}
         monkeypatch.setattr("researcher.routes.tutor_sheets._tutor_crew",
-                            lambda request, uid: tutor)
+                            _async_stub(lambda request, uid: tutor))
         return tutor
 
     def test_generate_parses_a_fenced_response(self, client, headers, mock_story):
@@ -589,7 +603,7 @@ class TestLevelGuard:
         model spent minutes writing for a "-level student"."""
         called = []
         monkeypatch.setattr("researcher.routes.tutor_sheets._tutor_crew",
-                            lambda *a, **k: called.append(1))
+                            _async_stub(lambda *a, **k: called.append(1)))
         r = client.post("/tutor/sheets/lesson", headers=headers,
                         json={"language": "French", "level": level, "topic": "x"})
         assert r.status_code == 400
@@ -606,7 +620,7 @@ class TestLevelGuard:
         tutor.build_lesson_sheet_crew.return_value = crew
         tutor.get_llm_params.return_value = {"crew_timeout_sec": 30}
         monkeypatch.setattr("researcher.routes.tutor_sheets._tutor_crew",
-                            lambda *a, **k: tutor)
+                            _async_stub(lambda *a, **k: tutor))
         r = client.post("/tutor/sheets/lesson", headers=headers,
                         json={"language": "French"})
         assert r.status_code == 200
@@ -615,7 +629,7 @@ class TestLevelGuard:
     def test_story_has_the_same_guard(self, client, headers, monkeypatch):
         called = []
         monkeypatch.setattr("researcher.routes.tutor_sheets._tutor_crew",
-                            lambda *a, **k: called.append(1))
+                            _async_stub(lambda *a, **k: called.append(1)))
         r = client.post("/tutor/sheets/story", headers=headers,
                         json={"language": "French", "level": ""})
         assert r.status_code == 400
@@ -630,7 +644,7 @@ class TestLevelGuard:
         tutor.build_lesson_sheet_crew.return_value = crew
         tutor.get_llm_params.return_value = {"crew_timeout_sec": 30}
         monkeypatch.setattr("researcher.routes.tutor_sheets._tutor_crew",
-                            lambda *a, **k: tutor)
+                            _async_stub(lambda *a, **k: tutor))
         r = client.post("/tutor/sheets/lesson", headers=headers,
                         json={"language": "french", "level": "a2"})
         assert r.status_code == 200
@@ -649,7 +663,7 @@ class TestLevelGuard:
         tutor.build_lesson_crew.return_value = crew
         tutor.get_llm_params.return_value = {"crew_timeout_sec": 30}
         monkeypatch.setattr("researcher.routes.tutor_sheets._tutor_crew",
-                            lambda *a, **k: tutor)
+                            _async_stub(lambda *a, **k: tutor))
         client.post("/tutor/sheets/lesson", headers=headers,
                     json={"language": "French", "level": "A2"})
         assert tutor.build_lesson_sheet_crew.called

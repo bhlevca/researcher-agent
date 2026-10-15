@@ -23,6 +23,8 @@ from researcher.tutor import printing
 from researcher.tutor import story as story_mod
 from researcher.tutor.failures import describe_for_user
 from researcher.tutor.crew import TutorCrew
+from researcher.gpu_broker import GPU, Need
+from researcher.user_crews import get_crew
 from researcher.tutor.models import (
     LessonRequest,
     LessonSheetRequest,
@@ -130,14 +132,9 @@ def _check_language(language: str) -> str:
     return lang
 
 
-def _tutor_crew(request: Request, uid: str) -> TutorCrew:
+async def _tutor_crew(request: Request, uid: str) -> TutorCrew:
     """The per-user TutorCrew, shared with the conversational routes."""
-    crews = getattr(request.app.state, "tutor_crews", None)
-    if crews is None:
-        crews = request.app.state.tutor_crews = {}
-    if uid not in crews:
-        crews[uid] = TutorCrew(model=request.app.state.current_model)
-    return crews[uid]
+    return await get_crew(request, uid, "tutor")
 
 
 def _pdf_response(pdf: bytes | None, filename: str) -> Response:
@@ -228,7 +225,7 @@ def register_tutor_sheet_routes(app):
         user = await get_current_user(request)
         level = _check_level(req.level)
         language = _check_language(req.language)
-        tutor = _tutor_crew(request, user["id"])
+        tutor = await _tutor_crew(request, user["id"])
         started = time.monotonic()
         logger.info("[tutor] story: lang=%s level=%s", language, level)
 
@@ -244,9 +241,12 @@ def register_tutor_sheet_routes(app):
         timeout = (tutor.get_llm_params() or {}).get("crew_timeout_sec") or 600
         loop = asyncio.get_running_loop()
         try:
-            raw = await asyncio.wait_for(
-                loop.run_in_executor(None, lambda: str(crew.kickoff())),
-                timeout=timeout)
+            async with GPU.exclusive(
+                    Need("ollama", tutor.model_name.replace("ollama/", "")),
+                    "story sheet", user=user["id"]):
+                raw = await asyncio.wait_for(
+                    loop.run_in_executor(None, lambda: str(crew.kickoff())),
+                    timeout=timeout)
         except asyncio.TimeoutError:
             raise HTTPException(status_code=504,
                                 detail=f"The model did not answer within "
@@ -322,7 +322,7 @@ def register_tutor_sheet_routes(app):
         user = await get_current_user(request)
         level = _check_level(req.level)
         language = _check_language(req.language)
-        tutor = _tutor_crew(request, user["id"])
+        tutor = await _tutor_crew(request, user["id"])
         topic = req.topic.strip() or "everyday life"
         started = time.monotonic()
         logger.info("[tutor] lesson: lang=%s level=%s full=%s topic=%r",
@@ -339,9 +339,12 @@ def register_tutor_sheet_routes(app):
         timeout = (tutor.get_llm_params() or {}).get("crew_timeout_sec") or 900
         loop = asyncio.get_running_loop()
         try:
-            markdown = await asyncio.wait_for(
-                loop.run_in_executor(None, lambda: str(crew.kickoff())),
-                timeout=timeout)
+            async with GPU.exclusive(
+                    Need("ollama", tutor.model_name.replace("ollama/", "")),
+                    "lesson sheet", user=user["id"]):
+                markdown = await asyncio.wait_for(
+                    loop.run_in_executor(None, lambda: str(crew.kickoff())),
+                    timeout=timeout)
         except asyncio.TimeoutError:
             raise HTTPException(status_code=504,
                                 detail=f"The model did not answer within {timeout}s")

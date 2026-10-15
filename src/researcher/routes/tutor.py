@@ -20,7 +20,9 @@ from fastapi.responses import StreamingResponse
 
 from researcher.auth import get_current_user
 from researcher.config import _QueueWriter, _SESSION_ID_RE
+from researcher.gpu_broker import GPU, Need, queue_message
 from researcher.tutor.crew import TutorCrew
+from researcher.user_crews import get_crew, resolve_model
 from researcher.tutor.failures import describe_for_user
 
 from researcher.tutor.models import (
@@ -97,13 +99,14 @@ def _current_curriculum_topic(session: dict) -> str:
     return topics[min(idx, len(topics) - 1)]
 
 
-def _get_tutor_crew(request: Request, uid: str) -> TutorCrew:
-    """Return the per-user TutorCrew, creating it on first access."""
-    if uid not in request.app.state.tutor_crews:
-        request.app.state.tutor_crews[uid] = TutorCrew(
-            model=request.app.state.current_model
-        )
-    return request.app.state.tutor_crews[uid]
+async def _get_tutor_crew(request: Request, uid: str) -> TutorCrew:
+    """The per-user TutorCrew, built with the model that person chose.
+
+    Async because the choice lives in the database. It used to be read from
+    app.state.current_model, which is reset from .env on restart — so the
+    tutor ran whatever .env named rather than what the picker showed.
+    """
+    return await get_crew(request, uid, "tutor")
 
 
 def _validate_sid(session_id: str):
@@ -183,81 +186,96 @@ async def _stream_tutor_crew(crew, request: Request, uid: str, timeout_sec: int 
     async def event_stream():
         cancel = request.app.state.cancel_events[uid]
         cancel.clear()
+        # The per-user semaphore stops one person racing themselves. The GPU
+        # broker is process-wide: one card, so the queue decides whose turn it
+        # is and makes the right model resident before the work starts.
         async with semaphore:
-            loop = asyncio.get_running_loop()
-            future = loop.run_in_executor(None, lambda: _run_tutor_crew(crew, q))
-            all_lines: list[str] = []
-            elapsed = 0.0
-            early_exit: str | None = None  # "cancelled" | "timeout"
+            # Name the model that will actually run, which is the person's
+            # saved choice — not the process-wide default from .env.
+            _chosen, _ = await resolve_model(request, uid)
+            model = Need("ollama", str(_chosen).replace("ollama/", ""))
+            async with GPU.reserve(model, "tutor", user=uid) as _res:
+                # Consuming wait() is what queues. Because it is an async
+                # generator, the position reaches the browser while we are
+                # still waiting rather than in a burst afterwards.
+                async for _notice in _res.wait():
+                    yield _sse("queue", queue_message(
+                        _notice["position"], _notice["estimate"],
+                        _notice["ticket"]))
+                loop = asyncio.get_running_loop()
+                future = loop.run_in_executor(None, lambda: _run_tutor_crew(crew, q))
+                all_lines: list[str] = []
+                elapsed = 0.0
+                early_exit: str | None = None  # "cancelled" | "timeout"
 
-            while not future.done():
-                if cancel.is_set() and early_exit is None:
-                    early_exit = "cancelled"
-                    yield _sse("cancelled", "Request cancelled by user")
-                if elapsed >= timeout_sec and early_exit is None:
-                    early_exit = "timeout"
-                    yield _sse(
-                        "error",
-                        f"Request timed out after {timeout_sec}s. A model that "
-                        f"does not fit in VRAM runs partly on CPU and can take "
-                        f"minutes per call — check `ollama ps` for a CPU/GPU "
-                        f"split.")
-                await asyncio.sleep(0.15)
-                elapsed += 0.15
+                while not future.done():
+                    if cancel.is_set() and early_exit is None:
+                        early_exit = "cancelled"
+                        yield _sse("cancelled", "Request cancelled by user")
+                    if elapsed >= timeout_sec and early_exit is None:
+                        early_exit = "timeout"
+                        yield _sse(
+                            "error",
+                            f"Request timed out after {timeout_sec}s. A model that "
+                            f"does not fit in VRAM runs partly on CPU and can take "
+                            f"minutes per call — check `ollama ps` for a CPU/GPU "
+                            f"split.")
+                    await asyncio.sleep(0.15)
+                    elapsed += 0.15
+                    while not q.empty():
+                        try:
+                            line = q.get_nowait()
+                            all_lines.append(line)
+                            if early_exit is None and _should_show(line):
+                                yield _sse("reasoning", line)
+                        except queue.Empty:
+                            break
+
+                if early_exit is not None:
+                    # Drain queue silently; semaphore releases after thread finished
+                    while not q.empty():
+                        q.get_nowait()
+                    return
+
+                # Drain remaining
                 while not q.empty():
                     try:
                         line = q.get_nowait()
                         all_lines.append(line)
-                        if early_exit is None and _should_show(line):
+                        if _should_show(line):
                             yield _sse("reasoning", line)
                     except queue.Empty:
                         break
 
-            if early_exit is not None:
-                # Drain queue silently; semaphore releases after thread finished
-                while not q.empty():
-                    q.get_nowait()
-                return
-
-            # Drain remaining
-            while not q.empty():
                 try:
-                    line = q.get_nowait()
-                    all_lines.append(line)
-                    if _should_show(line):
-                        yield _sse("reasoning", line)
-                except queue.Empty:
-                    break
+                    result = future.result()
+                except Exception as e:
+                    # Name the likely cause: "Invalid response from LLM call"
+                    # means an exhausted token budget far more often than it means
+                    # anything else, and saying so saves an evening.
+                    yield _sse("error", describe_for_user(e, "generation"))
+                    return
 
-            try:
-                result = future.result()
-            except Exception as e:
-                # Name the likely cause: "Invalid response from LLM call"
-                # means an exhausted token budget far more often than it means
-                # anything else, and saying so saves an evening.
-                yield _sse("error", describe_for_user(e, "generation"))
-                return
+                response_text = result.raw if hasattr(result, "raw") else str(result)
+                # Strip thinking tags
+                response_text = re.sub(
+                    r"<think>[\s\S]*?</think>\s*", "", response_text
+                ).strip()
 
-            response_text = result.raw if hasattr(result, "raw") else str(result)
-            # Strip thinking tags
-            response_text = re.sub(
-                r"<think>[\s\S]*?</think>\s*", "", response_text
-            ).strip()
+                yield _sse(
+                    "done",
+                    {
+                        "response": response_text,
+                        "reasoning": all_lines,
+                    },
+                )
 
-            yield _sse(
-                "done",
-                {
-                    "response": response_text,
-                    "reasoning": all_lines,
-                },
-            )
-
-            if on_complete is not None:
-                try:
-                    await on_complete(response_text)
-                except Exception as _cb_err:
-                    import logging as _log
-                    _log.getLogger(__name__).warning("on_complete error: %s", _cb_err)
+                if on_complete is not None:
+                    try:
+                        await on_complete(response_text)
+                    except Exception as _cb_err:
+                        import logging as _log
+                        _log.getLogger(__name__).warning("on_complete error: %s", _cb_err)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -361,7 +379,7 @@ def register_tutor_routes(app):
             raise HTTPException(status_code=404, detail="Tutor session not found")
 
         uid = user["id"]
-        tutor_crew = _get_tutor_crew(request, uid)
+        tutor_crew = await _get_tutor_crew(request, uid)
         context = _build_tutor_context(session["messages"])
 
         scenario = None
@@ -435,7 +453,7 @@ def register_tutor_routes(app):
             raise HTTPException(status_code=404, detail="Tutor session not found")
 
         uid = user["id"]
-        tutor_crew = _get_tutor_crew(request, uid)
+        tutor_crew = await _get_tutor_crew(request, uid)
 
         crew = tutor_crew.build_lesson_crew(
             topic=req.topic,
@@ -461,7 +479,7 @@ def register_tutor_routes(app):
         if not session:
             raise HTTPException(status_code=404, detail="Tutor session not found")
 
-        tutor_crew = _get_tutor_crew(request, user["id"])
+        tutor_crew = await _get_tutor_crew(request, user["id"])
 
         # Extract vocabulary from the lesson content and save it
         content_text = body.get("content", "")
@@ -518,7 +536,7 @@ def register_tutor_routes(app):
             topic = _current_curriculum_topic(session) or "everyday life"
 
         uid = user["id"]
-        tutor_crew = _get_tutor_crew(request, uid)
+        tutor_crew = await _get_tutor_crew(request, uid)
         crew = tutor_crew.build_passage_crew(
             topic=topic,
             target_lang=session["target_lang"],
@@ -771,7 +789,7 @@ def register_tutor_routes(app):
             raise HTTPException(status_code=404, detail="Tutor session not found")
 
         uid = user["id"]
-        tutor_crew = _get_tutor_crew(request, uid)
+        tutor_crew = await _get_tutor_crew(request, uid)
 
         # Build vocabulary context from the student's saved words
         vocab = await list_vocabulary(db, user["id"], req.session_id)
@@ -819,7 +837,7 @@ def register_tutor_routes(app):
         session_id = body.get("session_id", "")
         _validate_sid(session_id)
 
-        tutor_crew = _get_tutor_crew(request, user["id"])
+        tutor_crew = await _get_tutor_crew(request, user["id"])
         response_text = body.get("response", "")
         questions = tutor_crew.extract_quiz_json(response_text)
         if not questions:
@@ -894,7 +912,7 @@ def register_tutor_routes(app):
                 llm_questions.append(q)
                 llm_answers.append(ans)
 
-        tutor_crew = _get_tutor_crew(request, user["id"])
+        tutor_crew = await _get_tutor_crew(request, user["id"])
         if llm_questions:
             llm_graded = await tutor_crew.grade_answers(
                 questions=llm_questions,
@@ -1013,7 +1031,7 @@ def register_tutor_routes(app):
         recent = _build_tutor_context(session["messages"], max_messages=20)
 
         uid = user["id"]
-        tutor_crew = _get_tutor_crew(request, uid)
+        tutor_crew = await _get_tutor_crew(request, uid)
 
         crew = tutor_crew.build_appraisal_crew(
             target_lang=session["target_lang"],
@@ -1100,7 +1118,7 @@ def register_tutor_routes(app):
                 status_code=400, detail="source_lang and target_lang required"
             )
 
-        tutor_crew = _get_tutor_crew(request, user["id"])
+        tutor_crew = await _get_tutor_crew(request, user["id"])
 
         prompt = (
             f"Translate the following text from {source_lang} to {target_lang}.\n"
@@ -1123,7 +1141,11 @@ def register_tutor_routes(app):
             return resp.choices[0].message.content.strip()
 
         try:
-            translation = await loop.run_in_executor(None, _call_llm)
+            _chosen, _ = await resolve_model(request, user["id"])
+            async with GPU.exclusive(
+                    Need("ollama", str(_chosen).replace("ollama/", "")),
+                    "translate", user=user["id"]):
+                translation = await loop.run_in_executor(None, _call_llm)
             # Strip thinking tags if present (qwen3/deepseek-r1)
             translation = re.sub(
                 r"<think>.*?</think>", "", translation, flags=re.DOTALL

@@ -21,8 +21,10 @@ def _temp_db(tmp_path, monkeypatch):
     monkeypatch.setattr("researcher.config.DB_PATH", test_db)
     monkeypatch.setattr("researcher.main.DB_PATH", test_db)
     mock_rc = MagicMock()
-    monkeypatch.setattr("researcher.routes.chat.ResearchCrew", mock_rc)
-    monkeypatch.setattr("researcher.routes.ask.ResearchCrew", mock_rc)
+    # Crews are constructed in one place now — user_crews._crew_class,
+    # which imports each class from its own module at call time — so this is
+    # the single point that keeps a real model out of the tests.
+    monkeypatch.setattr("researcher.crew.ResearchCrew", mock_rc)
     monkeypatch.setattr("researcher.routes.models.ResearchCrew", mock_rc)
 
 

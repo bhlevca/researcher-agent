@@ -85,6 +85,21 @@ async function generateScore() {
 }
 
 function renderScoreResponse(text, reasoning, container, hasScore) {
+    // Reasoning first: it is where the live reasoning box already was while
+    // the request ran, so the collapsed one stays in the same place.
+    if (reasoning && reasoning.length > 0) {
+        const details = document.createElement('details');
+        details.className = 'reasoning-toggle';
+        const summary = document.createElement('summary');
+        summary.textContent = 'Reasoning (' + reasoning.length + ' steps)';
+        details.appendChild(summary);
+        const rc = document.createElement('div');
+        rc.className = 'reasoning-content';
+        rc.textContent = reasoning.join('\n');
+        details.appendChild(rc);
+        container.appendChild(details);
+    }
+
     // Render the markdown portion
     const div = document.createElement('div');
     div.className = 'message assistant';
@@ -143,20 +158,6 @@ function renderScoreResponse(text, reasoning, container, hasScore) {
         saveBtn.onclick = () => saveScoreFromResponse(text);
         acts.appendChild(saveBtn);
     }
-    // Reasoning (before action buttons)
-    if (reasoning && reasoning.length > 0) {
-        const details = document.createElement('details');
-        details.className = 'reasoning-toggle';
-        const summary = document.createElement('summary');
-        summary.textContent = 'Reasoning (' + reasoning.length + ' steps)';
-        details.appendChild(summary);
-        const rc = document.createElement('div');
-        rc.className = 'reasoning-content';
-        rc.textContent = reasoning.join('\n');
-        details.appendChild(rc);
-        container.appendChild(details);
-    }
-
     container.appendChild(acts);
 }
 

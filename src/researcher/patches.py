@@ -74,6 +74,8 @@ def _check_version_range() -> None:
 _PATCH_TARGETS = [
     ("P1", "crewai.llms.providers.openai_compatible.completion",
      "OpenAICompatibleCompletion", "supports_function_calling"),
+    ("P6", "crewai.llms.providers.openai_compatible.completion",
+     "OpenAICompatibleCompletion", "_handle_completion"),
     ("P2", "crewai.utilities.reasoning_handler", "AgentReasoning", "_call_with_function"),
     ("P2", "crewai.utilities.reasoning_handler", "AgentReasoning", "_parse_planning_response"),
     ("P2", "crewai.agent.utils", None, "handle_reasoning"),
@@ -213,9 +215,69 @@ from crewai.llms.providers.openai_compatible.completion import (  # noqa: E402
 _orig_supports_fc = _OAICompat.supports_function_calling
 
 
+# Which models get native tool calling, and which get ReAct text.
+#
+# Ollama answers this itself: /api/show reports a "tools" capability. That is
+# authoritative and does not rot, which a hand-kept list of model names does.
+# Measured on this machine, with thinking off in every case:
+#
+#   gpt-oss:20b     tools  ->  native call, correct arguments
+#   gemma4:26b      tools  ->  native call, correct arguments
+#   gemma4:12b      tools  ->  native call, correct arguments
+#   qwen3.5:9b      tools  ->  native call, correct arguments
+#   phi4:14b        -      ->  no tool support at all
+#
+# Forcing a tools-capable model into ReAct text is what broke gpt-oss (it
+# emitted a structured call anyway, which got stringified into the answer) and
+# gemma4 (it wrote a plan, never an "Action:" line, and looped until its step
+# budget ran out). Both work first time through native calling.
+#
+# A model that advertises tools but still answers in prose can be named here
+# and will be forced back to ReAct.
+_FORCE_REACT_MODELS: tuple[str, ...] = ()
+
+_fc_capability_cache: dict[str, bool] = {}
+
+
+def _ollama_supports_tools(model: str) -> bool:
+    """Ask Ollama whether *model* has the "tools" capability.
+
+    Cached: this is asked on every agent step. A model Ollama cannot describe
+    is assumed not to support tools, so it falls back to ReAct — the
+    conservative direction, since ReAct at least produces readable text.
+    """
+    name = (model or "").split("/")[-1]
+    if name in _fc_capability_cache:
+        return _fc_capability_cache[name]
+    ok = False
+    try:
+        import requests
+
+        resp = requests.post("http://localhost:11434/api/show",
+                             json={"model": name}, timeout=5)
+        resp.raise_for_status()
+        ok = "tools" in (resp.json().get("capabilities") or [])
+    except Exception as e:
+        _logger.warning("P1: could not read capabilities for %s (%s); "
+                        "falling back to ReAct", name, e)
+    _fc_capability_cache[name] = ok
+    _logger.info("P1: %s -> %s tool calling", name,
+                 "native" if ok else "ReAct text")
+    return ok
+
+
+def _prefers_native_tool_calling(model: str) -> bool:
+    name = (model or "").lower()
+    if any(tag in name for tag in _FORCE_REACT_MODELS):
+        return False
+    return _ollama_supports_tools(model)
+
+
 def _apply_p1_react_tool_calling():
     def _patched_supports_fc(self):
         if getattr(self, "_allow_fc", False):
+            return _orig_supports_fc(self)
+        if _prefers_native_tool_calling(getattr(self, "model", "")):
             return _orig_supports_fc(self)
         if (getattr(self, "provider", "") or "") == "ollama":
             return False
@@ -447,6 +509,97 @@ def _apply_p5_memory_save():
 
 
 # ---------------------------------------------------------------------------
+# P6 — Native tool calls translated into ReAct text.
+#
+# Problem: gpt-oss:20b is trained on OpenAI's "harmony" format and emits a
+# native tool call whether or not any tool schema was sent. Measured against
+# Ollama with NO `tools` parameter at all:
+#
+#     content    : ''
+#     tool_calls : [ChatCompletionMessageToolCall(function=Function(
+#                   arguments='{"search_query": "..."}',
+#                   name='internet_search'), ...)]
+#
+# P1 puts Ollama into ReAct mode, so CrewAI passes no `available_functions`.
+# Its provider then takes the branch "without available_functions, return
+# tool_calls so the caller handles execution" and returns the list of tool-call
+# objects. Nothing downstream handles that in ReAct mode, so the list is
+# stringified and becomes the answer the user sees:
+#
+#     Final Output: [ChatCompletionMessageFunctionToolCall(id='call_ctz5r4tv',
+#     function=Function(arguments='{"search_query":"..."}', ...
+#
+# The run then "succeeds" in about two seconds having done nothing, which also
+# hid the GPU queue: two people could not contend because neither request
+# lasted long enough to overlap.
+#
+# Fix: when the provider hands back tool calls, rewrite them as the ReAct text
+# the executor already knows how to parse, so the tool actually runs. The
+# format matches ACTION_INPUT_REGEX in crewai/agents/constants.py.
+# ---------------------------------------------------------------------------
+
+
+def _react_text_from_tool_calls(calls) -> str:
+    """Render native tool calls as 'Action:' / 'Action Input:' text.
+
+    Only the first call is used. ReAct is one step at a time, and the executor
+    feeds the observation back for the next step — emitting several at once
+    would be parsed as one action with a corrupted input.
+    """
+    import json as _json
+
+    first = calls[0]
+    # Both shapes occur: the provider returns objects, but the streaming path
+    # assembles dicts, and _is_tool_call_list accepts either.
+    fn = first["function"] if isinstance(first, dict) else getattr(
+        first, "function", None)
+    if isinstance(fn, dict):
+        name = fn.get("name")
+        raw_args = fn.get("arguments") or "{}"
+    else:
+        name = getattr(fn, "name", None)
+        raw_args = getattr(fn, "arguments", None) or "{}"
+    if not isinstance(raw_args, str):
+        raw_args = _json.dumps(raw_args)
+    # Normalise to compact JSON so the executor's json repair has an easy job.
+    try:
+        raw_args = _json.dumps(_json.loads(raw_args))
+    except Exception:
+        pass
+    return (f"Thought: I will use {name}.\n"
+            f"Action: {name}\n"
+            f"Action Input: {raw_args}")
+
+
+def _is_tool_call_list(value) -> bool:
+    """True for a non-empty list of things that look like tool calls."""
+    if not isinstance(value, list) or not value:
+        return False
+    first = value[0]
+    if isinstance(first, dict):
+        return "function" in first
+    return hasattr(first, "function")
+
+
+def _apply_p6_tool_calls_as_react():
+    _orig_handle = _OAICompat._handle_completion
+
+    def _patched_handle(self, *args, **kwargs):
+        result = _orig_handle(self, *args, **kwargs)
+        # Only in ReAct mode. With function calling genuinely enabled the
+        # caller does want the structured list.
+        if _is_tool_call_list(result) and not self.supports_function_calling():
+            text = _react_text_from_tool_calls(result)
+            _logger.info("P6: native tool call -> ReAct text (%s)",
+                         text.splitlines()[1] if "\n" in text else text)
+            return text
+        return result
+
+    _OAICompat._handle_completion = _patched_handle
+    _logger.info("P6 applied: native tool calls translated to ReAct text")
+
+
+# ---------------------------------------------------------------------------
 # Entry point — called once at module import time.
 # ---------------------------------------------------------------------------
 
@@ -456,6 +609,7 @@ def apply_all():
     _apply_p3_context_length()
     _apply_p4_memory_recall()
     _apply_p5_memory_save()
+    _apply_p6_tool_calls_as_react()
 
 
 apply_all()

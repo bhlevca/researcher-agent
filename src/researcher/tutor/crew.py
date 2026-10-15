@@ -15,6 +15,7 @@ from pathlib import Path
 from crewai import Agent, Crew, Process, Task, LLM
 from crewai.agent.planning_config import PlanningConfig
 
+from researcher.llm_options import is_thinking_model as _is_thinking_model
 from researcher.config import probe_model_capabilities, TOOL_CAPABLE_MODEL
 import researcher.patches as _patches  # noqa: F401 — applies CrewAI compatibility patches
 from researcher.tutor.tools import TUTOR_TOOLS
@@ -69,6 +70,15 @@ class TutorCrew:
         self._agents_config = _load_yaml("agents.yaml")
         self._tasks_config = _load_yaml("tasks.yaml")
 
+    @property
+    def model_name(self) -> str:
+        """The model this crew was built with.
+
+        Used to decide whether a cached crew still matches the person's saved
+        choice; without it the cache can only be invalidated by guesswork.
+        """
+        return self._model_name
+
     def get_llm_params(self) -> dict:
         """Return current LLM parameters."""
         return dict(self._llm_params)
@@ -98,7 +108,7 @@ class TutorCrew:
         request appears to hang. With thinking off the same quiz answers in
         three seconds.
         """
-        is_thinking_model = any(k in model.lower() for k in ("qwen3", "deepseek-r1"))
+        is_thinking_model = _is_thinking_model(model)
         if thinking is not None:
             is_thinking_model = is_thinking_model and thinking
         seed = int(params.get("seed", 0))
@@ -109,7 +119,6 @@ class TutorCrew:
             num_predict = max(num_predict, 16384)
         ollama_options = {
             "num_ctx": int(params.get("num_ctx", 32768)),
-            "num_gpu": 99,
             "num_predict": num_predict,
             "top_k": int(params.get("top_k", 40)),
             "top_p": float(params.get("top_p", 0.9)),
@@ -119,14 +128,11 @@ class TutorCrew:
         if seed > 0:
             ollama_options["seed"] = seed
         extra_body: dict = {"options": ollama_options}
-        if is_thinking_model:
-            extra_body["chat_template_kwargs"] = {"enable_thinking": True}
-        elif thinking is False:
-            # Only when reasoning was explicitly turned off for this LLM. Doing
-            # it for every unrecognised model would silence the thinking panel
-            # in chat, which is the one place the reasoning is the point.
-            extra_body["chat_template_kwargs"] = {"enable_thinking": False}
-            extra_body["think"] = False          # Ollama's own switch
+        if _is_thinking_model(model):
+            # Ollama's own switch, and the only one it honours:
+            # chat_template_kwargs is silently ignored. Measured in
+            # researcher/llm_options.py.
+            extra_body["think"] = bool(is_thinking_model)
         return LLM(
             model=model,
             base_url="http://localhost:11434",
@@ -146,10 +152,9 @@ class TutorCrew:
             extra_body={
                 "options": {
                     "num_ctx": 8192,
-                    "num_gpu": 99,
-                    "num_predict": 2048,
+                            "num_predict": 2048,
                 },
-                "chat_template_kwargs": {"enable_thinking": False},
+                "think": False,
             },
         )
 
@@ -1003,8 +1008,8 @@ class TutorCrew:
                 temperature=0.0,
                 max_tokens=2048,
                 extra_body={
-                    "options": {"num_ctx": 8192, "num_gpu": 99},
-                    "chat_template_kwargs": {"enable_thinking": False},
+                    "options": {"num_ctx": 8192},
+                    "think": False,
                 },
             )
             raw = (response.choices[0].message.content or "").strip()

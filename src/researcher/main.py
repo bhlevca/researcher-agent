@@ -42,6 +42,7 @@ from researcher.routes.tutor import register_tutor_routes
 from researcher.routes.tutor_sheets import register_tutor_sheet_routes
 from researcher.routes.composer import register_composer_routes
 from researcher.routes.mathtutor import register_mathtutor_routes
+from researcher.routes.gpu import register_gpu_routes
 from researcher.routes.proxy import register_proxy_routes
 from researcher.tts import register_tts_routes
 
@@ -56,6 +57,16 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     # -- Crew / model init --
     model = os.getenv("MODEL", "ollama/qwen3.5:9b")
+    # current_model is mutated by the model picker and so belongs to whoever
+    # touched it last; default_model is the environment's fallback and never
+    # changes. Per-user model resolution uses the latter, so one person's
+    # choice cannot become everybody's default.
+    app.state.current_model = model
+    app.state.default_model = model
+    # A model named in .env may have been deleted since. Say so loudly and
+    # keep working, rather than 404ing on a name nobody chose.
+    from researcher.user_crews import verify_default_model
+    model = await verify_default_model(app)
     app.state.current_model = model
 
     # Per-user crew instances, semaphores, and cancel events.
@@ -215,6 +226,7 @@ register_tutor_routes(app)
 register_tutor_sheet_routes(app)
 register_composer_routes(app)
 register_mathtutor_routes(app)
+register_gpu_routes(app)
 register_proxy_routes(app)
 register_tts_routes(app)
 

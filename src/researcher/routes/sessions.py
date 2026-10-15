@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from fastapi import HTTPException, Request
 
 from researcher.config import SessionSaveRequest, _SESSION_ID_RE
+from researcher.user_crews import resolve_model
 from researcher.auth import get_current_user
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,7 @@ def register_session_routes(app):
         db = request.app.state.db
         sid = uuid.uuid4().hex[:8]
         now = datetime.now(timezone.utc).isoformat()
+        _model, _ = await resolve_model(request, user["id"])
         await db.execute(
             "INSERT INTO sessions (id, name, created_at, updated_at, model, messages, user_id) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -63,7 +65,7 @@ def register_session_routes(app):
                 req.name,
                 now,
                 now,
-                request.app.state.current_model,
+                _model,
                 json.dumps(req.messages),
                 user["id"],
             ),
@@ -107,13 +109,14 @@ def register_session_routes(app):
         if owner and (not user or user["id"] != owner):
             raise HTTPException(status_code=403, detail="Not your session")
         now = datetime.now(timezone.utc).isoformat()
+        _model, _ = await resolve_model(request, user["id"])
         await db.execute(
             "UPDATE sessions SET name=?, messages=?, updated_at=?, model=? WHERE id=?",
             (
                 req.name,
                 json.dumps(req.messages),
                 now,
-                request.app.state.current_model,
+                _model,
                 session_id,
             ),
         )

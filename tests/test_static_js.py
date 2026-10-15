@@ -135,3 +135,50 @@ def test_the_tutor_has_exactly_one_lesson_generator():
     lessons = (STATIC / "js" / "tutor-lessons.js").read_text()
     assert "function generateLesson" in lessons
     assert "processTutorSSE" in lessons, "the lesson generator must stream"
+
+
+# ---------------------------------------------------------------------------
+# Layout rules that are easy to break and invisible from Python.
+# ---------------------------------------------------------------------------
+
+def _order_of(src: str, fn_start: str, *markers: str) -> list[int]:
+    """Positions of each marker inside the function starting at fn_start."""
+    i = src.index(fn_start)
+    # Up to the next top-level function, so we only look inside this one.
+    j = src.find("\nfunction ", i + 1)
+    body = src[i:j if j != -1 else len(src)]
+    return [body.index(m) for m in markers]
+
+
+def test_the_reasoning_box_sits_above_the_answer():
+    """It is where the live reasoning box already was.
+
+    Appending the collapsed box below the answer made it jump across the
+    answer the moment the result arrived, so the thing you were reading ended
+    up somewhere other than where it had been.
+    """
+    cases = [
+        ("js/messages.js", "function addAssistantMessage",
+         "reasoning-toggle", "m.className = 'message assistant'"),
+        ("js/composer-chat.js", "function addComposerMsg",
+         "reasoning-toggle", "m.className = 'message ' + role"),
+        ("js/composer-score.js", "function renderScoreResponse",
+         "reasoning-toggle", "div.className = 'message assistant'"),
+    ]
+    for rel, fn, reasoning_marker, answer_marker in cases:
+        src = (STATIC / rel).read_text()
+        at_reasoning, at_answer = _order_of(src, fn, reasoning_marker, answer_marker)
+        assert at_reasoning < at_answer, (
+            f"{rel}: the reasoning box is built after the answer")
+
+
+def test_the_gpu_panel_does_not_float_over_the_input():
+    """It was a fixed overlay first, and covered the typing box on every tab.
+
+    In the document flow it becomes the last flex item of <body>, which on
+    these pages is a 100vh flex column, so it gets its own line underneath.
+    """
+    css = (STATIC / "css" / "main.css").read_text()
+    block = css[css.index(".gpu-panel {"):css.index(".gpu-panel-head")]
+    assert "position: fixed" not in block, "the panel must not overlay the page"
+    assert "flex: 0 0 auto" in block, "it must sit in the body's flex column"

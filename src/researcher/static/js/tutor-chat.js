@@ -160,7 +160,12 @@ async function processTutorSSE(resp, liveBox, reasoningLines) {
                 else if (line.startsWith('data: ')) dataStr += line.slice(6);
             }
 
-            if (eventType === 'reasoning' && dataStr) {
+            if (eventType === 'queue' && dataStr) {
+                // One card, several people: a wait is normal. Saying so is the
+                // difference between "queued" and "apparently hung".
+                try { showQueueNote(liveBox, JSON.parse(dataStr)); }
+                catch (e) { /* malformed event: ignore */ }
+            } else if (eventType === 'reasoning' && dataStr) {
                 const line = JSON.parse(dataStr);
                 reasoningLines.push(line);
                 if (liveBox) {
@@ -175,4 +180,11 @@ async function processTutorSSE(resp, liveBox, reasoningLines) {
         }
     }
     return result;
+}
+
+
+/* The queue note is shared across every tab — see gpu-queue.js. Keeping a
+   second copy here is what broke the Lessons tab once already. */
+function showQueueNote(liveBox, info) {
+    gpuShowQueueNote(liveBox, info);
 }

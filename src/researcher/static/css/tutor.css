@@ -641,3 +641,7 @@
     border-top: 1px solid #1a3a6e;
     padding-top: 0.5rem;
 }
+
+
+/* The GPU queue note moved to main.css: every tab shows it,
+   not just the tutor. See gpu-queue.js. */

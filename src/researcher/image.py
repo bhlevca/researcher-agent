@@ -277,6 +277,10 @@ _SD_MODEL_ID = os.getenv("SD_MODEL", "stable-diffusion-v1-5/stable-diffusion-v1-
 from contextlib import contextmanager as _contextmanager
 
 
+class _Brokered(Exception):
+    """Raised internally to skip the Ollama dance when the broker owns it."""
+
+
 @_contextmanager
 def _gpu_inference_ctx(tag: str = "IMG", min_vram_gib: float = 4.0,
                        efficient_attention: bool = False):
@@ -299,8 +303,22 @@ def _gpu_inference_ctx(tag: str = "IMG", min_vram_gib: float = 4.0,
     _ollama_base = OLLAMA_IMAGE_URL.rsplit("/", 2)[0]
     _unloaded: list[str] = []
 
+    # When the GPU broker already holds this slot for torch work, it has
+    # released Ollama itself and the next task will declare what it needs. Both
+    # the unload here and — more importantly — the reload at the end would then
+    # be wasted: the old behaviour reinstated about ten and a half gigabytes of
+    # a model that nobody had asked for.
+    from researcher.gpu_broker import GPU as _GPU
+
+    _brokered = _GPU.resident is not None and _GPU.resident.kind == "torch"
+
     # -- 1. Unload all Ollama models --
+    if _brokered:
+        _sys.stderr.write(f"[{tag}] GPU broker holds the slot; "
+                          f"skipping unload and reload\n")
     try:
+        if _brokered:
+            raise _Brokered()
         _ps = _req.get(f"{_ollama_base}/api/ps", timeout=10)
         _ps.raise_for_status()
         for _m in _ps.json().get("models", []):
@@ -311,6 +329,8 @@ def _gpu_inference_ctx(tag: str = "IMG", min_vram_gib: float = 4.0,
                           timeout=30)
                 _unloaded.append(_mname)
         _sys.stderr.write(f"[{tag}] Unloaded LLM(s): {_unloaded}\n")
+    except _Brokered:
+        pass                      # the broker already freed what was needed
     except Exception as _e:
         _sys.stderr.write(f"[{tag}] LLM unload failed: {_e}\n")
         _fallback = os.getenv("MODEL", "qwen3.5:9b").replace("ollama/", "")
@@ -382,7 +402,11 @@ def _gpu_inference_ctx(tag: str = "IMG", min_vram_gib: float = 4.0,
         _sys.stderr.write(f"[{tag}] GPU freed — {_free:.2f} GiB available\n")
 
         # -- 5. Reload Ollama LLM(s) --
-        _reload_list = _unloaded or [os.getenv("MODEL", "qwen3.5:9b").replace("ollama/", "")]
+        # Only when nothing is managing residency for us. Under the broker the
+        # next task loads what it actually wants, so restoring here is pure
+        # waste.
+        _reload_list = [] if _brokered else (
+            _unloaded or [os.getenv("MODEL", "qwen3.5:9b").replace("ollama/", "")])
         for _mname in _reload_list:
             try:
                 _req.post(OLLAMA_IMAGE_URL,
@@ -1721,9 +1745,17 @@ def _critique_image(image_path: Path, prompt: str) -> tuple[bool, str, str]:
 
 @tool("GenerateAIImage")
 def generate_ai_image(prompt: str) -> str:
-    """Generate a realistic image from a text prompt using Stable Diffusion AI or Ollama z-image.
-    Use for animals, landscapes, people, objects, scenes. Add style keywords like photorealistic, 8k.
-    Copy the returned image tag EXACTLY into your Final Answer."""
+    """Generate a picture. ONLY use this when the person explicitly asked for
+    an image, picture, photo, drawing or illustration.
+
+    Calling this ENDS the request: the image becomes the entire answer and no
+    text is written. So never call it to decorate or illustrate a written
+    answer — a question about travel, research, facts or advice wants words,
+    not a picture. If in doubt, do not call it.
+
+    Input: a description of the subject. Add style keywords like
+    photorealistic, 8k. Copy the returned image tag EXACTLY into your Final
+    Answer."""
     import sys as _sys
 
     tag = _generate_image_once(prompt)

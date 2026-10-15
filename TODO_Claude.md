@@ -6,7 +6,12 @@ Statuses re-verified against the code, not against previous checkboxes.
 
 ---
 
-## COMPOSER — full-song generation with audio (researched 2026-10-14)
+## ▶ NEXT — v3.1.0: composer full-song audio (ACE-Step)
+
+Agreed 2026-10-14 as the next release. Researched below; not started.
+Nothing in `src/` references ACE-Step or YuE yet — the composer still
+exposes only chat, score, harmonize, analyze and compositions, and its
+only audio is fluidsynth rendering a generated MIDI.
 
 The composer writes scores. This would be the other half: actual rendered
 audio with vocals. Researched against the official repos, because the
@@ -43,10 +48,26 @@ composition as audio" as a separate artefact, with the MusicXML remaining the
 thing that is correct.
 
 Practical notes:
-- It must take a slot in GPU_QUEUE. It is a diffusion model and will want the
-  card exclusively; `_gpu_inference_ctx` already does the Ollama-unload dance
-  that image and video use, and this should reuse it rather than invent a
-  second one.
+- The GPU side is already built. v3.0.0 put every path through
+  `gpu_broker.py`, so this needs one reservation and nothing else:
+
+  ```python
+  async with GPU.reserve(Need("torch", "acestep"), "song", user=uid) as res:
+      async for notice in res.wait():
+          yield _sse("queue", queue_message(
+              notice["position"], notice["estimate"], notice["ticket"]))
+      ...generate...
+  ```
+
+  `Need("torch", ...)` is what makes the broker release Ollama first, which is
+  the only teardown actually required. Do **not** add a second unload dance.
+  `test_gpu_coverage.py` will fail the build if the generation call sits
+  outside that reservation.
+- Use `enable_model_cpu_offload()` as the image pipelines do. That is what
+  makes the "torch → ollama" transition free: a pipeline that has finished
+  holds ~32 MiB, not gigabytes, so the next person's LLM loads without a
+  teardown. A pipeline that keeps its weights resident would break the
+  measured residency rules the broker depends on.
 - Audio is large. Decide retention before building: the composer already
   stores MusicXML and MIDI, and WAV at song length is a different order.
 - Check whether ACE-Step takes a melody or score as conditioning, or only
@@ -173,8 +194,8 @@ through TestClient.**
 
 ### Still open
 
-- ACE-Step integration as a composer side-feature: researched and approved,
-  not started. See the top of this file.
+- ACE-Step integration is v3.1.0, agreed 2026-10-14. Plan at the top of
+  this file; the broker reservation it needs is the only GPU work left.
 - The composer's long-form score path reserves the GPU but does not render a
   queue position.
 - `ollama ps` can read zero models mid-swap; `/gpu/queue`'s `resident` is the

@@ -13,17 +13,20 @@ import queue
 import asyncio
 import threading
 import logging
+import uuid
 
 from fastapi import HTTPException, Request
 from fastapi.responses import StreamingResponse, Response
 
 from researcher.auth import get_current_user
 from researcher.config import _QueueWriter, _SESSION_ID_RE
+from researcher import song
 from researcher.composer.crew import ComposerCrew
 from researcher.gpu_broker import GPU, Need, queue_message
 from researcher.user_crews import get_crew, resolve_model
 
 from researcher.composer.models import (
+    ComposeSongRequest,
     ComposerSessionCreate,
     ComposerSessionUpdate,
     ComposeChatRequest,
@@ -44,6 +47,10 @@ from researcher.composer.storage import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Beside the generated images and video; the directory is gitignored.
+_SONG_DIR = pathlib.Path(__file__).resolve().parents[1] / "static" / "generated"
+_SONG_DIR.mkdir(parents=True, exist_ok=True)
 
 
 async def _get_composer_crew(request: Request, uid: str) -> ComposerCrew:
@@ -709,3 +716,160 @@ def register_composer_routes(app):
         if not deleted:
             raise HTTPException(status_code=404, detail="Composition not found")
         return {"deleted": composition_id}
+
+    # ------------------------------------------------------------------
+    # Song audio (ACE-Step)
+    #
+    # The composer's scores are correct; this makes them audible. ACE-Step
+    # conditions on audio rather than notation, so the score goes through the
+    # existing MusicXML -> MIDI -> fluidsynth path first and that render is
+    # the source audio for a `cover`. The notation stays authoritative.
+    # ------------------------------------------------------------------
+
+    @app.post("/composer/song")
+    async def composer_song(req: ComposeSongRequest, request: Request):
+        """Render a song as audio — SSE streaming."""
+        _validate_sid(req.session_id)
+        user = await get_current_user(request)
+        uid = user["id"]
+        db = request.app.state.db
+
+        session = await get_composer_session(db, req.session_id, uid)
+        if not session:
+            raise HTTPException(status_code=404, detail="Composer session not found")
+
+        if not song.is_installed():
+            # Say what is missing rather than failing with a connection error
+            # several layers down.
+            raise HTTPException(status_code=503, detail=song.install_hint())
+
+        prompt = (req.prompt or "").strip()
+        if not prompt and not req.response.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="Describe the sound you want, or generate a score first.")
+
+        # Build the source audio on the CPU *before* taking the card, so the
+        # queue is held only for the part that actually needs a GPU.
+        src_audio: bytes | None = None
+        src_error = ""
+        if req.response.strip():
+            crew = await _get_composer_crew(request, uid)
+            musicxml = crew.extract_musicxml(
+                req.response, session["key_signature"],
+                session["time_signature"], session["tempo"])
+            if musicxml:
+                midi = crew.musicxml_to_midi(musicxml, session["tempo"])
+                if midi:
+                    loop = asyncio.get_running_loop()
+                    # gpu-queue-exempt: fluidsynth renders MIDI on the CPU.
+                    src_audio = await loop.run_in_executor(
+                        None, crew.midi_to_audio, midi)
+            if not src_audio:
+                src_error = ("Could not render that score to audio, so the "
+                             "song was generated from the description alone.")
+
+        caption = prompt or (
+            f"{session['genre']} in {session['key_signature']}, "
+            f"{session['tempo']} bpm")
+
+        async def event_stream():
+            if src_error:
+                yield _sse("reasoning", "⚠️ " + src_error)
+            elif src_audio:
+                yield _sse("reasoning",
+                           "🎼 Using your score as the source — the audio is a "
+                           "performance of it, not a different piece")
+
+            progress: queue.Queue = queue.Queue()
+
+            # One card, one queue. "song" is its own residency kind because
+            # ACE-Step is a separate process with no unload endpoint: the
+            # broker stops it when anything else needs the GPU.
+            async with GPU.reserve(Need("song", "acestep"), "song",
+                                   user=uid) as res:
+                async for notice in res.wait():
+                    yield _sse("queue", queue_message(
+                        notice["position"], notice["estimate"],
+                        notice["ticket"]))
+
+                task = asyncio.create_task(song.generate(
+                    prompt=caption,
+                    lyrics=req.lyrics,
+                    bpm=session["tempo"],
+                    key_scale=session["key_signature"],
+                    time_signature=session["time_signature"],
+                    duration=req.duration,
+                    vocal_language=req.vocal_language,
+                    src_audio=src_audio,
+                    cover_strength=req.cover_strength,
+                    on_progress=progress.put_nowait,
+                ))
+
+                # Drain the generator's progress notes while it works, so a
+                # cold start that downloads several GB explains itself.
+                while not task.done():
+                    try:
+                        yield _sse("reasoning", "⏳ " + progress.get_nowait())
+                    except queue.Empty:
+                        await asyncio.sleep(0.4)
+
+                try:
+                    audio, meta = task.result()
+                except Exception as e:
+                    logger.exception("[song] generation failed")
+                    yield _sse("error", str(e))
+                    return
+
+            name = f"song-{uuid.uuid4().hex[:12]}.mp3"
+            path = _SONG_DIR / name
+            path.write_bytes(audio)
+            url = f"/static/generated/{name}"
+            logger.info("[song] wrote %s (%.1f MB)", name, len(audio) / 2**20)
+
+            lines = [f"Rendered {len(audio) / 2**20:.1f} MB of audio"]
+            for key in ("key", "bpm", "duration"):
+                if (meta or {}).get(key):
+                    lines.append(f"{key}: {meta[key]}")
+
+            yield _sse("done", {
+                "response": (
+                    f"🎵 **{'Performance of your score' if src_audio else 'Generated song'}**\n\n"
+                    f"<audio controls src=\"{url}\"></audio>\n\n"
+                    f"[⬇ Download]({url})"
+                ),
+                "audio_url": url,
+                "reasoning": lines,
+                "token_usage": {},
+                "incomplete": False,
+            })
+
+        return StreamingResponse(event_stream(),
+                                 media_type="text/event-stream")
+
+    @app.post("/composer/song/stop")
+    async def composer_song_stop(request: Request):
+        """Stop the song engine and hand the VRAM back.
+
+        Exposed because ACE-Step holds the card until its process exits, and
+        somebody waiting for the tutor should not have to wait out the idle
+        window.
+        """
+        await get_current_user(request)
+        was = song.running()
+        song.stop()
+        GPU.forget_residency()
+        return {"stopped": was}
+
+    @app.get("/composer/song/status")
+    async def composer_song_status(request: Request):
+        """Whether the engine is installed, running, and for how long idle."""
+        await get_current_user(request)
+        return {
+            "installed": song.is_installed(),
+            "running": song.running(),
+            "idle_seconds": round(song.idle_seconds(), 1),
+            "model": song.ACESTEP_MODEL,
+            "hint": "" if song.is_installed() else song.install_hint(),
+            "fluidsynth": song.have_fluidsynth(),
+        }

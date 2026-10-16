@@ -6,74 +6,169 @@ Statuses re-verified against the code, not against previous checkboxes.
 
 ---
 
-## ▶ NEXT — v3.1.0: composer full-song audio (ACE-Step)
+## ▶ NEXT — composer control and keeping the score
 
-Agreed 2026-10-14 as the next release. Researched below; not started.
-Nothing in `src/` references ACE-Step or YuE yet — the composer still
-exposes only chat, score, harmonize, analyze and compositions, and its
-only audio is fluidsynth rendering a generated MIDI.
+Asked for 2026-10-15, after v3.1.0 landed.
 
-The composer writes scores. This would be the other half: actual rendered
-audio with vocals. Researched against the official repos, because the
-secondary sources contradict each other badly on VRAM.
+### 0. First, two things we are getting wrong today
 
-### Recommendation: ACE-Step 1.5, not YuE
+Found while reading ACE-Step's own parameter docs, not yet applied, because
+v3.1.0 was tagged on what Bogdan actually heard:
 
-**ACE-Step 1.5** (github.com/ace-step/ACE-Step-1.5)
-- The 8-16GB tier is explicitly "2B turbo/sft" — the 5070 Ti's 15.5GB sits in
-  it comfortably, with the XL 4B as a stretch (">=12GB with offload +
-  quantization", ">=20GB without").
-- "under 10 seconds on an RTX 3090" for a full song. The 5070 Ti is in that
-  class, so this is interactive rather than a batch job — unlike video.
-- MIT licensed. Note: the README states MIT for the project and says nothing
-  separate about the weights, so confirm the model card before any
-  distribution.
-- Ships a Python API alongside Gradio/REST/CLI, so it integrates like the
-  diffusers pipelines already do rather than needing a subprocess.
-- Runs on CUDA, ROCm, Intel XPU and Apple.
+- **`shift=3.0` is required for turbo and we do not send it.** INFERENCE.md is
+  explicit: `guidance_scale` is auto-corrected for turbo models but `shift` is
+  **not**, the default 1.0 is applied as-is, and "the only timestep/guidance
+  parameter you need to set manually for turbo is `shift=3.0`". We run
+  `acestep-v15-turbo`, so every song so far was generated outside its
+  documented configuration. One line, and it should improve everything.
+- **`instrumental: bool` exists** and we do not use it. We infer "instrumental"
+  from empty lyrics, which is a guess; the model has a switch. The documented
+  convention for the lyrics field is the literal `[Instrumental]`.
 
-**YuE / YuE2** — does not fit this machine
-- YuE 7B: ~16GB for a single segment, and the README recommends 80GB-class
-  GPUs for full songs. Apache 2.0.
-- YuE2 (Sept 2026): official requirement ~24GB. Secondary sources claim far
-  less; treat with suspicion. Weights reportedly CC BY-NC 4.0, which would
-  rule out anything commercial — verify before investing.
+### 1. Real control over the composition
 
-### How it would fit the existing design
+The honest finding: ACE-Step has **no structured fields** for instruments or
+voice. `caption` is free text capped at 512 characters, and that is where
+genre, mood and instrumentation go. Only these are structured: `bpm`,
+`keyscale`, `timesignature`, `duration`, `vocal_language`, `instrumental`.
 
-The composer's rule is deterministic realisation for correctness, model for
-variety. Audio generation does not fit that: there is no deterministic path to
-a sung vocal. So it belongs beside the score, not instead of it — "render this
-composition as audio" as a separate artefact, with the MusicXML remaining the
-thing that is correct.
+So "more control" is two separate jobs:
 
-Practical notes:
-- The GPU side is already built. v3.0.0 put every path through
-  `gpu_broker.py`, so this needs one reservation and nothing else:
+**a. Build the caption rather than making the person write it.** A form —
+instruments (multi-select, as the Score tab already has), ensemble size, mood,
+era, production style, mix notes — composed into one caption under the 512
+character cap, with the raw text still editable underneath. The composer
+session already holds genre, key, time signature and tempo, and those should
+prefill rather than be retyped. This is the highest value for the least work.
 
-  ```python
-  async with GPU.reserve(Need("torch", "acestep"), "song", user=uid) as res:
-      async for notice in res.wait():
-          yield _sse("queue", queue_message(
-              notice["position"], notice["estimate"], notice["ticket"]))
-      ...generate...
-  ```
+**b. Voice is a reference-audio problem, not a parameter.** There is no
+timbre, gender or singer field. The lever is `reference_audio`, which is
+*separate* from `src_audio`: `src_audio` carries the structure for a cover,
+`reference_audio` guides the style. So a "voice" feature means letting someone
+keep a small library of reference clips and pick one — which also raises a
+question worth settling before building it: whose voice, and recorded with
+whose consent. For a household that is a real conversation, not a checkbox.
 
-  `Need("torch", ...)` is what makes the broker release Ollama first, which is
-  the only teardown actually required. Do **not** add a second unload dance.
-  `test_gpu_coverage.py` will fail the build if the generation call sits
-  outside that reservation.
-- Use `enable_model_cpu_offload()` as the image pipelines do. That is what
-  makes the "torch → ollama" transition free: a pipeline that has finished
-  holds ~32 MiB, not gigabytes, so the next person's LLM loads without a
-  teardown. A pipeline that keeps its weights resident would break the
-  measured residency rules the broker depends on.
-- Audio is large. Decide retention before building: the composer already
-  stores MusicXML and MIDI, and WAV at song length is a different order.
-- Check whether ACE-Step takes a melody or score as conditioning, or only
-  text and lyrics. If only text, it is a parallel generator rather than a
-  renderer of the composed score, which is a weaker fit and worth saying so
-  before building.
+Also worth exposing once the form exists: `inference_steps` (8 for turbo,
+32-64 for base) as a quality/time dial, and `audio_cover_strength` is already
+there as "Faithfulness".
+
+### 2. Keeping the score
+
+Two cases, very different in cost.
+
+**a. Cover mode already has the score and throws it away.** `/composer/song`
+computes the MusicXML to render the MIDI and then discards it. Persisting it
+is small: `save_composition` already stores `musicxml`, so the song route
+should save the composition it performed and link the audio to it. The
+`compositions` table needs one new column for the audio path — it has
+`musicxml` but nothing for rendered audio — so this is a migration plus a
+save call. After that "save this song" gives you both the notation and the
+recording, which is exactly the right artefact pair: the score is correct, the
+audio is a performance.
+
+**b. text2music mode has no score at all**, and getting one means audio to
+notation — a genuinely hard, separate problem. Options to look at: Spotify's
+`basic-pitch` (permissive, pip-installable, monophonic-ish), or ACE-Step's own
+**Track Separation** to get stems first and transcribe each. Expect
+approximate results: polyphonic piano transcription is still research. Worth
+prototyping before promising it in the UI, and worth saying plainly in the UI
+that a transcription is an approximation while the cover-mode score is exact.
+
+### 3. Housekeeping that will bite
+
+- Nothing prunes `static/generated/`. Songs are ~350 KB for 20s, so a few
+  minutes each; with a family using it this grows without bound.
+- `stop_if_idle()` exists and nothing calls it on a timer. The engine is
+  stopped when someone else needs the card or from the Free GPU button, which
+  works but means it can sit holding ~10 GiB if nobody else asks.
+
+---
+
+## ▶ RELEASED v3.1.0 (2026-10-15) — composer song audio (ACE-Step)
+
+Implemented and released 2026-10-15. Bogdan tried it and approved the tag.
+
+### What it does
+
+A **Song** tab in the composer. The score stays the thing that is *correct*;
+this renders a performance of it. With "Perform my score" ticked, the last
+generated score goes through the existing path and the result is the source
+audio for an ACE-Step `cover`:
+
+    ABC -> MusicXML -> MIDI -> fluidsynth WAV -> ACE-Step cover -> MP3
+
+Measured with a real 8-bar study: MusicXML 7923 chars, MIDI 336 B, WAV 3.9 MB,
+MP3 353 KB — at the score's own tempo and key (96 bpm, C major, 4/4 came back
+in the metadata). Without a score it falls back to text-to-music from the
+description, which is a parallel generator rather than a renderer.
+
+### Why it is a separate process, not an import
+
+Yesterday's note said it "integrates like the diffusers pipelines". That was
+wrong. ACE-Step pins `torch==2.10.0+cu128` and `transformers<4.58`; we run
+torch 2.13.0+cu130 and transformers 5.14. Installing it here would downgrade
+torch, CUDA and transformers — breaking the image and video pipelines and
+almost certainly CrewAI. It gets its own checkout and `uv sync` venv
+(7.6 GB) at `/home/bogdan/ai/ACE-Step-1.5`, and we talk to its REST API.
+
+### Why the broker owns its lifecycle
+
+ACE-Step has **no unload endpoint** — `offload` is init-time only. A
+long-lived server would hold VRAM with nothing able to reclaim it, which on
+one card means the tutor and researcher get pushed to the CPU. So `Need("song",
+"acestep")` is its own residency kind, and `_make_resident` stops the process
+when anything else wants the card. Measured:
+
+    engine holding weights          5.0 GiB free
+    tutor task arrives, broker stops it
+    after                          15.1 GiB free
+
+`--no-init` means the server answers /health in ~4s holding *no* VRAM, and
+loads weights on the first request — inside the reservation, where it belongs.
+No LM is ever loaded: `cover` skips it entirely and text2music with thinking
+off does not need it.
+
+### Timings on the 5070 Ti
+
+    server start                    4.0s
+    first song (model load)         141s
+    cover from a rendered score      42.7s
+    through the HTTP route          115s (cold engine)
+    VRAM held while generating      ~9.8 GiB
+
+### The four bugs, all mine, all found by running it
+
+1. **stdout to a pipe killed the model download.** `stdout=subprocess.PIPE`
+   with no reader: once the parent was gone every write failed with EPIPE, and
+   the download died of its own progress output — "Failed to download main
+   model: Both HuggingFace and ModelScope downloads failed. HF: [Errno 32]
+   Broken pipe". Output goes to `logs/acestep.log` now.
+2. **`task_ids` instead of `task_id_list`** on `/query_result` returns
+   `{"data": []}` with HTTP 200, which polls for ever. The field name is in
+   docs/en/API.md; I guessed instead of reading.
+3. **Environment leakage caused a cuDNN mismatch.** Passing our `PYTHONPATH`
+   and `VIRTUAL_ENV` to the subprocess made it load a mix of two cuDNNs:
+   `CUDNN_STATUS_SUBLIBRARY_VERSION_MISMATCH`, on the cover path only, because
+   that is the one that runs convolutions over the source audio. Scrubbing
+   those variables fixed it outright.
+4. **The real error was buried.** `status: 2` at the top level, the reason
+   inside the JSON-string `result`. Reading only the top level reported
+   "generation failed" and nothing else, which hid bug 3 for a whole run.
+
+Also: `uvicorn --reload` orphans the engine on every code change, and `stop()`
+could only kill a process it started — so it now matches `acestep.api_server`
+on our port and reclaims orphans too.
+
+### Still to decide
+
+- **Retention.** Songs land in `static/generated/` beside the images and
+  video, which is gitignored and never pruned. A few minutes of audio per
+  song will add up; nothing deletes them yet.
+- The idle window is 300s (`ACESTEP_IDLE_SECONDS`), but nothing sweeps it —
+  `stop_if_idle()` exists and is not called on a timer. Today the engine stops
+  when someone else needs the card, or from the Free GPU button.
+- The XL 4B model would sound better and fits at ≥12 GB with offload. Untried.
 
 ---
 

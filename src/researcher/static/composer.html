@@ -213,6 +213,7 @@
         <button class="composer-tab" data-tab="score" onclick="switchComposerTab('score')">🎵 Score</button>
         <button class="composer-tab" data-tab="harmonize" onclick="switchComposerTab('harmonize')">🎹 Harmonize</button>
         <button class="composer-tab" data-tab="analyze" onclick="switchComposerTab('analyze')">🔍 Analyze</button>
+        <button class="composer-tab" data-tab="song" onclick="switchComposerTab('song')">🎤 Song</button>
         <button class="composer-tab" data-tab="compositions" onclick="switchComposerTab('compositions')">📁 Compositions</button>
     </div>
 
@@ -310,6 +311,54 @@
         <div id="analyze-content" class="score-content"></div>
     </div>
 
+    <!-- ═══════ SONG panel ═══════ -->
+    <!-- Audio with vocals, from ACE-Step. The score stays the thing that is
+         correct; this is a performance of it. When a score is present it is
+         rendered through fluidsynth and used as the source for a cover, which
+         keeps the structure and changes the production. -->
+    <div class="composer-panel" id="cpanel-song">
+        <div class="song-form">
+            <div class="song-status" id="song-status">Checking the song engine…</div>
+            <textarea id="song-prompt" rows="2"
+                placeholder="Describe the sound and production (e.g. 'warm indie folk, acoustic guitar, close-miked female vocal, light room reverb')"></textarea>
+            <textarea id="song-lyrics" rows="4"
+                placeholder="Lyrics (leave blank for an instrumental)"></textarea>
+            <div class="form-row">
+                <label title="Takes the last score from the Score or Chat tab, renders it through fluidsynth, and uses that as the source so the audio follows your composition.">
+                    <input type="checkbox" id="song-use-score" checked>
+                    Perform my score
+                </label>
+                <label title="1.0 holds to the score closely; 0.2 treats it as a loose suggestion.">
+                    Faithfulness:
+                    <input type="range" id="song-strength" min="0.2" max="1" step="0.05" value="0.75"
+                           oninput="document.getElementById('song-strength-val').textContent = this.value">
+                    <span id="song-strength-val">0.75</span>
+                </label>
+                <label title="0 lets the model choose from the lyrics.">
+                    Seconds:
+                    <input type="number" id="song-duration" value="0" min="0" max="600" step="10" style="width:5rem">
+                </label>
+                <label>
+                    Vocals:
+                    <select id="song-language">
+                        <option value="en" selected>English</option>
+                        <option value="fr">French</option>
+                        <option value="ro">Romanian</option>
+                        <option value="de">German</option>
+                        <option value="es">Spanish</option>
+                        <option value="it">Italian</option>
+                        <option value="ja">Japanese</option>
+                        <option value="zh">Chinese</option>
+                    </select>
+                </label>
+                <button id="song-generate-btn" onclick="generateSong()">🎤 Render song</button>
+                <button id="song-stop-btn" onclick="stopSongEngine()"
+                        title="The song engine holds the GPU until it stops. Use this if someone else needs the card now.">⏏ Free GPU</button>
+            </div>
+        </div>
+        <div class="song-content" id="song-content"></div>
+    </div>
+
     <!-- ═══════ COMPOSITIONS panel ═══════ -->
     <div class="composer-panel" id="cpanel-compositions">
         <div style="padding:1rem 1.5rem;">
@@ -333,6 +382,7 @@
     <script src="/static/js/composer-state.js?v=4"></script>
     <script src="/static/js/composer-sessions.js?v=4"></script>
     <script src="/static/js/composer-chat.js?v=3"></script>
+    <script src="/static/js/composer-song.js?v=1"></script>
     <script src="/static/js/composer-score.js?v=3"></script>
 
     <!-- Composer init -->

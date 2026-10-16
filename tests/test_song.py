@@ -21,6 +21,7 @@ The chain the cover path depends on, also measured:
 
 import json
 import os
+import pathlib
 from unittest.mock import MagicMock
 
 import pytest
@@ -272,3 +273,155 @@ class TestTheRouteHoldsTheGpu:
         src = inspect.getsource(GpuBroker._make_resident)
         assert 'current.kind == "song"' in src
         assert "_song.stop" in src
+
+
+class TestTurboConfiguration:
+    """v3.1.1. Everything before it ran outside the model's own spec.
+
+    INFERENCE.md: guidance_scale is auto-corrected for turbo models but
+    `shift` is **not** — the default 1.0 is applied as-is, and "the only
+    timestep/guidance parameter you need to set manually for turbo is
+    shift=3.0".
+    """
+
+    def test_turbo_is_recognised(self, monkeypatch):
+        monkeypatch.setattr(song, "ACESTEP_MODEL", "acestep-v15-turbo")
+        assert song._is_turbo()
+        monkeypatch.setattr(song, "ACESTEP_MODEL", "acestep-v15-xl-turbo")
+        assert song._is_turbo()
+
+    def test_base_models_are_not_turbo(self, monkeypatch):
+        monkeypatch.setattr(song, "ACESTEP_MODEL", "acestep-v15-base")
+        assert not song._is_turbo()
+        monkeypatch.setattr(song, "ACESTEP_MODEL", "acestep-v15-sft")
+        assert not song._is_turbo()
+
+    def test_shift_is_sent_for_turbo_and_only_for_turbo(self):
+        """Read off the source: the request builder is inside generate()."""
+        import inspect
+
+        src = inspect.getsource(song.generate)
+        assert 'fields["shift"] = str(TURBO_SHIFT)' in src
+        assert "if _is_turbo():" in src
+
+    def test_the_documented_value_is_the_default(self):
+        assert song.TURBO_SHIFT == 3.0
+
+
+class TestInstrumentalSwitch:
+    """The model has a switch; inferring it from empty lyrics was a guess."""
+
+    def test_it_is_derived_from_the_lyrics_and_sent_explicitly(self):
+        import inspect
+
+        src = inspect.getsource(song.generate)
+        assert 'instrumental = not (lyrics or "").strip()' in src
+        assert '"instrumental": "true" if instrumental else "false"' in src
+        # ACE-Step's documented convention for the lyrics field.
+        assert '"[Instrumental]"' in src
+
+
+class TestKeepingOnlyWhatWasSaved:
+    """A render is scratch until saved. v3.1.1."""
+
+    def _song(self, d, name, age_seconds=0.0):
+        import os
+        import time
+
+        f = d / name
+        f.write_bytes(b"ID3")
+        if age_seconds:
+            old = time.time() - age_seconds
+            os.utime(f, (old, old))
+        return f
+
+    def test_an_unsaved_old_render_is_deleted(self, tmp_path):
+        f = self._song(tmp_path, "song-aaa.mp3", age_seconds=10_000)
+        removed = song.prune_unsaved(tmp_path, keep=set())
+        assert removed == ["song-aaa.mp3"]
+        assert not f.exists()
+
+    def test_a_saved_render_is_kept_however_old(self, tmp_path):
+        f = self._song(tmp_path, "song-bbb.mp3", age_seconds=10_000_000)
+        removed = song.prune_unsaved(tmp_path, keep={"song-bbb.mp3"})
+        assert removed == []
+        assert f.exists()
+
+    def test_the_keep_set_may_hold_urls_rather_than_names(self, tmp_path):
+        """The database could store either; matching is on the file name."""
+        f = self._song(tmp_path, "song-ccc.mp3", age_seconds=10_000)
+        song.prune_unsaved(tmp_path, keep={"/static/generated/song-ccc.mp3"})
+        assert f.exists()
+
+    def test_a_fresh_unsaved_render_survives_the_grace_window(self, tmp_path):
+        """You must be able to listen, think, and come back to save it."""
+        f = self._song(tmp_path, "song-ddd.mp3", age_seconds=5)
+        assert song.prune_unsaved(tmp_path, keep=set()) == []
+        assert f.exists()
+
+    def test_images_and_video_are_never_touched(self, tmp_path):
+        """They are referenced from chat history this cannot read."""
+        import os
+        import time
+
+        old = time.time() - 10_000_000
+        for name in ("picture.png", "clip.mp4", "fe7a33d45136.mp4",
+                     "notasong.mp3"):
+            f = tmp_path / name
+            f.write_bytes(b"x")
+            os.utime(f, (old, old))
+        song.prune_unsaved(tmp_path, keep=set())
+        for name in ("picture.png", "clip.mp4", "fe7a33d45136.mp4",
+                     "notasong.mp3"):
+            assert (tmp_path / name).exists(), f"{name} must be left alone"
+
+    def test_an_undeletable_file_does_not_abort_the_sweep(self, tmp_path, monkeypatch):
+        self._song(tmp_path, "song-eee.mp3", age_seconds=10_000)
+        good = self._song(tmp_path, "song-fff.mp3", age_seconds=10_000)
+        real = pathlib.Path.unlink
+
+        def _unlink(self, *a, **k):
+            if self.name == "song-eee.mp3":
+                raise OSError("busy")
+            return real(self, *a, **k)
+
+        monkeypatch.setattr(pathlib.Path, "unlink", _unlink)
+        removed = song.prune_unsaved(tmp_path, keep=set())
+        assert removed == ["song-fff.mp3"]
+        assert not good.exists()
+
+    def test_an_empty_directory_is_fine(self, tmp_path):
+        assert song.prune_unsaved(tmp_path, keep=set()) == []
+
+
+class TestTheSaveEndpoint:
+    def test_it_refuses_anything_that_is_not_a_render(self):
+        """The name is used to build a path, so it has to be constrained."""
+        import pathlib as _p
+
+        src = (_p.Path(__file__).resolve().parents[1] / "src" / "researcher"
+               / "routes" / "composer.py").read_text()
+        body = src[src.index('@app.post("/composer/song/save")'):]
+        body = body[:body.index('@app.post("/composer/song/stop")')]
+        assert 'name.startswith("song-")' in body
+        assert "PurePath(audio_url).name" in body, (
+            "take only the file name, never a caller-supplied path")
+        assert "save_composition(" in body
+        assert "audio_path=name" in body
+
+    def test_the_route_prunes_after_a_render(self):
+        import pathlib as _p
+
+        src = (_p.Path(__file__).resolve().parents[1] / "src" / "researcher"
+               / "routes" / "composer.py").read_text()
+        assert "song.prune_unsaved" in src
+        assert "saved_audio_paths(db)" in src
+
+    def test_compositions_gained_an_audio_path_column(self):
+        import pathlib as _p
+
+        src = (_p.Path(__file__).resolve().parents[1] / "src" / "researcher"
+               / "composer" / "storage.py").read_text()
+        assert "audio_path      TEXT NOT NULL DEFAULT ''" in src, "fresh schema"
+        assert "ALTER TABLE compositions ADD COLUMN audio_path" in src, (
+            "an existing database must be migrated, not broken")

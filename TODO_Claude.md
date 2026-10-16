@@ -6,26 +6,12 @@ Statuses re-verified against the code, not against previous checkboxes.
 
 ---
 
-## ▶ NEXT — composer control and keeping the score
+## ▶ NEXT — composer control
 
-Asked for 2026-10-15, after v3.1.0 landed.
+Asked for 2026-10-15. The *keeping the score* half shipped as v3.1.1; this is
+what is left.
 
-### 0. First, two things we are getting wrong today
-
-Found while reading ACE-Step's own parameter docs, not yet applied, because
-v3.1.0 was tagged on what Bogdan actually heard:
-
-- **`shift=3.0` is required for turbo and we do not send it.** INFERENCE.md is
-  explicit: `guidance_scale` is auto-corrected for turbo models but `shift` is
-  **not**, the default 1.0 is applied as-is, and "the only timestep/guidance
-  parameter you need to set manually for turbo is `shift=3.0`". We run
-  `acestep-v15-turbo`, so every song so far was generated outside its
-  documented configuration. One line, and it should improve everything.
-- **`instrumental: bool` exists** and we do not use it. We infer "instrumental"
-  from empty lyrics, which is a guess; the model has a switch. The documented
-  convention for the lyrics field is the literal `[Instrumental]`.
-
-### 1. Real control over the composition
+### Real control over the composition
 
 The honest finding: ACE-Step has **no structured fields** for instruments or
 voice. `caption` is free text capped at 512 characters, and that is where
@@ -39,49 +25,81 @@ instruments (multi-select, as the Score tab already has), ensemble size, mood,
 era, production style, mix notes — composed into one caption under the 512
 character cap, with the raw text still editable underneath. The composer
 session already holds genre, key, time signature and tempo, and those should
-prefill rather than be retyped. This is the highest value for the least work.
+prefill rather than be retyped. Highest value for the least work.
 
 **b. Voice is a reference-audio problem, not a parameter.** There is no
 timbre, gender or singer field. The lever is `reference_audio`, which is
 *separate* from `src_audio`: `src_audio` carries the structure for a cover,
-`reference_audio` guides the style. So a "voice" feature means letting someone
-keep a small library of reference clips and pick one — which also raises a
-question worth settling before building it: whose voice, and recorded with
-whose consent. For a household that is a real conversation, not a checkbox.
+`reference_audio` guides the style. So a "voice" feature means a small library
+of reference clips to pick from — which raises a question worth settling
+before building it: whose voice, and recorded with whose consent. For a
+household that is a real conversation, not a checkbox.
 
-Also worth exposing once the form exists: `inference_steps` (8 for turbo,
-32-64 for base) as a quality/time dial, and `audio_cover_strength` is already
-there as "Faithfulness".
+Worth exposing once the form exists: `inference_steps` (8 for turbo, 32-64 for
+base) as a quality/time dial. `audio_cover_strength` is already there as
+"Faithfulness".
 
-### 2. Keeping the score
+### Transcribing audio to notation
 
-Two cases, very different in cost.
+v3.1.1 keeps the score for **cover** mode, where it is exact — the notation
+the audio was rendered from. **text2music mode still has no score**, and
+getting one means audio to notation, a genuinely hard separate problem.
+Options: Spotify's `basic-pitch` (permissive, pip-installable, monophonic-ish)
+or ACE-Step's own Track Separation to get stems first and transcribe each.
+Expect approximate results — polyphonic transcription is still research — so
+prototype before promising it in the UI, and say plainly there that a
+transcription is an approximation while a cover-mode score is exact.
 
-**a. Cover mode already has the score and throws it away.** `/composer/song`
-computes the MusicXML to render the MIDI and then discards it. Persisting it
-is small: `save_composition` already stores `musicxml`, so the song route
-should save the composition it performed and link the audio to it. The
-`compositions` table needs one new column for the audio path — it has
-`musicxml` but nothing for rendered audio — so this is a migration plus a
-save call. After that "save this song" gives you both the notation and the
-recording, which is exactly the right artefact pair: the score is correct, the
-audio is a performance.
+### The XL model
 
-**b. text2music mode has no score at all**, and getting one means audio to
-notation — a genuinely hard, separate problem. Options to look at: Spotify's
-`basic-pitch` (permissive, pip-installable, monophonic-ish), or ACE-Step's own
-**Track Separation** to get stems first and transcribe each. Expect
-approximate results: polyphonic piano transcription is still research. Worth
-prototyping before promising it in the UI, and worth saying plainly in the UI
-that a transcription is an approximation while the cover-mode score is exact.
+`acestep-v15-xl-*` (4B DiT, ~9 GB of weights) sounds better and fits at ≥12 GB
+with offload. Untried. Would need the broker's measurements redone, since it
+is twice the residency of the 2B.
 
-### 3. Housekeeping that will bite
+---
 
-- Nothing prunes `static/generated/`. Songs are ~350 KB for 20s, so a few
-  minutes each; with a family using it this grows without bound.
-- `stop_if_idle()` exists and nothing calls it on a timer. The engine is
-  stopped when someone else needs the card or from the Free GPU button, which
-  works but means it can sit holding ~10 GiB if nobody else asks.
+## ▶ RELEASED v3.1.1 (2026-10-15) — turbo as documented, and keeping only what is saved
+
+### Turbo was running outside its own spec
+
+`shift=3.0` is required for the turbo models and is **not** auto-corrected.
+INFERENCE.md: "guidance_scale is auto-corrected... shift is **not**... the only
+timestep/guidance parameter you need to set manually for turbo is shift=3.0".
+Every song before this ran at the default 1.0. Found by reading the parameter
+docs while planning the control work, not by noticing bad output.
+
+Also: `instrumental` is a real boolean the model accepts, and we were inferring
+it from empty lyrics. Now sent explicitly, with the documented `[Instrumental]`
+convention in the lyrics field.
+
+### A song can be saved, with its score
+
+Cover mode already computed the MusicXML to render the MIDI and then threw it
+away. `/composer/song/save` keeps the pair: `compositions` gained an
+`audio_path` column (migrated in place, idempotent, verified against a
+pre-v3.1.1 database with a row in it) and the save stores the exact notation
+alongside the recording. The score is not a transcription — it is what the
+audio was rendered *from* — so the pair is "correct notation plus a
+performance of it".
+
+text2music renders have no score, and the UI says so rather than implying one.
+
+### Only what is saved is kept
+
+A render is scratch until somebody saves it. `prune_unsaved` deletes
+`song-*.mp3` files that no composition refers to and that are older than
+`ACESTEP_KEEP_UNSAVED_SECONDS` (default 7200 — long enough to listen, think,
+and come back). It runs after each render, where the directory is already
+being written.
+
+Deliberately narrow: **only** `song-*.mp3`. Images and video in the same
+directory are referenced from chat history this code cannot read, so they are
+never touched, and there is a test that pins exactly that.
+
+Verified end to end: a saved song aged nine hours survived the sweep; an
+unsaved one of the same age was deleted.
+
+1006 tests pass.
 
 ---
 

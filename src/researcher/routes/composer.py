@@ -35,6 +35,7 @@ from researcher.composer.models import (
     ComposeAnalyzeRequest,
 )
 from researcher.composer.storage import (
+    saved_audio_paths,
     create_composer_session,
     list_composer_sessions,
     get_composer_session,
@@ -832,13 +833,27 @@ def register_composer_routes(app):
                 if (meta or {}).get(key):
                     lines.append(f"{key}: {meta[key]}")
 
+            # Unsaved renders are scratch, so say so and prune the old ones.
+            # Pruning here rather than on a timer keeps it where the directory
+            # is already being written to.
+            kept = await saved_audio_paths(db)
+            # gpu-queue-exempt: deleting files, no GPU involved.
+            await asyncio.get_running_loop().run_in_executor(
+                None, song.prune_unsaved, _SONG_DIR, kept)
+
+            note = ("This render is not kept unless you save it."
+                    if src_audio else
+                    "This render is not kept unless you save it. There is no "
+                    "score to go with it — it was generated from the "
+                    "description, not from a composition.")
             yield _sse("done", {
                 "response": (
                     f"🎵 **{'Performance of your score' if src_audio else 'Generated song'}**\n\n"
                     f"<audio controls src=\"{url}\"></audio>\n\n"
-                    f"[⬇ Download]({url})"
+                    f"[⬇ Download]({url})\n\n*{note}*"
                 ),
                 "audio_url": url,
+                "has_score": bool(src_audio),
                 "reasoning": lines,
                 "token_usage": {},
                 "incomplete": False,
@@ -846,6 +861,65 @@ def register_composer_routes(app):
 
         return StreamingResponse(event_stream(),
                                  media_type="text/event-stream")
+
+    @app.post("/composer/song/save")
+    async def composer_song_save(request: Request):
+        """Keep a rendered song, with the score it was a performance of.
+
+        This is what makes a render permanent: anything not saved is pruned.
+        In cover mode the score is exact — it is the MusicXML the audio was
+        rendered from — so the pair is the right artefact: correct notation
+        plus a performance of it.
+        """
+        user = await get_current_user(request)
+        db = request.app.state.db
+        body = await request.json()
+
+        session_id = body.get("session_id", "")
+        _validate_sid(session_id)
+        session = await get_composer_session(db, session_id, user["id"])
+        if not session:
+            raise HTTPException(status_code=404, detail="Composer session not found")
+
+        audio_url = (body.get("audio_url") or "").strip()
+        name = pathlib.PurePath(audio_url).name
+        if not name or not name.startswith("song-"):
+            raise HTTPException(status_code=400, detail="No rendered song to save")
+        audio_file = _SONG_DIR / name
+        if not audio_file.is_file():
+            raise HTTPException(
+                status_code=404,
+                detail="That render is gone — unsaved songs are not kept.")
+
+        # The same extraction the composition save does, so a saved song and a
+        # saved score are the same object.
+        musicxml = ""
+        response_text = body.get("response", "")
+        if response_text.strip():
+            crew = await _get_composer_crew(request, user["id"])
+            musicxml = crew.extract_musicxml(
+                response_text, key=session["key_signature"],
+                time_signature=session["time_signature"],
+                tempo=session["tempo"]) or ""
+
+        comp = await save_composition(
+            db,
+            user_id=user["id"],
+            session_id=session_id,
+            title=(body.get("title") or "").strip() or "Untitled song",
+            description=(body.get("prompt") or "").strip(),
+            instruments=body.get("instruments") or [],
+            genre=session["genre"],
+            key_signature=session["key_signature"],
+            time_signature=session["time_signature"],
+            tempo=session["tempo"],
+            musicxml=musicxml,
+            audio_path=name,
+        )
+        logger.info("[song] saved %s with%s a score", name,
+                    "" if musicxml else "out")
+        return {"composition": comp, "has_score": bool(musicxml),
+                "audio_url": f"/static/generated/{name}"}
 
     @app.post("/composer/song/stop")
     async def composer_song_stop(request: Request):

@@ -60,6 +60,13 @@ ACESTEP_MODEL = os.getenv("ACESTEP_MODEL", "acestep-v15-turbo")
 # enough that nobody waits on it.
 IDLE_SECONDS = float(os.getenv("ACESTEP_IDLE_SECONDS", "300"))
 
+# Required for the turbo models and not applied automatically. See generate().
+TURBO_SHIFT = float(os.getenv("ACESTEP_TURBO_SHIFT", "3.0"))
+
+
+def _is_turbo() -> bool:
+    return "turbo" in ACESTEP_MODEL.lower()
+
 # Startup is fast because of --no-init: the server answers /health in a few
 # seconds and loads weights on the first request instead.
 STARTUP_TIMEOUT = float(os.getenv("ACESTEP_STARTUP_TIMEOUT", "180"))
@@ -359,12 +366,24 @@ async def generate(
 
     await ensure_running(on_progress)
 
+    instrumental = not (lyrics or "").strip()
     fields: dict[str, str] = {
         "prompt": prompt,
-        "lyrics": lyrics or "",
+        # ACE-Step's documented convention for a track with no singing, and
+        # `instrumental` is a real switch — inferring it from empty lyrics was
+        # a guess the model does not have to make.
+        "lyrics": lyrics.strip() if not instrumental else "[Instrumental]",
+        "instrumental": "true" if instrumental else "false",
         "audio_format": audio_format,
         "vocal_language": vocal_language or "en",
     }
+    if _is_turbo():
+        # INFERENCE.md: guidance_scale is auto-corrected for turbo models but
+        # `shift` is **not** — the default 1.0 is applied as-is, and "the only
+        # timestep/guidance parameter you need to set manually for turbo is
+        # shift=3.0". Everything generated before this was running outside the
+        # model's documented configuration.
+        fields["shift"] = str(TURBO_SHIFT)
     if bpm:
         fields["bpm"] = str(int(bpm))
     if key_scale:
@@ -566,3 +585,50 @@ async def _say(on_progress, text: str) -> None:
 def have_fluidsynth() -> bool:
     """Whether a score can be rendered to audio for the cover path."""
     return bool(shutil.which("fluidsynth"))
+
+
+# -- keeping only what was saved -------------------------------------------
+
+# A rendered song is scratch until somebody saves it. This is the window in
+# which it can still be saved after being generated — long enough to listen,
+# think, and come back, short enough that a session of experiments does not
+# leave gigabytes behind.
+KEEP_UNSAVED_SECONDS = float(os.getenv("ACESTEP_KEEP_UNSAVED_SECONDS", "7200"))
+
+# Only files this module writes are ever considered. Images and video in the
+# same directory are referenced from chat history, which this has no way to
+# read, so they are left strictly alone.
+SONG_GLOB = "song-*.mp3"
+
+
+def prune_unsaved(song_dir: pathlib.Path, keep: set[str],
+                  max_age: float | None = None) -> list[str]:
+    """Delete rendered songs nobody saved. Returns the names removed.
+
+    *keep* holds the audio paths referenced by saved compositions, as stored —
+    matched on the file name so it does not matter whether the database holds
+    a URL or a path.
+    """
+    if max_age is None:
+        max_age = KEEP_UNSAVED_SECONDS
+    kept_names = {pathlib.PurePath(k).name for k in keep}
+    removed: list[str] = []
+    now = time.time()
+    for f in sorted(song_dir.glob(SONG_GLOB)):
+        if f.name in kept_names:
+            continue
+        try:
+            age = now - f.stat().st_mtime
+        except OSError:
+            continue
+        if age < max_age:
+            continue
+        try:
+            f.unlink()
+            removed.append(f.name)
+        except OSError as e:
+            logger.warning("[song] could not remove %s: %s", f.name, e)
+    if removed:
+        logger.info("[song] pruned %d unsaved song(s): %s",
+                    len(removed), ", ".join(removed))
+    return removed

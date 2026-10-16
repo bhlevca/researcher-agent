@@ -11,6 +11,9 @@
 // ══════════════════════════════════════════════
 
 let _songEngineTimer = null;
+// The last render, so Save knows what to keep. A render is scratch until
+// saved: the server prunes anything no composition refers to.
+let _songLastRender = null;
 
 async function refreshSongStatus() {
     const el = document.getElementById('song-status');
@@ -166,7 +169,13 @@ async function generateSong() {
         if (result) {
             label.remove();
             live.remove();
+            _songLastRender = {
+                audio_url: result.audio_url,
+                has_score: !!result.has_score,
+                prompt, score,
+            };
             renderScoreResponse(result.response, lines, content, false);
+            content.appendChild(buildSongSaveRow());
         } else {
             live.textContent = lines.join('\n') + '\n(the stream ended without a result)';
         }
@@ -199,4 +208,62 @@ if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', startSongStatusPolling);
 } else {
     startSongStatusPolling();
+}
+
+
+/* Saving is what makes a render permanent — unsaved songs are pruned — so the
+   button says so rather than looking like an optional extra. In cover mode it
+   keeps the score too, and that score is exact: it is the notation the audio
+   was rendered from. */
+function buildSongSaveRow() {
+    const row = document.createElement('div');
+    row.className = 'score-actions song-save-row';
+
+    const note = document.createElement('span');
+    note.className = 'song-save-note';
+    note.textContent = _songLastRender && _songLastRender.has_score
+        ? 'Saving keeps the audio and its score.'
+        : 'Saving keeps the audio. No score: this was generated from the description.';
+    row.appendChild(note);
+
+    const save = document.createElement('button');
+    save.textContent = '💾 Save song';
+    save.onclick = () => saveSong(save);
+    row.appendChild(save);
+    return row;
+}
+
+async function saveSong(btn) {
+    if (!_songLastRender) { composerShowToast('Nothing to save'); return; }
+    const title = prompt('Name this song:', 'Untitled song');
+    if (title === null) return;          // cancelled, not an empty title
+
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+    try {
+        const r = await fetch('/composer/song/save', {
+            method: 'POST', headers: jsonAuthHeaders(),
+            body: JSON.stringify({
+                session_id: composerSessionId,
+                audio_url: _songLastRender.audio_url,
+                response: _songLastRender.score || '',
+                prompt: _songLastRender.prompt || '',
+                title: title.trim(),
+            }),
+        });
+        if (!r.ok) {
+            let detail = 'Could not save';
+            try { detail = (await r.json()).detail || detail; } catch (e) { /* keep */ }
+            composerShowToast(detail);
+            if (btn) { btn.disabled = false; btn.textContent = '💾 Save song'; }
+            return;
+        }
+        const d = await r.json();
+        composerShowToast(d.has_score ? 'Saved, with its score'
+                                      : 'Saved (audio only)');
+        if (btn) btn.textContent = '✓ Saved';
+        if (typeof loadCompositions === 'function') loadCompositions();
+    } catch (e) {
+        composerShowToast('Error: ' + e.message);
+        if (btn) { btn.disabled = false; btn.textContent = '💾 Save song'; }
+    }
 }

@@ -108,8 +108,12 @@ def test_scripts_do_not_reach_for_elements_that_never_exist(page):
         if not f.is_file() or not name.startswith(page.stem[:5]):
             continue
         src = f.read_text()
-        # Elements the script builds itself count as present.
-        known = ids | set(re.findall(r"""id=\\?["']([\w-]+)""", src))
+        # Elements the script builds itself count as present: either written
+        # into an HTML string (id="x") or assigned on a created node
+        # (el.id = 'x'), which the first pattern alone missed.
+        known = (ids
+                 | set(re.findall(r"""id=\\?["']([\w-]+)""", src))
+                 | set(re.findall(r"""\.id\s*=\s*["']([\w-]+)["']""", src)))
         for wanted in re.findall(r"getElementById\('([^']+)'\)", src):
             if wanted not in known:
                 missing.append(f"{name}: #{wanted}")
@@ -182,3 +186,25 @@ def test_the_gpu_panel_does_not_float_over_the_input():
     block = css[css.index(".gpu-panel {"):css.index(".gpu-panel-head")]
     assert "position: fixed" not in block, "the panel must not overlay the page"
     assert "flex: 0 0 auto" in block, "it must sit in the body's flex column"
+
+
+def test_the_missing_element_check_still_catches_a_real_mistake():
+    """The detection was widened for `el.id = 'x'`; it must not go blind.
+
+    Written because widening a guard is how guards quietly stop guarding.
+    """
+    html = '<div id="real"></div><script src="/static/js/fake-page.js"></script>'
+    src_builds = "const el = document.createElement('div'); el.id = 'built';\n" \
+                 "document.getElementById('built');"
+    src_missing = "document.getElementById('never-exists');"
+
+    def missing_for(src):
+        ids = set(re.findall(r'id="([^"]+)"', html))
+        known = (ids
+                 | set(re.findall(r"""id=\\?["']([\w-]+)""", src))
+                 | set(re.findall(r"""\.id\s*=\s*["']([\w-]+)["']""", src)))
+        return [w for w in re.findall(r"getElementById\('([^']+)'\)", src)
+                if w not in known]
+
+    assert missing_for(src_builds) == [], "an id the script creates is present"
+    assert missing_for(src_missing) == ["never-exists"], "a typo must still fail"

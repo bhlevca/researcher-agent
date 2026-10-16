@@ -73,7 +73,9 @@ class ComposeSongRequest(BaseModel):
     session_id: str
     prompt: str = ""            # style / production description
     lyrics: str = ""            # blank for an instrumental
+    instrumental: bool = False  # force no vocals even with lyrics present
     response: str = ""          # a score-bearing composer reply, for cover mode
+    composition_id: str = ""    # or a saved composition, whose MusicXML is exact
     duration: float = 0.0       # seconds; 0 lets the model choose
     cover_strength: float = 0.75   # 1.0 holds the score, 0.2 is loose
     vocal_language: str = "en"

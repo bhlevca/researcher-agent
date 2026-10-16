@@ -2,7 +2,7 @@
 
 A CrewAI-powered research agent with a browser-based chat UI, voice dialog, image generation, and session management. Runs locally using Ollama — the **client only needs a web browser**.
 
-**Version 3.1.1**
+**Version 3.1.2**
 
 ## Architecture
 
@@ -386,9 +386,16 @@ stops it immediately.
 On a 5070 Ti: ~4 s to start, ~10-40 s per song once warm, ~9.8 GiB held while
 generating.
 
+The **Perform:** dropdown is where the notation comes from: the score you just
+generated (in the Score or Chat tab), any saved composition in the session, or
+"Description only", which generates a new piece with no score. This tab renders
+audio and does not write notation — *Compose a score* hands your description
+to the Score tab for that.
+
 **Renders are scratch until you save them.** *Save song* keeps the audio and,
-in cover mode, the exact MusicXML it was rendered from — correct notation plus
-a performance of it. Anything not saved is deleted once it is older than
+when it performed a score, that exact MusicXML — correct notation plus a
+performance of it. The name you type is the name the downloaded file gets.
+Anything not saved is deleted once it is older than
 `ACESTEP_KEEP_UNSAVED_SECONDS`. Only `song-*.mp3` files are ever pruned;
 generated images and video are left alone.
 

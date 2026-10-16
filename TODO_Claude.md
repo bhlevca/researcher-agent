@@ -58,6 +58,61 @@ is twice the residency of the 2B.
 
 ---
 
+## ▶ RELEASED v3.1.2 (2026-10-15) — the Song tab says where the score comes from
+
+Bogdan's report, which was all one mistake of mine: "I don't see a way to save
+the score, no explicit button nothing visual", and "I composed in the Song tab
+as you told me".
+
+### The Song tab looked like a composer and was not
+
+It renders audio; it does not write notation. The score had to come from the
+Score tab, and the only signal was a "Perform my score" checkbox that silently
+did nothing when no score existed — so describing a piece there, pressing
+render, and getting "There is no score to go with it" was the natural outcome.
+Worse, `composerScoreRawResponse` was only ever set by **composer-score.js**,
+so a score composed in **Chat** did not count either.
+
+Now:
+
+- A **Perform:** dropdown listing what is actually available — the score just
+  generated (from the Score tab *or* Chat), every saved composition in the
+  session, or "Description only — no score", with a line under it saying what
+  will happen in each case.
+- **🎼 Compose a score** carries the description to the Score tab rather than
+  pretending this tab can write notation.
+- A saved composition can be performed **by id**, and its stored MusicXML is
+  used verbatim — it is already exact, so re-extracting it would be a worse
+  copy of something correct.
+- `has_score` now follows the *notation*, not the render, so a score that
+  exists but fails to render is still a score worth saving.
+
+### The other three
+
+- **Instrumental is a visible checkbox.** It was inferred from empty lyrics,
+  with no control and nothing on screen.
+- **The name is an editable field**, not a `prompt()`, and it is the name the
+  file gets: `/composer/compositions/{id}/audio` serves the stored
+  `song-<hash>.mp3` under the title via RFC 6266, ASCII fallback included.
+  Verified with "Étude in C — jazz trio" — an em dash in a filename crashed
+  Starlette in this project once before.
+- After saving, the row offers **⬇ audio** and **⬇ score (MusicXML)**, which
+  is the "explicit button" that was missing.
+
+### A guard that had gone slightly blind
+
+`test_static_js.py` flagged `#song-save-name` as an element that never
+exists, because it is created with `el.id = '...'` and the check only
+recognised `id="..."` in HTML strings. Widened — and then pinned with a test
+that the widened version still catches a genuine typo, since relaxing a guard
+is how guards quietly stop guarding.
+
+1021 tests pass. Verified end to end: performing a saved composition by id in
+26s with `has_score: true` and the source named back; save with a non-ASCII
+title; audio and MusicXML both downloading under that title.
+
+---
+
 ## ▶ RELEASED v3.1.1 (2026-10-15) — turbo as documented, and keeping only what is saved
 
 ### Turbo was running outside its own spec

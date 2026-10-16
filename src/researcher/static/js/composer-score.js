@@ -71,6 +71,8 @@ async function generateScore() {
                     } else if (currentEvent === 'done') {
                         content.innerHTML = '';
                         composerScoreRawResponse = data.response || '';
+                        // The Song tab's source list depends on this.
+                        if (typeof refreshSongSources === 'function') refreshSongSources();
                         renderScoreResponse(data.response, data.reasoning, content, data.has_score);
                     } else if (currentEvent === 'error') {
                         content.innerHTML = '<div class="message error">Error: ' + data + '</div>';

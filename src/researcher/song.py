@@ -55,6 +55,47 @@ ACESTEP_BASE = f"http://127.0.0.1:{ACESTEP_PORT}"
 # ~4.7GB of weights rather than the XL's ~9GB.
 ACESTEP_MODEL = os.getenv("ACESTEP_MODEL", "acestep-v15-turbo")
 
+# The two models worth offering on this card, and the honest difference.
+#
+# Only `base` can do extract/lego/complete — the Model Zoo table marks those
+# ❌ for turbo and sft — so stem separation, and therefore transcribing a song
+# back to notation, needs base loaded. It is the same 2B size but runs 50
+# diffusion steps against turbo's 8, so it is several times slower per call.
+#
+# The model belongs to the engine *process*: one slot, chosen at startup. That
+# is why switching restarts it, which costs about as much as the first song of
+# a sitting and nothing at all if you do not switch.
+MODELS: dict[str, dict] = {
+    "acestep-v15-turbo": {
+        "label": "Fast",
+        "steps": 8,
+        "stems": False,
+        "note": "8 steps, quickest. Cannot separate stems.",
+    },
+    "acestep-v15-base": {
+        "label": "Full",
+        "steps": 50,
+        "stems": True,
+        "note": "50 steps, slower. The only one that can separate stems.",
+    },
+}
+
+
+def model_choices() -> list[dict]:
+    """The models offerable, for the UI to render."""
+    return [{"id": k, **v} for k, v in MODELS.items()]
+
+
+def resolve_model(name: str | None) -> str:
+    """A requested model name, or the default. Never anything else.
+
+    An allowlist rather than passing a string through: the name becomes an
+    environment variable for a subprocess and a path for a download.
+    """
+    if name and name in MODELS:
+        return name
+    return ACESTEP_MODEL if ACESTEP_MODEL in MODELS else "acestep-v15-turbo"
+
 # How long the server may sit idle before it is stopped and the card handed
 # back. Long enough that a second song in the same sitting is fast, short
 # enough that nobody waits on it.
@@ -64,8 +105,8 @@ IDLE_SECONDS = float(os.getenv("ACESTEP_IDLE_SECONDS", "300"))
 TURBO_SHIFT = float(os.getenv("ACESTEP_TURBO_SHIFT", "3.0"))
 
 
-def _is_turbo() -> bool:
-    return "turbo" in ACESTEP_MODEL.lower()
+def _is_turbo(name: str | None = None) -> bool:
+    return "turbo" in (name or ACESTEP_MODEL).lower()
 
 # Startup is fast because of --no-init: the server answers /health in a few
 # seconds and loads weights on the first request instead.
@@ -85,8 +126,14 @@ LOG_PATH = pathlib.Path(
               "/home/bogdan/ai/agent/logs/acestep.log"))
 
 _proc: subprocess.Popen | None = None
+_loaded_model: str = ""      # which model the running engine was started with
 _last_used: float = 0.0
 _lock = asyncio.Lock()
+
+
+def loaded_model() -> str:
+    """The model the running engine holds, or "" when it is stopped."""
+    return _loaded_model if running() else ""
 
 
 def is_installed() -> bool:
@@ -128,18 +175,35 @@ def running() -> bool:
     return bool(_orphan_pids())
 
 
-async def ensure_running(on_progress=None) -> None:
+async def ensure_running(on_progress=None, model: str | None = None) -> None:
     """Start the server if it is not already answering, and wait for it.
+
+    *model* names which DiT model the engine should hold. One slot, chosen at
+    startup, so asking for a different one restarts the engine — which is the
+    whole reason the broker already owns its lifecycle.
 
     *on_progress* is called with a short status string, so a streaming
     endpoint can explain a two-minute model load rather than appearing hung.
     """
-    global _proc, _last_used
+    global _proc, _loaded_model, _last_used
+
+    want = resolve_model(model)
 
     async with _lock:
         if _healthy():
-            _last_used = time.monotonic()
-            return
+            if _loaded_model in ("", want):
+                # Either ours and already right, or an engine we did not start
+                # and cannot ask — leave it be rather than restarting someone
+                # else's work.
+                _loaded_model = _loaded_model or want
+                _last_used = time.monotonic()
+                return
+            await _say(on_progress,
+                       f"Switching to the {MODELS[want]['label'].lower()} "
+                       f"model — restarting the engine")
+            logger.info("[song] switching engine model %s -> %s",
+                        _loaded_model, want)
+            stop()
         if not is_installed():
             raise RuntimeError(install_hint())
 
@@ -153,7 +217,7 @@ async def ensure_running(on_progress=None) -> None:
         env = {k: v for k, v in os.environ.items()
                if k not in ("PYTHONPATH", "VIRTUAL_ENV", "PYTHONHOME",
                             "LD_LIBRARY_PATH", "LD_PRELOAD")}
-        env["ACESTEP_CONFIG_PATH"] = ACESTEP_MODEL
+        env["ACESTEP_CONFIG_PATH"] = want
         env["ACESTEP_API_PORT"] = str(ACESTEP_PORT)
         # Offload, quantization and batch limits are applied by ACE-Step
         # itself from its own VRAM tier detection — its .env.example says so
@@ -171,7 +235,7 @@ async def ensure_running(on_progress=None) -> None:
         LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
         log = open(LOG_PATH, "a", buffering=1, errors="replace")
         log.write(f"\n===== started {time.strftime('%Y-%m-%d %H:%M:%S')} "
-                  f"model={ACESTEP_MODEL} =====\n")
+                  f"model={want} =====\n")
         _proc = subprocess.Popen(
             # --no-init: come up without loading weights, so /health answers in
             # seconds and the load happens on the first request — which is
@@ -196,6 +260,7 @@ async def ensure_running(on_progress=None) -> None:
                     f"{LOG_PATH}:\n{log_tail()}")
             # gpu-queue-exempt: a health probe over HTTP, no GPU work here.
             if await asyncio.get_running_loop().run_in_executor(None, _healthy):
+                _loaded_model = want
                 _last_used = time.monotonic()
                 logger.info("[song] ACE-Step ready")
                 await _say(on_progress, "Song engine ready")
@@ -225,7 +290,8 @@ def stop() -> None:
     handle; an ACE-Step left over from before the restart would otherwise hold
     ten gigabytes with nothing able to reclaim it.
     """
-    global _proc
+    global _proc, _loaded_model
+    _loaded_model = ""
     if _proc is not None:
         logger.info("[song] stopping ACE-Step to free the GPU")
         try:
@@ -354,6 +420,7 @@ async def generate(
     src_name: str = "score.wav",
     cover_strength: float = 0.75,
     audio_format: str = "mp3",
+    model: str | None = None,
     on_progress=None,
 ) -> tuple[bytes, dict]:
     """Generate one song. Returns (audio bytes, metadata).
@@ -364,7 +431,8 @@ async def generate(
     """
     import requests
 
-    await ensure_running(on_progress)
+    want = resolve_model(model)
+    await ensure_running(on_progress, model=want)
 
     instrumental = not (lyrics or "").strip()
     fields: dict[str, str] = {
@@ -377,7 +445,7 @@ async def generate(
         "audio_format": audio_format,
         "vocal_language": vocal_language or "en",
     }
-    if _is_turbo():
+    if _is_turbo(want):
         # INFERENCE.md: guidance_scale is auto-corrected for turbo models but
         # `shift` is **not** — the default 1.0 is applied as-is, and "the only
         # timestep/guidance parameter you need to set manually for turbo is

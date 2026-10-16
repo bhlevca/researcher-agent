@@ -302,7 +302,9 @@ class TestTurboConfiguration:
 
         src = inspect.getsource(song.generate)
         assert 'fields["shift"] = str(TURBO_SHIFT)' in src
-        assert "if _is_turbo():" in src
+        # Keyed off the model actually chosen, not the configured default —
+        # v3.1.3 made the engine model a per-request toggle.
+        assert "if _is_turbo(want):" in src
 
     def test_the_documented_value_is_the_default(self):
         assert song.TURBO_SHIFT == 3.0
@@ -541,3 +543,128 @@ class TestTheSavedNameIsEditable:
         header = content_disposition("Study in C — trio.mp3")["Content-Disposition"]
         header.encode("latin-1")        # must not raise
         assert "filename*=UTF-8''" in header
+
+
+SONG_JS_PATH = (pathlib.Path(__file__).resolve().parents[1] / "src" / "researcher"
+                / "static" / "js" / "composer-song.js")
+COMPOSER_HTML = (pathlib.Path(__file__).resolve().parents[1] / "src" / "researcher"
+                 / "static" / "composer.html")
+
+
+class TestTheEngineModelToggle:
+    """v3.1.3. Only `base` can separate stems; turbo is quicker for everything
+    else. The Model Zoo marks extract/lego/complete ❌ for turbo and sft.
+
+    The model belongs to the engine *process* — one slot, chosen at startup —
+    so switching restarts it. That is cheap precisely because the broker
+    already starts and stops the engine on demand.
+    """
+
+    def test_both_models_are_offered_with_an_honest_difference(self):
+        ids = {m["id"] for m in song.model_choices()}
+        assert ids == {"acestep-v15-turbo", "acestep-v15-base"}
+        by_id = {m["id"]: m for m in song.model_choices()}
+        assert by_id["acestep-v15-base"]["stems"] is True
+        assert by_id["acestep-v15-turbo"]["stems"] is False
+        # The step counts are the real cost difference, so they are stated.
+        assert by_id["acestep-v15-turbo"]["steps"] == 8
+        assert by_id["acestep-v15-base"]["steps"] == 50
+
+    @pytest.mark.parametrize("bad", [
+        "", None, "acestep-v15-xl-base", "../../etc/passwd",
+        "; rm -rf /", "acestep-v15-turbo-shift3",
+    ])
+    def test_only_allowlisted_names_get_through(self, bad):
+        """The name becomes an env var for a subprocess and a download path."""
+        assert song.resolve_model(bad) in song.MODELS
+
+    def test_a_valid_choice_is_honoured(self):
+        assert song.resolve_model("acestep-v15-base") == "acestep-v15-base"
+
+    def test_switching_restarts_the_engine(self):
+        import inspect
+
+        src = inspect.getsource(song.ensure_running)
+        assert "if _loaded_model in (\"\", want):" in src
+        assert "stop()" in src, "a different model means a restart"
+
+    def test_an_engine_we_did_not_start_is_left_alone(self):
+        """Restarting someone else's work to satisfy a preference is rude."""
+        import inspect
+
+        src = inspect.getsource(song.ensure_running)
+        assert "cannot ask" in src or "did not start" in src
+
+    def test_stopping_forgets_the_model(self):
+        import inspect
+
+        assert "_loaded_model = \"\"" in inspect.getsource(song.stop)
+
+    def test_loaded_model_is_empty_when_stopped(self, monkeypatch):
+        monkeypatch.setattr(song, "running", lambda: False)
+        monkeypatch.setattr(song, "_loaded_model", "acestep-v15-base")
+        assert song.loaded_model() == ""
+
+    def test_turbo_tuning_follows_the_chosen_model_not_the_default(self):
+        """shift=3.0 is a turbo correction; base must not get it."""
+        assert song._is_turbo("acestep-v15-turbo")
+        assert not song._is_turbo("acestep-v15-base")
+        import inspect
+
+        assert "_is_turbo(want)" in inspect.getsource(song.generate)
+
+    def test_the_panel_has_the_toggle(self):
+        assert 'id="song-model"' in COMPOSER_HTML.read_text()
+
+    def test_the_request_carries_the_choice(self):
+        models = (pathlib.Path(__file__).resolve().parents[1] / "src"
+                  / "researcher" / "composer" / "models.py").read_text()
+        assert "model: str = \"\"" in models
+        assert "model=req.model" in _composer_route("")
+
+    def test_status_reports_what_is_loaded_and_what_is_available(self):
+        src = (pathlib.Path(__file__).resolve().parents[1] / "src" / "researcher"
+               / "routes" / "composer.py").read_text()
+        assert '"loaded_model": song.loaded_model()' in src
+        assert '"models": song.model_choices()' in src
+
+
+class TestComposingInTheSongTab:
+    """v3.1.3. Sending people to another tab to write notation, with the
+    description already typed in this one, was ceremony. The Score tab keeps
+    the fuller form — instrument picker, bar count, multi-minute assembly."""
+
+    def test_it_composes_in_place_rather_than_switching_tabs(self):
+        js = SONG_JS_PATH.read_text()
+        assert "fetch('/composer/score'" in js
+        assert "switchComposerTab('score')" not in js, "no more redirect"
+
+    def test_the_result_becomes_the_song_source(self):
+        js = SONG_JS_PATH.read_text()
+        body = js[js.index("async function composeScoreForSong()"):]
+        body = body[:body.index("function songComposeInstruments()")]
+        assert "composerScoreRawResponse = result.response" in body
+        assert "refreshSongSources()" in body
+        assert "sel.value = 'latest'" in body
+
+    def test_it_streams_and_shows_the_queue(self):
+        """It runs the LLM, so it waits in the same queue as everything else."""
+        js = SONG_JS_PATH.read_text()
+        body = js[js.index("async function composeScoreForSong()"):]
+        body = body[:body.index("function songComposeInstruments()")]
+        assert "gpuShowQueueNote" in body
+        assert "getReader()" in body
+
+    def test_instruments_default_to_piano_when_left_blank(self):
+        js = SONG_JS_PATH.read_text()
+        assert "return ['Piano']" in js
+
+    def test_the_inline_controls_exist(self):
+        html = COMPOSER_HTML.read_text()
+        assert 'id="song-instruments"' in html
+        assert 'id="song-measures"' in html
+
+    def test_an_empty_description_is_refused_before_the_model_runs(self):
+        js = SONG_JS_PATH.read_text()
+        body = js[js.index("async function composeScoreForSong()"):]
+        assert "Describe what to compose first" in body

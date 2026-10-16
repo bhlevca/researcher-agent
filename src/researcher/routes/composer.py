@@ -854,6 +854,7 @@ def register_composer_routes(app):
                     vocal_language=req.vocal_language,
                     src_audio=src_audio,
                     cover_strength=req.cover_strength,
+                    model=req.model,
                     on_progress=progress.put_nowait,
                 ))
 
@@ -1001,6 +1002,8 @@ def register_composer_routes(app):
             "running": song.running(),
             "idle_seconds": round(song.idle_seconds(), 1),
             "model": song.ACESTEP_MODEL,
+            "loaded_model": song.loaded_model(),
+            "models": song.model_choices(),
             "hint": "" if song.is_installed() else song.install_hint(),
             "fluidsynth": song.have_fluidsynth(),
         }

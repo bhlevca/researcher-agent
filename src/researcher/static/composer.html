@@ -332,7 +332,17 @@
                     </select>
                 </label>
                 <button id="song-compose-btn" onclick="composeScoreForSong()"
-                        title="Switches to the Score tab with this description filled in. Generate there, then come back.">🎼 Compose a score</button>
+                        title="Writes notation here from the description above, then selects it as the source. The Score tab has the fuller form — instrument picker, bar count, multi-minute assembly.">🎼 Compose a score</button>
+                <label title="Comma separated. Blank means piano.">
+                    for:
+                    <input type="text" id="song-instruments" placeholder="Piano, Bass, Drums"
+                           style="width:11rem">
+                </label>
+                <label title="Bars to write. The Score tab can assemble longer pieces from recurring sections.">
+                    bars:
+                    <input type="number" id="song-measures" value="16" min="4" max="64" step="4"
+                           style="width:4.5rem">
+                </label>
                 <span class="song-source-note" id="song-source-note"></span>
             </div>
 
@@ -344,6 +354,10 @@
                 <label title="No singing, whatever the lyrics box says. ACE-Step has a switch for this; it is not inferred.">
                     <input type="checkbox" id="song-instrumental">
                     Instrumental (no vocals)
+                </label>
+                <label title="Fast is 8 diffusion steps. Full is 50 — slower, and the only one that can separate a song into stems. Switching restarts the engine.">
+                    Engine:
+                    <select id="song-model" onchange="onSongModelChange()"></select>
                 </label>
                 <label title="1.0 holds to the score closely; 0.2 treats it as a loose suggestion.">
                     Faithfulness:
@@ -399,7 +413,7 @@
     <script src="/static/js/composer-state.js?v=4"></script>
     <script src="/static/js/composer-sessions.js?v=4"></script>
     <script src="/static/js/composer-chat.js?v=3"></script>
-    <script src="/static/js/composer-song.js?v=3"></script>
+    <script src="/static/js/composer-song.js?v=5"></script>
     <script src="/static/js/composer-score.js?v=3"></script>
 
     <!-- Composer init -->

@@ -79,16 +79,122 @@ function onSongSourceChange() {
     }
 }
 
-/* The Score tab is where notation is written. Hand the description over and
-   switch there, rather than pretending this tab can do it. */
-function composeScoreForSong() {
+/* Compose the notation here rather than sending people to another tab.
+   The Song tab is where the description already is, so bouncing to the Score
+   tab, retyping nothing, generating, and bouncing back was pure ceremony.
+   The Score tab still exists for the fuller form — instruments, bar count,
+   multi-minute assembly — and this uses its endpoint with sane defaults. */
+async function composeScoreForSong() {
+    if (!composerSessionId) { composerShowToast('Create or load a session first'); return; }
     const desc = (document.getElementById('song-prompt').value || '').trim();
-    const target = document.getElementById('score-description');
-    if (target && desc) target.value = desc;
-    switchComposerTab('score');
-    composerShowToast(desc
-        ? 'Description carried over — generate a score, then return to Song'
-        : 'Describe what to compose, then generate a score here');
+    if (!desc) {
+        composerShowToast('Describe what to compose first');
+        document.getElementById('song-prompt').focus();
+        return;
+    }
+
+    const btn = document.getElementById('song-compose-btn');
+    const content = document.getElementById('song-content');
+    if (btn) { btn.disabled = true; btn.textContent = 'Composing…'; }
+    content.innerHTML = '';
+
+    const label = document.createElement('div');
+    label.className = 'composer-streaming-label';
+    label.textContent = 'Writing the score';
+    content.appendChild(label);
+    const live = document.createElement('div');
+    live.className = 'composer-streaming';
+    live.textContent = 'Starting…';
+    content.appendChild(live);
+
+    const lines = [];
+    try {
+        const r = await fetch('/composer/score', {
+            method: 'POST', headers: jsonAuthHeaders(),
+            body: JSON.stringify({
+                session_id: composerSessionId,
+                description: desc,
+                instruments: songComposeInstruments(),
+                measures: parseInt(
+                    (document.getElementById('song-measures') || {}).value, 10) || 16,
+                minutes: 0,
+                style: '',
+            }),
+        });
+        if (!r.ok) {
+            let detail = 'Could not compose a score';
+            try { detail = (await r.json()).detail || detail; } catch (e) { /* keep */ }
+            label.remove(); live.remove();
+            composerShowToast(detail);
+            return;
+        }
+
+        const reader = r.body.getReader();
+        const dec = new TextDecoder();
+        let buf = '', result = null;
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += dec.decode(value, { stream: true });
+            while (buf.includes('\n\n')) {
+                const idx = buf.indexOf('\n\n');
+                const chunk = buf.slice(0, idx);
+                buf = buf.slice(idx + 2);
+                let ev = '', dataStr = '';
+                for (const line of chunk.split('\n')) {
+                    if (line.startsWith('event: ')) ev = line.slice(7);
+                    else if (line.startsWith('data: ')) dataStr += line.slice(6);
+                }
+                if (!dataStr) continue;
+                if (ev === 'queue') {
+                    try { gpuShowQueueNote(live, JSON.parse(dataStr)); }
+                    catch (e) { /* ignore */ }
+                } else if (ev === 'reasoning') {
+                    lines.push(JSON.parse(dataStr));
+                    live.textContent = lines.join('\n');
+                    live.scrollTop = live.scrollHeight;
+                } else if (ev === 'done') {
+                    result = JSON.parse(dataStr);
+                } else if (ev === 'error') {
+                    gpuShowQueueNote(live, null);
+                    label.remove(); live.remove();
+                    const err = document.createElement('div');
+                    err.className = 'message error';
+                    err.textContent = 'Error: ' + JSON.parse(dataStr);
+                    content.appendChild(err);
+                    return;
+                }
+            }
+        }
+
+        gpuShowQueueNote(live, null);
+        label.remove(); live.remove();
+        if (!result) {
+            composerShowToast('The score stream ended without a result');
+            return;
+        }
+        // This is what makes it the Song tab's source: same variable the Score
+        // tab sets, so "the score I just generated" picks it up.
+        composerScoreRawResponse = result.response || '';
+        renderScoreResponse(result.response, lines, content, result.has_score);
+        await refreshSongSources();
+        const sel = document.getElementById('song-source');
+        if (sel) { sel.value = 'latest'; onSongSourceChange(); }
+        composerShowToast('Score ready — render it when you are happy with it');
+    } catch (e) {
+        label.remove(); live.remove();
+        composerShowToast('Error: ' + e.message);
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = '🎼 Compose a score'; }
+    }
+}
+
+/* Instruments for an inline compose. The Score tab has the full picker; here
+   a comma-separated field is enough, and empty means piano. */
+function songComposeInstruments() {
+    const raw = ((document.getElementById('song-instruments') || {}).value || '').trim();
+    if (!raw) return ['Piano'];
+    return raw.split(',').map(x => x.trim()).filter(Boolean);
 }
 
 async function refreshSongStatus() {
@@ -107,7 +213,8 @@ async function refreshSongStatus() {
         bits.push(s.running
             ? `engine running (idle ${Math.round(s.idle_seconds)}s) — holding the GPU`
             : 'engine stopped — starts on first render');
-        bits.push(`model ${s.model}`);
+        if (s.loaded_model) bits.push(`holding ${s.loaded_model}`);
+        fillSongModels(s.models, s.loaded_model);
         if (!s.fluidsynth) {
             bits.push('no fluidsynth: "Perform my score" will fall back to the description');
         }
@@ -117,6 +224,42 @@ async function refreshSongStatus() {
     } catch (e) {
         el.textContent = 'Could not reach the server.';
         return null;
+    }
+}
+
+/* The engine holds one model, chosen when it starts, so switching restarts
+   it. Only `base` can separate stems, which is why the choice is on screen
+   rather than buried in a config file. */
+function fillSongModels(models, loaded) {
+    const sel = document.getElementById('song-model');
+    if (!sel || !models || !models.length) return;
+    const chosen = sel.value;
+    sel.innerHTML = '';
+    for (const m of models) {
+        const o = document.createElement('option');
+        o.value = m.id;
+        o.textContent = `${m.label} — ${m.note}`;
+        o.dataset.stems = m.stems ? '1' : '';
+        sel.appendChild(o);
+    }
+    const values = models.map(m => m.id);
+    sel.value = values.includes(chosen) ? chosen
+              : (loaded && values.includes(loaded) ? loaded : values[0]);
+    onSongModelChange();
+}
+
+function onSongModelChange() {
+    const sel = document.getElementById('song-model');
+    const note = document.getElementById('song-source-note');
+    if (!sel || !note || !sel.selectedOptions.length) return;
+    // Only warn about a restart when one would actually happen.
+    const opt = sel.selectedOptions[0];
+    if (opt.dataset.stems) {
+        note.textContent = 'Full engine: slower, and the only one that can '
+            + 'separate stems. Switching restarts the engine.';
+        note.className = 'song-source-note is-warn';
+    } else {
+        onSongSourceChange();
     }
 }
 
@@ -181,6 +324,7 @@ async function generateSong() {
             body: JSON.stringify({
                 session_id: composerSessionId,
                 prompt, lyrics, instrumental,
+                model: (document.getElementById('song-model') || {}).value || '',
                 response: score,
                 composition_id: compositionId,
                 duration,

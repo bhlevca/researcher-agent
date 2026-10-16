@@ -2,7 +2,7 @@
 
 A CrewAI-powered research agent with a browser-based chat UI, voice dialog, image generation, and session management. Runs locally using Ollama — the **client only needs a web browser**.
 
-**Version 3.1.2**
+**Version 3.1.3**
 
 ## Architecture
 
@@ -387,10 +387,34 @@ On a 5070 Ti: ~4 s to start, ~10-40 s per song once warm, ~9.8 GiB held while
 generating.
 
 The **Perform:** dropdown is where the notation comes from: the score you just
-generated (in the Score or Chat tab), any saved composition in the session, or
-"Description only", which generates a new piece with no score. This tab renders
-audio and does not write notation — *Compose a score* hands your description
-to the Score tab for that.
+generated, any saved composition in the session, or "Description only", which
+generates a new piece with no score. **Compose a score** writes notation right
+there from your description and selects it — the Score tab is still the place
+for the fuller form (instrument picker, bar count, multi-minute assembly).
+
+The **Engine** toggle picks which ACE-Step model the server holds:
+
+| Engine | Model | Steps | Stems |
+|---|---|---|---|
+| Fast | `acestep-v15-turbo` | 8 | no |
+| Full | `acestep-v15-base` | 50 | yes |
+
+Only `base` can separate a song into stems — ACE-Step's Model Zoo marks
+`extract`, `lego` and `complete` as base-only — so it is the one that will
+matter for transcribing audio back to notation.
+
+The engine holds one model, chosen when it starts, so switching restarts it.
+Measured on a 5070 Ti with a 15-second clip, the restart is the cost, not the
+extra steps:
+
+| | time |
+|---|---|
+| render, engine already on that model | ~6 s |
+| render after switching engines | ~45 s |
+| first ever render on a model | + its download (~4.8 GB for base) |
+
+So Fast is the default and switching is worth avoiding mid-session, but
+`base` is not slow once it is loaded.
 
 **Renders are scratch until you save them.** *Save song* keeps the audio and,
 when it performed a score, that exact MusicXML — correct notation plus a

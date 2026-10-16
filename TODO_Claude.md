@@ -6,6 +6,61 @@ Statuses re-verified against the code, not against previous checkboxes.
 
 ---
 
+## ▶ RELEASED v3.1.3 (2026-10-15) — engine toggle, and composing in the Song tab
+
+Two of Bogdan's observations, both of which improved the design rather than
+just fixing it.
+
+### "Can we run base only when we need scores?"
+
+Better than either option in my notes. The model belongs to the engine
+*process* — one slot, chosen at startup — and the broker already starts and
+stops that process on demand, so which model it holds is just a parameter of
+starting it. No slot juggling, no two models resident, nothing to measure.
+
+An **Engine** toggle now picks between:
+
+| Engine | Model | Steps | Stems |
+|---|---|---|---|
+| Fast | `acestep-v15-turbo` | 8 | no |
+| Full | `acestep-v15-base` | 50 | yes |
+
+Switching restarts the engine, and measured on a 15-second clip that restart
+is the whole cost — not the extra diffusion steps, which was the thing I
+expected to hurt:
+
+    render, engine already on that model      6s
+    render after switching engines           45s
+    first ever render on a model             + ~4.8 GB download (784s for base)
+
+So "base is several times slower per call" — which I wrote in the research
+notes from the step counts — is wrong for short clips. Worth re-measuring at
+full song length before repeating it. `song.resolve_model` is an
+allowlist, not a pass-through, because the name becomes an environment
+variable for a subprocess and a path for a download. The turbo-only
+`shift=3.0` correction follows the chosen model rather than the configured
+default. An engine someone else started is left alone rather than restarted to
+satisfy a preference.
+
+This is the prerequisite for stem separation, which remains unbuilt.
+
+### "Can we save a score right in the Song tab instead of redirecting?"
+
+Yes, and the redirect was ceremony: the description was already typed in the
+Song tab, so sending someone to the Score tab to retype nothing, generate, and
+come back achieved nothing. **Compose a score** now calls `/composer/score`
+in place, streams its reasoning with a queue position like everything else,
+and selects the result as the song's source. Instruments (comma separated,
+blank means piano) and a bar count sit beside it.
+
+The Score tab keeps the fuller form — instrument picker, multi-minute assembly
+from recurring sections — so this is the combination Bogdan asked about rather
+than a replacement.
+
+1043 tests pass.
+
+---
+
 ## ▶ NEXT — transcribe generated audio to a score
 
 Asked for 2026-10-15. **Researched, not started.** Decided with Bogdan:
@@ -38,8 +93,12 @@ Stem separation is the `extract` task, and the Model Zoo table is explicit —
 | `acestep-v15-sft` | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | 50 |
 | `acestep-v15-turbo` | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | 8 |
 
-We run `acestep-v15-turbo` (`ACESTEP_MODEL`), so **stems are not available
-without loading a second model**. Two ways, both with a cost:
+**Resolved in v3.1.3 by Bogdan's suggestion, which beats both options I had
+written down:** run base only when it is needed, chosen by a toggle. The
+engine already starts and stops on demand, so *which model* is simply a
+parameter of starting it — no slot juggling, no second model resident. The two
+options below are kept because they are still the alternatives if a future
+feature needs both models at once:
 
 1. **Switch slot 1** to `acestep-v15-base` via `POST /v1/init` for the
    extraction, then switch back. Simple, but each switch is a model load, and

@@ -79,3 +79,4 @@ class ComposeSongRequest(BaseModel):
     duration: float = 0.0       # seconds; 0 lets the model choose
     cover_strength: float = 0.75   # 1.0 holds the score, 0.2 is loose
     vocal_language: str = "en"
+    model: str = ""             # "" = the default; validated against an allowlist

@@ -256,3 +256,29 @@
 }
 
 .song-save-note { font-size: 0.74rem; color: #94a3b8; }
+
+/* The "Perform:" row. This tab renders audio and does not write notation, so
+   the source has to be visible rather than implied. */
+.song-source-row { gap: 0.6rem; }
+.song-source-note { font-size: 0.72rem; color: #64748b; }
+.song-source-note.is-warn { color: #fbbf24; }
+
+.song-save-name { display: flex; align-items: center; gap: 0.35rem; }
+
+.song-save-name input {
+    background: #1a1a2e;
+    border: 1px solid #0f3460;
+    color: #e0e0e0;
+    border-radius: 0.35rem;
+    padding: 0.25rem 0.5rem;
+    font-family: inherit;
+    font-size: 0.8rem;
+    min-width: 14rem;
+    outline: none;
+}
+
+.song-save-name input:focus { border-color: #e94560; }
+.song-save-name input:disabled { opacity: 0.6; }
+
+.song-saved-links { display: flex; gap: 0.6rem; font-size: 0.74rem; }
+.song-saved-links a { color: #93c5fd; }

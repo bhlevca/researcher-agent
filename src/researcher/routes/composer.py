@@ -22,6 +22,7 @@ from researcher.auth import get_current_user
 from researcher.config import _QueueWriter, _SESSION_ID_RE
 from researcher import song
 from researcher.composer.crew import ComposerCrew
+from researcher.downloads import content_disposition
 from researcher.gpu_broker import GPU, Need, queue_message
 from researcher.user_crews import get_crew, resolve_model
 
@@ -690,6 +691,32 @@ def register_composer_routes(app):
             )
         return Response(content=audio, media_type="audio/wav")
 
+    @app.get("/composer/compositions/{composition_id}/audio")
+    async def composer_download_audio(composition_id: str, request: Request):
+        """Download a saved song under its own name.
+
+        The file on disk is ``song-<hash>.mp3`` because the name has to be
+        unique and safe; what you get when you download it is the title you
+        gave the composition.
+        """
+        user = await get_current_user(request)
+        db = request.app.state.db
+        comp = await get_composition(db, composition_id, user["id"])
+        if not comp:
+            raise HTTPException(status_code=404, detail="Composition not found")
+        name = pathlib.PurePath(comp.get("audio_path") or "").name
+        if not name:
+            raise HTTPException(status_code=404,
+                                detail="No audio saved for this composition")
+        path = _SONG_DIR / name
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="The audio file is gone")
+        return Response(
+            content=path.read_bytes(),
+            media_type="audio/mpeg",
+            headers=content_disposition(f"{comp['title']}.mp3"),
+        )
+
     @app.get("/composer/compositions/{composition_id}/musicxml")
     async def composer_download_musicxml(composition_id: str, request: Request):
         """Download the MusicXML file for a composition."""
@@ -754,21 +781,44 @@ def register_composer_routes(app):
         # queue is held only for the part that actually needs a GPU.
         src_audio: bytes | None = None
         src_error = ""
-        if req.response.strip():
+        src_label = ""
+        musicxml = ""
+
+        if req.composition_id:
+            # A saved composition: its MusicXML is already exact, so there is
+            # nothing to extract.
+            comp = await get_composition(db, req.composition_id, uid)
+            if not comp:
+                raise HTTPException(status_code=404,
+                                    detail="That saved composition is gone")
+            musicxml = comp.get("musicxml") or ""
+            src_label = comp.get("title") or "saved composition"
+            if not musicxml:
+                src_error = (f"'{src_label}' has no notation stored, so the "
+                             f"song was generated from the description alone.")
+        elif req.response.strip():
             crew = await _get_composer_crew(request, uid)
             musicxml = crew.extract_musicxml(
                 req.response, session["key_signature"],
-                session["time_signature"], session["tempo"])
-            if musicxml:
-                midi = crew.musicxml_to_midi(musicxml, session["tempo"])
-                if midi:
-                    loop = asyncio.get_running_loop()
-                    # gpu-queue-exempt: fluidsynth renders MIDI on the CPU.
-                    src_audio = await loop.run_in_executor(
-                        None, crew.midi_to_audio, midi)
+                session["time_signature"], session["tempo"]) or ""
+            src_label = "your latest score"
+            if not musicxml:
+                src_error = ("No score could be read from that response, so "
+                             "the song was generated from the description "
+                             "alone.")
+
+        if musicxml:
+            crew = await _get_composer_crew(request, uid)
+            midi = crew.musicxml_to_midi(musicxml, session["tempo"])
+            if midi:
+                loop = asyncio.get_running_loop()
+                # gpu-queue-exempt: fluidsynth renders MIDI on the CPU.
+                src_audio = await loop.run_in_executor(
+                    None, crew.midi_to_audio, midi)
             if not src_audio:
-                src_error = ("Could not render that score to audio, so the "
-                             "song was generated from the description alone.")
+                src_error = ("Could not render that score to audio — is "
+                             "fluidsynth installed? The song was generated "
+                             "from the description alone.")
 
         caption = prompt or (
             f"{session['genre']} in {session['key_signature']}, "
@@ -779,8 +829,8 @@ def register_composer_routes(app):
                 yield _sse("reasoning", "⚠️ " + src_error)
             elif src_audio:
                 yield _sse("reasoning",
-                           "🎼 Using your score as the source — the audio is a "
-                           "performance of it, not a different piece")
+                           f"🎼 Performing {src_label} — the audio follows "
+                           f"that composition, it is not a different piece")
 
             progress: queue.Queue = queue.Queue()
 
@@ -796,7 +846,7 @@ def register_composer_routes(app):
 
                 task = asyncio.create_task(song.generate(
                     prompt=caption,
-                    lyrics=req.lyrics,
+                    lyrics="" if req.instrumental else req.lyrics,
                     bpm=session["tempo"],
                     key_scale=session["key_signature"],
                     time_signature=session["time_signature"],
@@ -853,7 +903,8 @@ def register_composer_routes(app):
                     f"[⬇ Download]({url})\n\n*{note}*"
                 ),
                 "audio_url": url,
-                "has_score": bool(src_audio),
+                "has_score": bool(musicxml),
+                "source": src_label,
                 "reasoning": lines,
                 "token_usage": {},
                 "incomplete": False,
@@ -892,10 +943,16 @@ def register_composer_routes(app):
                 detail="That render is gone — unsaved songs are not kept.")
 
         # The same extraction the composition save does, so a saved song and a
-        # saved score are the same object.
+        # saved score are the same object. A song performed from an already
+        # saved composition reuses that notation verbatim — re-extracting it
+        # would be a worse copy of something exact.
         musicxml = ""
+        source_id = (body.get("composition_id") or "").strip()
         response_text = body.get("response", "")
-        if response_text.strip():
+        if source_id:
+            src = await get_composition(db, source_id, user["id"])
+            musicxml = (src or {}).get("musicxml") or ""
+        elif response_text.strip():
             crew = await _get_composer_crew(request, user["id"])
             musicxml = crew.extract_musicxml(
                 response_text, key=session["key_signature"],

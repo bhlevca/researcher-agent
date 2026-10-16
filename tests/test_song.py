@@ -425,3 +425,119 @@ class TestTheSaveEndpoint:
         assert "audio_path      TEXT NOT NULL DEFAULT ''" in src, "fresh schema"
         assert "ALTER TABLE compositions ADD COLUMN audio_path" in src, (
             "an existing database must be migrated, not broken")
+
+
+def _composer_route(name: str) -> str:
+    """The body of one composer endpoint, for checking what it does."""
+    src = (pathlib.Path(__file__).resolve().parents[1] / "src" / "researcher"
+           / "routes" / "composer.py").read_text()
+    start = src.index(f'@app.post("/composer/song{name}")'
+                      if name else '@app.post("/composer/song")')
+    rest = src[start + 10:]
+    nxt = rest.index("    @app.")
+    return rest[:nxt]
+
+
+class TestWhereTheScoreComesFrom:
+    """v3.1.2. The Song tab renders audio; it does not write notation.
+
+    Leaving that implicit made it look like a composer: someone described a
+    piece in the Song tab, pressed render, and silently got a description-only
+    generation with "There is no score to go with it". The source is now an
+    explicit choice, and a score written in Chat counts as much as one from the
+    Score tab.
+    """
+
+    def test_a_saved_composition_can_be_performed(self):
+        body = _composer_route("")
+        assert "req.composition_id" in body
+        assert "get_composition(db, req.composition_id, uid)" in body
+
+    def test_a_saved_composition_is_used_verbatim(self):
+        """Its MusicXML is already exact; re-extracting would be a worse copy."""
+        body = _composer_route("")
+        i = body.index("if req.composition_id:")
+        j = body.index("elif req.response.strip():")
+        assert 'comp.get("musicxml")' in body[i:j]
+        assert "extract_musicxml" not in body[i:j]
+
+    def test_has_score_follows_the_notation_not_the_render(self):
+        """A score that exists but fails to render is still a score to save."""
+        body = _composer_route("")
+        assert '"has_score": bool(musicxml)' in body
+
+    def test_the_source_is_named_back_to_the_caller(self):
+        body = _composer_route("")
+        assert '"source": src_label' in body
+
+    def test_a_missing_composition_is_404_not_a_silent_fallback(self):
+        body = _composer_route("")
+        assert "That saved composition is gone" in body
+
+    def test_the_client_offers_the_choice_explicitly(self):
+        js = (SONG_JS := pathlib.Path(__file__).resolve().parents[1]
+              / "src" / "researcher" / "static" / "js"
+              / "composer-song.js").read_text()
+        assert "refreshSongSources" in js
+        assert "Description only — no score" in js
+        assert "composition_id: compositionId" in js
+
+    def test_a_score_written_in_chat_counts(self):
+        """Only the Score tab used to record one, which was the whole bug."""
+        js = (pathlib.Path(__file__).resolve().parents[1] / "src" / "researcher"
+              / "static" / "js" / "composer-chat.js").read_text()
+        assert "composerScoreRawResponse = text" in js
+        assert "_hasScore(text" in js
+
+    def test_both_tabs_refresh_the_source_list(self):
+        root = (pathlib.Path(__file__).resolve().parents[1] / "src"
+                / "researcher" / "static" / "js")
+        for name in ("composer-chat.js", "composer-score.js"):
+            assert "refreshSongSources" in (root / name).read_text(), name
+
+
+class TestTheInstrumentalSwitchIsVisible:
+    """It existed only as an inference from empty lyrics, with no control."""
+
+    def test_the_panel_has_a_checkbox(self):
+        html = (pathlib.Path(__file__).resolve().parents[1] / "src"
+                / "researcher" / "static" / "composer.html").read_text()
+        assert 'id="song-instrumental"' in html
+        assert "Instrumental (no vocals)" in html
+
+    def test_the_request_carries_it(self):
+        models = (pathlib.Path(__file__).resolve().parents[1] / "src"
+                  / "researcher" / "composer" / "models.py").read_text()
+        assert "instrumental: bool = False" in models
+        body = _composer_route("")
+        assert 'lyrics="" if req.instrumental else req.lyrics' in body
+
+
+class TestTheSavedNameIsEditable:
+    def test_the_save_row_has_a_text_field_not_a_prompt(self):
+        js = (pathlib.Path(__file__).resolve().parents[1] / "src" / "researcher"
+              / "static" / "js" / "composer-song.js").read_text()
+        assert "id = 'song-save-name'" in js
+        assert "prompt('Name this song" not in js, "a JS prompt is not editable"
+
+    def test_an_empty_name_is_refused(self):
+        js = (pathlib.Path(__file__).resolve().parents[1] / "src" / "researcher"
+              / "static" / "js" / "composer-song.js").read_text()
+        assert "Give the song a name" in js
+
+    def test_the_download_uses_the_title(self):
+        """The file on disk is song-<hash>.mp3; the download is the title."""
+        src = (pathlib.Path(__file__).resolve().parents[1] / "src" / "researcher"
+               / "routes" / "composer.py").read_text()
+        body = src[src.index('@app.get("/composer/compositions/{composition_id}/audio")'):]
+        body = body[:body.index('@app.get("/composer/compositions/{composition_id}/musicxml")')]
+        assert "content_disposition(f\"{comp['title']}.mp3\")" in body
+        assert "audio/mpeg" in body
+
+    def test_a_non_ascii_title_does_not_break_the_header(self):
+        """An em dash in a filename crashed Starlette once already."""
+        from researcher.downloads import content_disposition
+
+        header = content_disposition("Study in C — trio.mp3")["Content-Disposition"]
+        header.encode("latin-1")        # must not raise
+        assert "filename*=UTF-8''" in header

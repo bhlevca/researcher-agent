@@ -52,11 +52,21 @@ async def init_composer_tables(db: aiosqlite.Connection):
             time_signature  TEXT NOT NULL DEFAULT '',
             tempo           INTEGER NOT NULL DEFAULT 120,
             musicxml        TEXT NOT NULL DEFAULT '',
+            audio_path      TEXT NOT NULL DEFAULT '',
             created_at      TEXT NOT NULL,
             FOREIGN KEY (session_id) REFERENCES composer_sessions(id)
         )
         """
     )
+
+    # A database created before v3.1.1 has no audio_path. Same idiom as
+    # auth.migrate_sessions_table: add it if missing, never drop anything.
+    cursor = await db.execute("PRAGMA table_info(compositions)")
+    cols = {row[1] for row in await cursor.fetchall()}
+    if "audio_path" not in cols:
+        await db.execute(
+            "ALTER TABLE compositions ADD COLUMN audio_path TEXT DEFAULT '' ")
+        logger.info("Migrated compositions table: added audio_path column")
 
     await db.commit()
     logger.info("Composer tables initialised")
@@ -158,23 +168,32 @@ async def save_composition(
     time_signature: str,
     tempo: int,
     musicxml: str,
+    audio_path: str = "",
 ) -> dict:
+    """Store a composition.
+
+    *audio_path* is the rendered song, when there is one. Saving the pair is
+    the point: the MusicXML is exact and the audio is a performance of it. It
+    is also what keeps the file — unsaved renders are pruned.
+    """
     cid = uuid.uuid4().hex[:8]
     now = datetime.now(timezone.utc).isoformat()
     await db.execute(
         "INSERT INTO compositions "
         "(id, user_id, session_id, title, description, instruments, "
-        "genre, key_signature, time_signature, tempo, musicxml, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "genre, key_signature, time_signature, tempo, musicxml, audio_path, "
+        "created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             cid, user_id, session_id, title, description,
             json.dumps(instruments), genre, key_signature, time_signature,
-            tempo, musicxml, now,
+            tempo, musicxml, audio_path, now,
         ),
     )
     await db.commit()
     return {
         "id": cid, "title": title, "description": description,
+        "audio_path": audio_path,
         "instruments": instruments, "genre": genre,
         "key_signature": key_signature, "time_signature": time_signature,
         "tempo": tempo, "created_at": now,
@@ -223,3 +242,15 @@ async def delete_composition(
     )
     await db.commit()
     return cur.rowcount > 0
+
+
+async def saved_audio_paths(db: aiosqlite.Connection) -> set[str]:
+    """Every audio file any composition refers to, across all users.
+
+    Used to decide what may be deleted. Deliberately not scoped to one user:
+    the question being asked is "is this file still wanted by anybody", and
+    answering it per-user would delete other people's songs.
+    """
+    cursor = await db.execute(
+        "SELECT audio_path FROM compositions WHERE audio_path != ''")
+    return {row[0] for row in await cursor.fetchall() if row[0]}

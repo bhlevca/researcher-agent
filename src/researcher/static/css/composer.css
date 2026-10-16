@@ -244,3 +244,15 @@
 .song-status.is-missing { color: #fca5a5; border-left-color: #ef4444; }
 
 .song-content { padding: 0.75rem 1rem; overflow-y: auto; }
+
+/* The save row under a render. The note is not decoration: an unsaved song is
+   deleted, so it has to be obvious that saving is the thing that keeps it. */
+.song-save-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+    margin-top: 0.5rem;
+}
+
+.song-save-note { font-size: 0.74rem; color: #94a3b8; }

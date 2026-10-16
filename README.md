@@ -2,7 +2,7 @@
 
 A CrewAI-powered research agent with a browser-based chat UI, voice dialog, image generation, and session management. Runs locally using Ollama — the **client only needs a web browser**.
 
-**Version 3.1.0**
+**Version 3.1.1**
 
 ## Architecture
 
@@ -379,10 +379,18 @@ stops it immediately.
 | `ACESTEP_PORT` | `8001` | Port for its REST API |
 | `ACESTEP_MODEL` | `acestep-v15-turbo` | DiT model; the 8–16 GB tier |
 | `ACESTEP_IDLE_SECONDS` | `300` | Idle window before it may be stopped |
+| `ACESTEP_KEEP_UNSAVED_SECONDS` | `7200` | How long an unsaved render is kept |
+| `ACESTEP_TURBO_SHIFT` | `3.0` | Required by the turbo models; not auto-applied |
 | `ACESTEP_LOG` | `logs/acestep.log` | Its output, including download progress |
 
-On a 5070 Ti: ~4 s to start, ~40 s per song once warm, ~9.8 GiB held while
+On a 5070 Ti: ~4 s to start, ~10-40 s per song once warm, ~9.8 GiB held while
 generating.
+
+**Renders are scratch until you save them.** *Save song* keeps the audio and,
+in cover mode, the exact MusicXML it was rendered from — correct notation plus
+a performance of it. Anything not saved is deleted once it is older than
+`ACESTEP_KEEP_UNSAVED_SECONDS`. Only `song-*.mp3` files are ever pruned;
+generated images and video are left alone.
 
 ### Tuning at runtime
 

@@ -6,6 +6,115 @@ Statuses re-verified against the code, not against previous checkboxes.
 
 ---
 
+## ▶ NEXT — transcribe generated audio to a score
+
+Asked for 2026-10-15. **Researched, not started.** Decided with Bogdan:
+separate into stems first, then transcribe, producing a multi-part
+**MusicXML** (no MIDI output, no extra audio linkage — the song already stores
+its audio).
+
+### What I got wrong first, so it does not happen again
+
+v3.1.1 "saving the score" saves the score that was **put in** — the notation
+ACE-Step performed in cover mode. Bogdan wanted the opposite: the music
+ACE-Step **produced**, written as notation. Those are different features:
+
+- cover mode: the saved MusicXML is *exact*, because the audio follows it. But
+  it is the input, and it has none of what ACE-Step added.
+- text2music: there is no score at all, and getting one means audio to
+  notation.
+
+The Score tab writes notation with the LLM and never touches ACE-Step, which
+is the confusion to clear up in the UI as well as in the code.
+
+### The blocker: turbo cannot do stem separation
+
+Stem separation is the `extract` task, and the Model Zoo table is explicit —
+`extract`, `lego` and `complete` are **base model only**:
+
+| DiT model | Text2Music | Cover | Repaint | Extract | Lego | Complete | Steps |
+|---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
+| `acestep-v15-base` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 50 |
+| `acestep-v15-sft` | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | 50 |
+| `acestep-v15-turbo` | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | 8 |
+
+We run `acestep-v15-turbo` (`ACESTEP_MODEL`), so **stems are not available
+without loading a second model**. Two ways, both with a cost:
+
+1. **Switch slot 1** to `acestep-v15-base` via `POST /v1/init` for the
+   extraction, then switch back. Simple, but each switch is a model load, and
+   base runs 50 steps against turbo's 8 — so extraction is several times
+   slower per call, times one call per stem.
+2. **Start the server with two slots**: `ACESTEP_CONFIG_PATH2=acestep-v15-base`
+   at launch, then extract on slot 2. No switching, but it must be set
+   *before* the server starts, and two 2B models are ~9.4 GB of weights
+   (offloaded to CPU RAM between calls, so probably fine on 15.5 GB — needs
+   measuring, which is exactly the kind of assumption that has bitten before).
+
+Option 2 fits our lifecycle better: `song.ensure_running` already builds the
+environment, so adding the second slot is one line. Measure the VRAM before
+believing it.
+
+### How extract works
+
+```python
+params = GenerationParams(
+    task_type="extract",
+    src_audio="full_mix.mp3",
+    instruction="Extract the vocals track from the audio:",
+)
+```
+
+`instruction` is what names the track, and the available names are:
+`vocals`, `backing_vocals`, `drums`, `bass`, `guitar`, `keyboard`,
+`percussion`, `strings`, `synth`, `fx`, `brass`, `woodwinds`.
+
+So one `extract` call per stem — which is why the model choice above matters:
+four stems on base at 50 steps is not a quick operation.
+
+### Transcription: which library
+
+Neither option is free of consequence.
+
+- **`basic-pitch`** (Spotify, general-purpose, pitch-bend aware) requires
+  `tensorflow<2.15.1` on Linux + Python 3.12. TF that old wants numpy < 2 and
+  we run numpy 2.4.6, so it **cannot go in our venv**. It would need its own
+  virtualenv and a subprocess call, exactly like ACE-Step. There is an `onnx`
+  extra that might avoid TF — unverified.
+- **`piano-transcription-inference`** is torch-based (`torchlibrosa`) and
+  would run in our existing venv with no new environment. Excellent on piano,
+  useless on anything else. Possibly the right tool *per stem* for the
+  keyboard stem only.
+
+`music21` is already a dependency, so MIDI → MusicXML and assembling parts
+into one score is work we can already do.
+
+### Sketch
+
+    saved song (mp3)
+      └─ ACE-Step extract, once per stem   [needs the base model]
+           ├─ bass    ─┐
+           ├─ guitar  ─┤
+           ├─ keyboard ┼─ transcribe each -> MIDI
+           └─ vocals  ─┘
+                └─ music21: one part per stem -> MusicXML
+                     └─ save_composition(musicxml=..., audio_path=the song)
+
+Drums are a percussion staff or omitted; pitched transcription of drums is
+noise. Whatever comes out must be labelled an approximation in the UI, in
+contrast to a cover-mode score, which is exact.
+
+### Worth settling before building
+
+- Is an approximate transcription of a produced mix actually useful to you, or
+  is the exact cover-mode score the thing you wanted all along? One stem
+  transcribed by hand would answer this in an afternoon and might save a week.
+- Four extract calls on the base model, plus transcription, is minutes per
+  song and holds the GPU throughout. It belongs behind an explicit button with
+  a queue position, not as part of rendering.
+
+---
+
 ## ▶ NEXT — composer control
 
 Asked for 2026-10-15. The *keeping the score* half shipped as v3.1.1; this is

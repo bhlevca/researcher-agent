@@ -190,3 +190,57 @@
 .instrument-tag .remove-tag {
     cursor: pointer; color: #e94560; font-weight: bold;
 }
+
+/* ── Song panel ───────────────────────────────────────────────────────────
+   Audio with vocals from ACE-Step. Laid out like the other forms; the status
+   line is the part that is new, because the engine is a separate process that
+   holds the GPU and the household needs to see when it does. */
+.song-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid #0f3460;
+}
+
+.song-form textarea {
+    background: #1a1a2e;
+    border: 1px solid #0f3460;
+    color: #e0e0e0;
+    border-radius: 0.5rem;
+    padding: 0.55rem 0.7rem;
+    font-family: inherit;
+    font-size: 0.88rem;
+    resize: vertical;
+    outline: none;
+}
+
+.song-form textarea:focus { border-color: #e94560; }
+
+.song-form .form-row {
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+    flex-wrap: wrap;
+    font-size: 0.78rem;
+    color: #94a3b8;
+}
+
+.song-form .form-row label {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+}
+
+.song-status {
+    font-size: 0.74rem;
+    color: #64748b;
+    border-left: 3px solid #334155;
+    padding: 0.2rem 0.5rem;
+}
+
+/* Amber while the engine holds the card, so it is obvious at a glance. */
+.song-status.is-running { color: #fbbf24; border-left-color: #f59e0b; }
+.song-status.is-missing { color: #fca5a5; border-left-color: #ef4444; }
+
+.song-content { padding: 0.75rem 1rem; overflow-y: auto; }

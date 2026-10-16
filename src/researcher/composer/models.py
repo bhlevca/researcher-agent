@@ -53,3 +53,27 @@ class ComposeAnalyzeRequest(BaseModel):
     """Request analysis of a musical piece or passage."""
     session_id: str
     content: str               # musical content to analyze
+
+
+class ComposeSongRequest(BaseModel):
+    """Render a song as audio with ACE-Step.
+
+    Two modes, chosen by whether *response* carries a score:
+
+    - **cover** — the composer's own score is rendered to audio through
+      fluidsynth and handed to ACE-Step as source audio, which keeps the
+      structure and changes the production. This is the point of the feature:
+      the MusicXML stays the thing that is correct, and the audio is a
+      performance of it.
+    - **text2music** — no score, just *prompt*. A parallel generator rather
+      than a renderer, which is a weaker fit but what people expect from a
+      prompt box.
+    """
+
+    session_id: str
+    prompt: str = ""            # style / production description
+    lyrics: str = ""            # blank for an instrumental
+    response: str = ""          # a score-bearing composer reply, for cover mode
+    duration: float = 0.0       # seconds; 0 lets the model choose
+    cover_strength: float = 0.75   # 1.0 holds the score, 0.2 is loose
+    vocal_language: str = "en"

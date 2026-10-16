@@ -64,9 +64,13 @@ _VRAM_WANTED_GIB = 4.0
 class Need:
     """What a task needs resident on the GPU.
 
-    *kind* is "ollama" or "torch"; "torch" covers the diffusers pipelines —
-    image, video, and audio generation — which share one allocator and one set
-    of module-level caches.
+    *kind* is "ollama", "torch" or "song".
+
+    "torch" covers the in-process diffusers pipelines — image and video —
+    which share one allocator and one set of module-level caches. "song" is
+    ACE-Step, which runs in its own process because its torch and transformers
+    pins are incompatible with ours, and which therefore has to be stopped
+    rather than offloaded when the card is wanted back.
     """
 
     kind: str
@@ -318,15 +322,29 @@ class GpuBroker:
             logger.debug("[gpu] %s already resident", need)
             return
 
-        if need.kind == "torch" and (current is None or current.kind == "ollama"):
+        loop = asyncio.get_running_loop()
+
+        if current is not None and current.kind == "song" and need.kind != "song":
+            # ACE-Step runs in its own process and has no unload endpoint —
+            # `offload` is an init-time option only — so the only way to get
+            # its VRAM back is to stop it. Every other transition here is a
+            # no-op by measurement; this one is not, and leaving it out would
+            # push the next person's model onto the CPU.
+            # gpu-queue-exempt: the broker making room, not queued work.
+            from researcher import song as _song
+
+            await loop.run_in_executor(None, _song.stop)
+
+        if (need.kind in ("torch", "song")
+                and (current is None or current.kind == "ollama")):
             # Ollama will not give VRAM back to a process it does not know
-            # about, so it has to be asked. This is the only teardown that is
-            # actually required — a diffusers pipeline holds ~32 MiB once its
-            # generation finishes, because the weights live in CPU RAM.
+            # about, so it has to be asked. For a diffusers pipeline this is
+            # the only teardown required — it holds ~32 MiB once its
+            # generation finishes, because the weights live in CPU RAM — and
+            # ACE-Step needs the same room made for it.
             # gpu-queue-exempt: this is the broker making room; queueing
             # it behind itself is the deadlock it exists to prevent.
-            await asyncio.get_running_loop().run_in_executor(
-                None, _release_ollama, label)
+            await loop.run_in_executor(None, _release_ollama, label)
 
         # Ollama -> Ollama needs nothing: loading a model evicts the previous
         # one. torch -> Ollama needs nothing either, as measured.

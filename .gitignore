@@ -32,3 +32,4 @@ src/researcher/data/
 # Scratch/temp test files
 tests/test_titi.py
 src/researcher/test_titi.py
+logs/

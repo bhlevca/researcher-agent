@@ -2,7 +2,7 @@
 
 A CrewAI-powered research agent with a browser-based chat UI, voice dialog, image generation, and session management. Runs locally using Ollama — the **client only needs a web browser**.
 
-**Version 3.0.0**
+**Version 3.1.0**
 
 ## Architecture
 
@@ -344,6 +344,45 @@ nothing is indistinguishable from a hang:
 🎬 Clip 2/11 (33% — 128 frames so far, ~5.3s of video)
 🎬 33% — step 50/150 — about 42m 10s left
 ```
+
+### Generating songs (composer)
+
+The composer's **Song** tab renders audio with vocals using
+[ACE-Step 1.5](https://github.com/ACE-Step/ACE-Step-1.5). The score stays the
+thing that is correct; the audio is a performance of it.
+
+With *Perform my score* ticked, the last generated score goes through
+MusicXML → MIDI → fluidsynth and that render becomes the source audio for an
+ACE-Step `cover`, which keeps the structure and changes the production.
+Without a score it generates from the description alone.
+
+**Install it separately.** ACE-Step pins `torch==2.10.0+cu128` and
+`transformers<4.58`, which conflict with this project's torch 2.13+cu130, so
+it needs its own virtualenv:
+
+```bash
+git clone https://github.com/ACE-Step/ACE-Step-1.5.git ~/ai/ACE-Step-1.5
+cd ~/ai/ACE-Step-1.5 && uv sync
+```
+
+That is about 7.6 GB of dependencies; model weights (~6 GB) download on the
+first song. Point `ACESTEP_HOME` elsewhere if you put it somewhere else.
+
+The server is started on demand and **stopped whenever anything else needs the
+GPU**, because ACE-Step has no unload endpoint — the process holding the card
+is the only thing to release. Idle it holds no VRAM. The *Free GPU* button
+stops it immediately.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `ACESTEP_HOME` | `/home/bogdan/ai/ACE-Step-1.5` | Where the checkout lives |
+| `ACESTEP_PORT` | `8001` | Port for its REST API |
+| `ACESTEP_MODEL` | `acestep-v15-turbo` | DiT model; the 8–16 GB tier |
+| `ACESTEP_IDLE_SECONDS` | `300` | Idle window before it may be stopped |
+| `ACESTEP_LOG` | `logs/acestep.log` | Its output, including download progress |
+
+On a 5070 Ti: ~4 s to start, ~40 s per song once warm, ~9.8 GiB held while
+generating.
 
 ### Tuning at runtime
 

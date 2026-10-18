@@ -324,12 +324,25 @@ class GpuBroker:
 
         loop = asyncio.get_running_loop()
 
+        if current is None and need.kind != "song":
+            # The broker has just started and does not know what is on the
+            # card. ACE-Step outlives it — it is a systemd service — and holds
+            # ~10 GB after any song, so an agent restart followed by a tutor
+            # request would load an LLM on top of it. One HTTP probe settles it.
+            # gpu-queue-exempt: the broker making room, not queued work.
+            from researcher import song as _song
+
+            if await loop.run_in_executor(None, _song.holding_gpu):
+                current = Need("song", "acestep")
+
         if current is not None and current.kind == "song" and need.kind != "song":
-            # ACE-Step runs in its own process and has no unload endpoint —
-            # `offload` is an init-time option only — so the only way to get
-            # its VRAM back is to stop it. Every other transition here is a
-            # no-op by measurement; this one is not, and leaving it out would
-            # push the next person's model onto the CPU.
+            # ACE-Step runs in its own process, has no unload endpoint, and
+            # keeps ~10 GB after a song (9,984 MiB measured). The only way to
+            # get it back is a restart: `systemctl --user restart` when systemd
+            # owns it, after which it comes back lazily holding nothing. Every
+            # other transition here is a no-op by measurement; this one is not,
+            # and leaving it out would push the next person's model onto the
+            # CPU.
             # gpu-queue-exempt: the broker making room, not queued work.
             from researcher import song as _song
 

@@ -50,6 +50,27 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 
+def _configure_app_logging() -> None:
+    """Give researcher.* loggers a handler, once.
+
+    Nothing configured them, so Python's last-resort handler printed WARNING
+    and above and silently dropped INFO. Under systemd that meant the journal
+    held only uvicorn's access lines: no prune, no GPU hand-off, no model
+    switch — and no record of what removed a saved song on 2026-10-18.
+    """
+    app_log = logging.getLogger("researcher")
+    if app_log.handlers:
+        return
+    handler = logging.StreamHandler()        # stderr; systemd captures it
+    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    app_log.addHandler(handler)
+    app_log.setLevel(os.getenv("RESEARCHER_LOG_LEVEL", "INFO"))
+    app_log.propagate = False                 # no double lines via root
+
+
+_configure_app_logging()
+
+
 # --- Lifespan: initialise app.state, SQLite, SD preload ---
 
 
@@ -147,6 +168,13 @@ async def lifespan(app: FastAPI):
 
     # Composer tables
     await init_composer_tables(db)
+    # Songs saved before v3.2 lived in static/generated beside the scratch
+    # renders; move them to their own folder before anything can prune.
+    from researcher import song as _song
+    _song.ensure_song_dirs()
+    moved = await _song.migrate_legacy(db, STATIC_DIR / "generated")
+    if moved:
+        logger.info("Moved %d saved song(s) into %s", moved, _song.KEPT_DIR)
     await init_math_tables(db)
 
     # Optional image backend warm-up/bootstrap.
@@ -265,6 +293,12 @@ async def chat_direct_page():
 # --- Static files & server entry point ---
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+# Songs: scratch renders and saved ones, each in its own folder. See song.py.
+from researcher import song as _song_storage  # noqa: E402
+_song_storage.ensure_song_dirs()
+app.mount(_song_storage.SONG_URL_PREFIX,
+          StaticFiles(directory=str(_song_storage.SONG_ROOT)), name="songs")
 
 if __name__ == "__main__":
     import uvicorn

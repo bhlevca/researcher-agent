@@ -1,201 +1,20 @@
 // ══════════════════════════════════════════════
 // ── Song audio (ACE-Step) ──
 //
-// The score stays the thing that is correct; this renders a performance of
-// it. "Perform my score" sends the last generated score, which the server
-// turns into audio through fluidsynth and hands to ACE-Step as the source for
-// a cover — same structure, real production.
+// Description + lyrics in, takes of audio out. Nothing here writes or attaches
+// a score: ACE-Step only makes audio, and the scores this tab used to offer
+// had nothing to do with what it produced.
 //
-// The engine is a separate process holding the GPU, so this tab also shows
-// its state and offers a way to hand the card back.
+// Each take gets its own player, so you can listen to all of them and save the
+// ones you want. Saving does two things at once: it opens your browser's save
+// dialog so the file lands where you choose, under the name you choose, and it
+// keeps the take in Compositions so it is not cleaned up with the unsaved ones.
 // ══════════════════════════════════════════════
 
-let _songEngineTimer = null;
-// The last render, so Save knows what to keep. A render is scratch until
-// saved: the server prunes anything no composition refers to.
-let _songLastRender = null;
+let _songStatusTimer = null;
+let _songSettings = { keepHours: 2 };
 
-/* Fill the "Perform" list: the latest score from this sitting, plus every
-   saved composition. This tab renders audio and does not write notation, so
-   where the notation comes from has to be on screen rather than implied by a
-   checkbox. */
-async function refreshSongSources() {
-    const sel = document.getElementById('song-source');
-    const note = document.getElementById('song-source-note');
-    if (!sel) return;
-    const chosen = sel.value;
-    sel.innerHTML = '';
-
-    const none = document.createElement('option');
-    none.value = '';
-    none.textContent = 'Description only — no score';
-    sel.appendChild(none);
-
-    if (composerScoreRawResponse) {
-        const o = document.createElement('option');
-        o.value = 'latest';
-        o.textContent = 'The score I just generated';
-        sel.appendChild(o);
-    }
-
-    let saved = [];
-    if (composerSessionId) {
-        try {
-            const r = await fetch(
-                `/composer/sessions/${composerSessionId}/compositions`,
-                { headers: authHeaders() });
-            if (r.ok) saved = (await r.json()).compositions || [];
-        } catch (e) { /* leave the list short */ }
-    }
-    for (const c of saved) {
-        const o = document.createElement('option');
-        o.value = 'comp:' + c.id;
-        o.textContent = `Saved: ${c.title}`;
-        sel.appendChild(o);
-    }
-
-    // Keep the choice across refreshes; otherwise default to a real score.
-    const values = Array.from(sel.options).map(o => o.value);
-    sel.value = values.includes(chosen) ? chosen
-              : (composerScoreRawResponse ? 'latest'
-                 : (saved.length ? 'comp:' + saved[0].id : ''));
-    onSongSourceChange();
-
-    if (note && !composerScoreRawResponse && !saved.length) {
-        note.textContent = 'No score yet — compose one, or render from the description alone.';
-    }
-}
-
-function onSongSourceChange() {
-    const sel = document.getElementById('song-source');
-    const note = document.getElementById('song-source-note');
-    if (!sel || !note) return;
-    if (!sel.value) {
-        note.textContent = 'A new piece from your description. No score to save.';
-        note.className = 'song-source-note is-warn';
-    } else {
-        note.textContent = 'The audio will follow this composition, and the score is saved with it.';
-        note.className = 'song-source-note';
-    }
-}
-
-/* Compose the notation here rather than sending people to another tab.
-   The Song tab is where the description already is, so bouncing to the Score
-   tab, retyping nothing, generating, and bouncing back was pure ceremony.
-   The Score tab still exists for the fuller form — instruments, bar count,
-   multi-minute assembly — and this uses its endpoint with sane defaults. */
-async function composeScoreForSong() {
-    if (!composerSessionId) { composerShowToast('Create or load a session first'); return; }
-    const desc = (document.getElementById('song-prompt').value || '').trim();
-    if (!desc) {
-        composerShowToast('Describe what to compose first');
-        document.getElementById('song-prompt').focus();
-        return;
-    }
-
-    const btn = document.getElementById('song-compose-btn');
-    const content = document.getElementById('song-content');
-    if (btn) { btn.disabled = true; btn.textContent = 'Composing…'; }
-    content.innerHTML = '';
-
-    const label = document.createElement('div');
-    label.className = 'composer-streaming-label';
-    label.textContent = 'Writing the score';
-    content.appendChild(label);
-    const live = document.createElement('div');
-    live.className = 'composer-streaming';
-    live.textContent = 'Starting…';
-    content.appendChild(live);
-
-    const lines = [];
-    try {
-        const r = await fetch('/composer/score', {
-            method: 'POST', headers: jsonAuthHeaders(),
-            body: JSON.stringify({
-                session_id: composerSessionId,
-                description: desc,
-                instruments: songComposeInstruments(),
-                measures: parseInt(
-                    (document.getElementById('song-measures') || {}).value, 10) || 16,
-                minutes: 0,
-                style: '',
-            }),
-        });
-        if (!r.ok) {
-            let detail = 'Could not compose a score';
-            try { detail = (await r.json()).detail || detail; } catch (e) { /* keep */ }
-            label.remove(); live.remove();
-            composerShowToast(detail);
-            return;
-        }
-
-        const reader = r.body.getReader();
-        const dec = new TextDecoder();
-        let buf = '', result = null;
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buf += dec.decode(value, { stream: true });
-            while (buf.includes('\n\n')) {
-                const idx = buf.indexOf('\n\n');
-                const chunk = buf.slice(0, idx);
-                buf = buf.slice(idx + 2);
-                let ev = '', dataStr = '';
-                for (const line of chunk.split('\n')) {
-                    if (line.startsWith('event: ')) ev = line.slice(7);
-                    else if (line.startsWith('data: ')) dataStr += line.slice(6);
-                }
-                if (!dataStr) continue;
-                if (ev === 'queue') {
-                    try { gpuShowQueueNote(live, JSON.parse(dataStr)); }
-                    catch (e) { /* ignore */ }
-                } else if (ev === 'reasoning') {
-                    lines.push(JSON.parse(dataStr));
-                    live.textContent = lines.join('\n');
-                    live.scrollTop = live.scrollHeight;
-                } else if (ev === 'done') {
-                    result = JSON.parse(dataStr);
-                } else if (ev === 'error') {
-                    gpuShowQueueNote(live, null);
-                    label.remove(); live.remove();
-                    const err = document.createElement('div');
-                    err.className = 'message error';
-                    err.textContent = 'Error: ' + JSON.parse(dataStr);
-                    content.appendChild(err);
-                    return;
-                }
-            }
-        }
-
-        gpuShowQueueNote(live, null);
-        label.remove(); live.remove();
-        if (!result) {
-            composerShowToast('The score stream ended without a result');
-            return;
-        }
-        // This is what makes it the Song tab's source: same variable the Score
-        // tab sets, so "the score I just generated" picks it up.
-        composerScoreRawResponse = result.response || '';
-        renderScoreResponse(result.response, lines, content, result.has_score);
-        await refreshSongSources();
-        const sel = document.getElementById('song-source');
-        if (sel) { sel.value = 'latest'; onSongSourceChange(); }
-        composerShowToast('Score ready — render it when you are happy with it');
-    } catch (e) {
-        label.remove(); live.remove();
-        composerShowToast('Error: ' + e.message);
-    } finally {
-        if (btn) { btn.disabled = false; btn.textContent = '🎼 Compose a score'; }
-    }
-}
-
-/* Instruments for an inline compose. The Score tab has the full picker; here
-   a comma-separated field is enough, and empty means piano. */
-function songComposeInstruments() {
-    const raw = ((document.getElementById('song-instruments') || {}).value || '').trim();
-    if (!raw) return ['Piano'];
-    return raw.split(',').map(x => x.trim()).filter(Boolean);
-}
+/* ── engine status ─────────────────────────────────────────────────────── */
 
 async function refreshSongStatus() {
     const el = document.getElementById('song-status');
@@ -204,22 +23,33 @@ async function refreshSongStatus() {
         const r = await fetch('/composer/song/status', { headers: authHeaders() });
         if (!r.ok) { el.textContent = 'Could not reach the server.'; return null; }
         const s = await r.json();
-        const bits = [];
+        _songSettings.keepHours = s.keep_hours || 2;
+        fillSongModels(s.models);
+
+        el.innerHTML = '';
         if (!s.installed) {
             el.className = 'song-status is-missing';
             el.textContent = s.hint || 'The song engine is not installed.';
             return s;
         }
-        bits.push(s.running
-            ? `engine running (idle ${Math.round(s.idle_seconds)}s) — holding the GPU`
-            : 'engine stopped — starts on first render');
-        if (s.loaded_model) bits.push(`holding ${s.loaded_model}`);
-        fillSongModels(s.models, s.loaded_model);
-        if (!s.fluidsynth) {
-            bits.push('no fluidsynth: "Perform my score" will fall back to the description');
+        const owner = s.managed_by === 'systemd' ? `${s.unit}` : 'started by the app';
+        const parts = [`Song engine: ${owner}`];
+        if (!s.running) parts.push('stopped — starts on the first render');
+        else if (s.holding_gpu) parts.push(`holding the GPU (${s.loaded_model || 'loaded'})`);
+        else parts.push('idle, not using the GPU');
+        el.appendChild(document.createTextNode(parts.join(' · ')));
+
+        // Freeing the GPU only means something when it is held.
+        if (s.holding_gpu) {
+            el.appendChild(document.createTextNode(' · '));
+            const free = document.createElement('a');
+            free.href = '#';
+            free.textContent = 'free it';
+            free.title = 'Restart the engine so the GPU is available to the tutor and researcher. The next render reloads the model (~40 s).';
+            free.onclick = (e) => { e.preventDefault(); stopSongEngine(); };
+            el.appendChild(free);
         }
-        el.className = 'song-status' + (s.running ? ' is-running' : '');
-        el.textContent = bits.join(' · ');
+        el.className = 'song-status' + (s.holding_gpu ? ' is-running' : '');
         return s;
     } catch (e) {
         el.textContent = 'Could not reach the server.';
@@ -227,10 +57,9 @@ async function refreshSongStatus() {
     }
 }
 
-/* The engine holds one model, chosen when it starts, so switching restarts
-   it. Only `base` can separate stems, which is why the choice is on screen
-   rather than buried in a config file. */
-function fillSongModels(models, loaded) {
+/* Fast stays the default even when the engine last ran Detailed: the choice
+   is per render, and a leftover from the previous one is not a preference. */
+function fillSongModels(models) {
     const sel = document.getElementById('song-model');
     if (!sel || !models || !models.length) return;
     const chosen = sel.value;
@@ -238,171 +67,122 @@ function fillSongModels(models, loaded) {
     for (const m of models) {
         const o = document.createElement('option');
         o.value = m.id;
-        o.textContent = `${m.label} — ${m.note}`;
-        o.dataset.stems = m.stems ? '1' : '';
+        o.textContent = `${m.label} — ${m.steps} steps`;
+        o.title = m.note;
         sel.appendChild(o);
     }
-    const values = models.map(m => m.id);
-    sel.value = values.includes(chosen) ? chosen
-              : (loaded && values.includes(loaded) ? loaded : values[0]);
-    onSongModelChange();
-}
-
-function onSongModelChange() {
-    const sel = document.getElementById('song-model');
-    const note = document.getElementById('song-source-note');
-    if (!sel || !note || !sel.selectedOptions.length) return;
-    // Only warn about a restart when one would actually happen.
-    const opt = sel.selectedOptions[0];
-    if (opt.dataset.stems) {
-        note.textContent = 'Full engine: slower, and the only one that can '
-            + 'separate stems. Switching restarts the engine.';
-        note.className = 'song-source-note is-warn';
-    } else {
-        onSongSourceChange();
-    }
+    const ids = models.map(m => m.id);
+    sel.value = ids.includes(chosen) ? chosen : ids[0];
 }
 
 async function stopSongEngine() {
-    const btn = document.getElementById('song-stop-btn');
-    if (btn) { btn.disabled = true; btn.textContent = 'Stopping…'; }
     try {
-        const r = await fetch('/composer/song/stop', {
-            method: 'POST', headers: jsonAuthHeaders(),
-        });
+        const r = await fetch('/composer/song/stop', { method: 'POST', headers: jsonAuthHeaders() });
         const d = await r.json().catch(() => ({}));
-        composerShowToast(d.stopped ? 'Song engine stopped, GPU free'
-                                   : 'The engine was not running');
+        if (!r.ok) composerShowToast(d.detail || 'Could not free the GPU');
+        else composerShowToast(d.stopped ? 'GPU freed' : 'The engine was not holding the GPU');
     } catch (e) {
         composerShowToast('Error: ' + e.message);
     } finally {
-        if (btn) { btn.disabled = false; btn.textContent = '⏏ Free GPU'; }
         refreshSongStatus();
     }
 }
 
-async function generateSong() {
-    if (!composerSessionId) {
-        composerShowToast('Create or load a session first');
-        return;
-    }
-    const prompt = document.getElementById('song-prompt').value.trim();
-    const lyrics = document.getElementById('song-lyrics').value.trim();
-    const instrumental = document.getElementById('song-instrumental').checked;
-    const source = document.getElementById('song-source').value;
-    const strength = parseFloat(document.getElementById('song-strength').value);
-    const duration = parseFloat(document.getElementById('song-duration').value) || 0;
-    const language = document.getElementById('song-language').value;
+/* ── rendering ─────────────────────────────────────────────────────────── */
 
-    const score = source === 'latest' ? (composerScoreRawResponse || '') : '';
-    const compositionId = source.startsWith('comp:') ? source.slice(5) : '';
-    if (!prompt && !score && !compositionId) {
-        composerShowToast('Describe the sound, or pick a composition to perform');
+function _songVal(id) {
+    const el = document.getElementById(id);
+    return el ? (el.value || '').trim() : '';
+}
+
+async function generateSong() {
+    if (!composerSessionId) { composerShowToast('Create or load a session first'); return; }
+    const prompt = _songVal('song-prompt');
+    if (!prompt) {
+        composerShowToast('Describe the song first');
+        document.getElementById('song-prompt').focus();
         return;
     }
+    const lyrics = _songVal('song-lyrics');
+    const seedRaw = _songVal('song-seed');
+    const bpmRaw = _songVal('song-bpm');
+    const body = {
+        session_id: composerSessionId,
+        prompt, lyrics,
+        instrumental: document.getElementById('song-instrumental').checked || !lyrics,
+        vocal_language: _songVal('song-language') || 'auto',
+        duration: parseFloat(_songVal('song-duration')) || 0,
+        takes: parseInt(_songVal('song-takes'), 10) || 2,
+        model: _songVal('song-model'),
+        seed: seedRaw === '' ? null : parseInt(seedRaw, 10),
+        bpm: bpmRaw === '' ? null : parseInt(bpmRaw, 10),
+        key_scale: _songVal('song-key'),
+        time_signature: _songVal('song-time'),
+    };
 
     const btn = document.getElementById('song-generate-btn');
     const content = document.getElementById('song-content');
     btn.disabled = true;
     btn.textContent = 'Rendering…';
-
-    // The live box sits above the result, same as every other tab.
     content.innerHTML = '';
+
     const label = document.createElement('div');
     label.className = 'composer-streaming-label';
-    label.textContent = 'Rendering';
-    content.appendChild(label);
+    label.textContent = `Rendering ${body.takes} take${body.takes > 1 ? 's' : ''}`;
     const live = document.createElement('div');
     live.className = 'composer-streaming';
     live.textContent = 'Starting…';
-    content.appendChild(live);
+    content.append(label, live);
 
     const lines = [];
+    let result = null;
     try {
         const r = await fetch('/composer/song', {
-            method: 'POST', headers: jsonAuthHeaders(),
-            body: JSON.stringify({
-                session_id: composerSessionId,
-                prompt, lyrics, instrumental,
-                model: (document.getElementById('song-model') || {}).value || '',
-                response: score,
-                composition_id: compositionId,
-                duration,
-                cover_strength: strength,
-                vocal_language: language,
-            }),
+            method: 'POST', headers: jsonAuthHeaders(), body: JSON.stringify(body),
         });
         if (!r.ok) {
             let detail = 'Could not start the render';
             try { detail = (await r.json()).detail || detail; } catch (e) { /* keep */ }
-            live.remove();
-            content.innerHTML = '<div class="message error"></div>';
-            content.firstChild.textContent = detail;
-            return;
+            throw new Error(detail);
         }
-
         const reader = r.body.getReader();
         const dec = new TextDecoder();
         let buf = '';
-        let result = null;
-
         while (true) {
             const { done, value } = await reader.read();
             if (done) break;
             buf += dec.decode(value, { stream: true });
-
             while (buf.includes('\n\n')) {
                 const idx = buf.indexOf('\n\n');
                 const chunk = buf.slice(0, idx);
                 buf = buf.slice(idx + 2);
-
-                let ev = '', dataStr = '';
+                let ev = '', data = '';
                 for (const line of chunk.split('\n')) {
                     if (line.startsWith('event: ')) ev = line.slice(7);
-                    else if (line.startsWith('data: ')) dataStr += line.slice(6);
+                    else if (line.startsWith('data: ')) data += line.slice(6);
                 }
-                if (!dataStr) continue;
-
+                if (!data) continue;
                 if (ev === 'queue') {
-                    try { gpuShowQueueNote(live, JSON.parse(dataStr)); }
-                    catch (e) { /* malformed: ignore */ }
+                    try { gpuShowQueueNote(live, JSON.parse(data)); } catch (e) { /* ignore */ }
                 } else if (ev === 'reasoning') {
-                    lines.push(JSON.parse(dataStr));
+                    lines.push(JSON.parse(data));
                     live.textContent = lines.join('\n');
                     live.scrollTop = live.scrollHeight;
                 } else if (ev === 'done') {
-                    result = JSON.parse(dataStr);
+                    result = JSON.parse(data);
                 } else if (ev === 'error') {
-                    gpuShowQueueNote(live, null);
-                    label.remove();
-                    live.remove();
-                    const err = document.createElement('div');
-                    err.className = 'message error';
-                    err.textContent = 'Error: ' + JSON.parse(dataStr);
-                    content.appendChild(err);
-                    return;
+                    throw new Error(JSON.parse(data));
                 }
             }
         }
-
         gpuShowQueueNote(live, null);
-        if (result) {
-            label.remove();
-            live.remove();
-            _songLastRender = {
-                audio_url: result.audio_url,
-                has_score: !!result.has_score,
-                prompt, score,
-                composition_id: compositionId,
-                source: result.source || '',
-            };
-            renderScoreResponse(result.response, lines, content, false);
-            content.appendChild(buildSongSaveRow());
-        } else {
-            live.textContent = lines.join('\n') + '\n(the stream ended without a result)';
-        }
+        label.remove();
+        live.remove();
+        if (!result) throw new Error('The render ended without a result');
+        renderTakes(content, result, body);
     } catch (e) {
-        if (typeof label !== 'undefined') label.remove();
+        gpuShowQueueNote(live, null);
+        label.remove();
         live.remove();
         const err = document.createElement('div');
         err.className = 'message error';
@@ -410,18 +190,198 @@ async function generateSong() {
         content.appendChild(err);
     } finally {
         btn.disabled = false;
-        btn.textContent = '🎤 Render song';
+        btn.textContent = '🎤 Render';
         refreshSongStatus();
     }
 }
 
-/* Keep the engine state fresh while the tab is open: it holds the GPU, so
-   whether it is running is something the household needs to be able to see. */
+const _LANG_NAMES = {
+    en: 'English', fr: 'French', ro: 'Romanian', de: 'German', es: 'Spanish',
+    it: 'Italian', pt: 'Portuguese', ja: 'Japanese', zh: 'Chinese',
+};
+
+function renderTakes(container, result, request) {
+    const takes = result.takes || [];
+    const head = document.createElement('div');
+    head.className = 'song-result-head';
+    const lang = result.language ? (_LANG_NAMES[result.language] || result.language) : '';
+    const sung = request.instrumental ? 'instrumental'
+        : (lang ? `sung in ${lang}${request.vocal_language === 'auto' ? ' (detected)' : ''}` : '');
+    head.textContent = [
+        `${takes.length} take${takes.length === 1 ? '' : 's'}`,
+        `${result.engine} engine, ${result.steps} steps`,
+        sung,
+    ].filter(Boolean).join(' · ');
+    container.appendChild(head);
+
+    takes.forEach(t => container.appendChild(buildTake(t, request)));
+
+    const note = document.createElement('div');
+    note.className = 'song-keep-note';
+    note.textContent = `Takes you don't save are deleted after ${_songSettings.keepHours} hours.`;
+    container.appendChild(note);
+}
+
+function _songDefaultName(request, take) {
+    const words = (request.prompt || '').replace(/[^\p{L}\p{N}\s'-]/gu, ' ')
+        .split(/\s+/).filter(Boolean).slice(0, 5).join(' ');
+    return `${words || 'Song'} - take ${take.take}`;
+}
+
+function _fmtDuration(sec) {
+    if (!sec && sec !== 0) return '';
+    const s = Math.round(sec);
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+function buildTake(take, request) {
+    const card = document.createElement('div');
+    card.className = 'song-take';
+
+    const title = document.createElement('div');
+    title.className = 'song-take-title';
+    title.textContent = [`Take ${take.take}`,
+                         take.duration ? _fmtDuration(take.duration) : '',
+                         take.seed != null ? `seed ${take.seed}` : '']
+        .filter(Boolean).join(' · ');
+    card.appendChild(title);
+
+    const audio = document.createElement('audio');
+    audio.controls = true;
+    audio.preload = 'metadata';
+    audio.src = take.url;
+    card.appendChild(audio);
+
+    const row = document.createElement('div');
+    row.className = 'song-take-actions';
+
+    const name = document.createElement('input');
+    name.type = 'text';
+    name.className = 'song-take-name';
+    name.value = _songDefaultName(request, take);
+    name.title = 'The file name, and its name in Compositions';
+    row.appendChild(name);
+
+    const save = document.createElement('button');
+    save.textContent = '💾 Save…';
+    save.title = 'Choose where to save the file, and keep it in Compositions';
+    save.onclick = () => saveTake(take, name, save, card, request);
+    row.appendChild(save);
+
+    if (take.seed != null) {
+        const again = document.createElement('button');
+        again.textContent = '↻ Use this seed';
+        again.title = 'Put this seed in Advanced, so the next render reproduces this take and you can change one thing';
+        again.onclick = () => {
+            document.getElementById('song-seed').value = take.seed;
+            const adv = document.querySelector('#cpanel-song .song-advanced');
+            if (adv) adv.open = true;
+            composerShowToast(`Seed ${take.seed} set — change something and render again`);
+        };
+        row.appendChild(again);
+    }
+    card.appendChild(row);
+    return card;
+}
+
+/* ── saving ────────────────────────────────────────────────────────────── */
+
+/* Write a blob where the person chooses.
+ *
+ * Chrome and Edge offer a real "Save as" dialog through showSaveFilePicker,
+ * but only on a secure origin — localhost or https. Over plain http from
+ * another machine, and in Firefox, the browser instead downloads the file
+ * under the given name; whether it then asks for a folder is the browser's
+ * own setting ("Always ask where to save files").
+ *
+ * Returns the chosen name, or null if the person cancelled.
+ */
+async function saveBlobAs(blob, suggestedName) {
+    if (window.showSaveFilePicker) {
+        try {
+            const handle = await window.showSaveFilePicker({
+                suggestedName,
+                types: [{ description: 'MP3 audio', accept: { 'audio/mpeg': ['.mp3'] } }],
+            });
+            const w = await handle.createWritable();
+            await w.write(blob);
+            await w.close();
+            return handle.name;
+        } catch (e) {
+            if (e && e.name === 'AbortError') return null;   // cancelled: do nothing
+            // Anything else (permission, unsupported) falls back to a download.
+        }
+    }
+    const a = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    a.href = url;
+    a.download = suggestedName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    return suggestedName;
+}
+
+function _safeFileName(name) {
+    const n = (name || '').replace(/[\/\\:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim();
+    return (n || 'Song').replace(/\.mp3$/i, '') + '.mp3';
+}
+
+async function saveTake(take, nameField, btn, card, request) {
+    const wanted = _safeFileName(nameField.value);
+    btn.disabled = true;
+    btn.textContent = 'Saving…';
+    try {
+        const blob = await (await fetch(take.url)).blob();
+        const chosen = await saveBlobAs(blob, wanted);
+        if (!chosen) {                       // cancelled in the dialog
+            btn.disabled = false;
+            btn.textContent = '💾 Save…';
+            return;
+        }
+        // Keep it in Compositions under the name it was saved as, which also
+        // takes it out of the cleanup. Saving the same take again renames it.
+        const title = chosen.replace(/\.mp3$/i, '');
+        const r = await fetch('/composer/song/save', {
+            method: 'POST', headers: jsonAuthHeaders(),
+            body: JSON.stringify({
+                session_id: composerSessionId,
+                file: take.file, title,
+                prompt: request.prompt, seed: take.seed,
+            }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.detail || 'Could not keep it in Compositions');
+
+        // From now on the take lives in kept/; point the player there.
+        take.file = d.file;
+        take.url = d.url;
+        const audio = card.querySelector('audio');
+        if (audio && audio.src.indexOf(d.url) === -1) {
+            const t = audio.currentTime;
+            audio.src = d.url;
+            audio.currentTime = t;
+        }
+        nameField.value = title;
+        btn.textContent = '💾 Save again…';
+        btn.disabled = false;
+        card.classList.add('is-saved');
+        composerShowToast(`Saved "${chosen}" and kept it in Compositions`);
+        if (typeof loadCompositions === 'function') loadCompositions();
+    } catch (e) {
+        composerShowToast('Error: ' + e.message);
+        btn.disabled = false;
+        btn.textContent = '💾 Save…';
+    }
+}
+
+/* ── status polling ────────────────────────────────────────────────────── */
+
 function startSongStatusPolling() {
     refreshSongStatus();
-    refreshSongSources();
-    if (_songEngineTimer) return;
-    _songEngineTimer = setInterval(() => {
+    if (_songStatusTimer) return;
+    _songStatusTimer = setInterval(() => {
         const panel = document.getElementById('cpanel-song');
         if (panel && panel.classList.contains('active')) refreshSongStatus();
     }, 10000);
@@ -431,108 +391,4 @@ if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', startSongStatusPolling);
 } else {
     startSongStatusPolling();
-}
-
-
-/* Saving is what makes a render permanent — unsaved songs are pruned — so the
-   button says so rather than looking like an optional extra. In cover mode it
-   keeps the score too, and that score is exact: it is the notation the audio
-   was rendered from. */
-function buildSongSaveRow() {
-    const row = document.createElement('div');
-    row.className = 'score-actions song-save-row';
-
-    const label = document.createElement('label');
-    label.className = 'song-save-name';
-    label.textContent = 'Name:';
-    const name = document.createElement('input');
-    name.type = 'text';
-    name.id = 'song-save-name';
-    // A sensible default that is still fully editable — this is the name the
-    // downloaded file gets, not just a database row.
-    name.value = defaultSongName();
-    name.placeholder = 'Name for this song';
-    label.appendChild(name);
-    row.appendChild(label);
-
-    const save = document.createElement('button');
-    save.textContent = '💾 Save song';
-    save.onclick = () => saveSong(save);
-    row.appendChild(save);
-
-    const note = document.createElement('span');
-    note.className = 'song-save-note';
-    note.textContent = _songLastRender && _songLastRender.has_score
-        ? 'Keeps the audio and its score. Unsaved renders are deleted.'
-        : 'Keeps the audio. No score — this was generated from the description. Unsaved renders are deleted.';
-    row.appendChild(note);
-    return row;
-}
-
-/* Name it after what it is: the composition performed, or the description. */
-function defaultSongName() {
-    const r = _songLastRender || {};
-    if (r.source) return r.source;
-    const words = (r.prompt || '').split(/\s+/).filter(Boolean).slice(0, 5);
-    return words.length ? words.join(' ') : 'Untitled song';
-}
-
-async function saveSong(btn) {
-    if (!_songLastRender) { composerShowToast('Nothing to save'); return; }
-    const field = document.getElementById('song-save-name');
-    const title = ((field && field.value) || '').trim();
-    if (!title) {
-        composerShowToast('Give the song a name');
-        if (field) field.focus();
-        return;
-    }
-
-    if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
-    try {
-        const r = await fetch('/composer/song/save', {
-            method: 'POST', headers: jsonAuthHeaders(),
-            body: JSON.stringify({
-                session_id: composerSessionId,
-                audio_url: _songLastRender.audio_url,
-                response: _songLastRender.score || '',
-                composition_id: _songLastRender.composition_id || '',
-                prompt: _songLastRender.prompt || '',
-                title,
-            }),
-        });
-        if (!r.ok) {
-            let detail = 'Could not save';
-            try { detail = (await r.json()).detail || detail; } catch (e) { /* keep */ }
-            composerShowToast(detail);
-            if (btn) { btn.disabled = false; btn.textContent = '💾 Save song'; }
-            return;
-        }
-        const d = await r.json();
-        composerShowToast(d.has_score ? 'Saved, with its score'
-                                      : 'Saved (audio only)');
-        if (btn) { btn.textContent = '✓ Saved'; btn.disabled = true; }
-        if (field) field.disabled = true;
-
-        // Now that it is kept, offer it under the name that was given.
-        const links = document.createElement('span');
-        links.className = 'song-saved-links';
-        const id = d.composition.id;
-        const audio = document.createElement('a');
-        audio.href = `/composer/compositions/${id}/audio`;
-        audio.textContent = '⬇ audio';
-        links.appendChild(audio);
-        if (d.has_score) {
-            const xml = document.createElement('a');
-            xml.href = `/composer/compositions/${id}/musicxml`;
-            xml.textContent = '⬇ score (MusicXML)';
-            links.appendChild(xml);
-        }
-        if (btn.parentElement) btn.parentElement.appendChild(links);
-
-        if (typeof loadCompositions === 'function') loadCompositions();
-        refreshSongSources();
-    } catch (e) {
-        composerShowToast('Error: ' + e.message);
-        if (btn) { btn.disabled = false; btn.textContent = '💾 Save song'; }
-    }
 }

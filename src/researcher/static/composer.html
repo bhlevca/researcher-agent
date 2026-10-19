@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Music Composer</title>
     <link rel="stylesheet" href="/static/css/main.css?v=3">
-    <link rel="stylesheet" href="/static/css/composer.css?v=6">
+    <link rel="stylesheet" href="/static/css/composer.css?v=8">
 </head>
 <body>
     <header>
@@ -312,81 +312,105 @@
     </div>
 
     <!-- ═══════ SONG panel ═══════ -->
-    <!-- Audio with vocals, from ACE-Step. The score stays the thing that is
-         correct; this is a performance of it. When a score is present it is
-         rendered through fluidsynth and used as the source for a cover, which
-         keeps the structure and changes the production. -->
+    <!-- Text to audio with ACE-Step. No notation here: ACE-Step only makes
+         audio, and the scores this tab used to attach had nothing to do with
+         what it produced. -->
     <div class="composer-panel" id="cpanel-song">
         <div class="song-form">
             <div class="song-status" id="song-status">Checking the song engine…</div>
 
-            <!-- What the audio will be a performance OF. This tab renders
-                 audio; it does not write notation, and leaving that implicit
-                 made it look like a composer and silently fall back to
-                 description-only. -->
-            <div class="form-row song-source-row">
-                <label title="The audio follows this composition. 'Description only' generates a new piece instead, with no score.">
-                    Perform:
-                    <select id="song-source" onchange="onSongSourceChange()">
-                        <option value="">Description only — no score</option>
-                    </select>
-                </label>
-                <button id="song-compose-btn" onclick="composeScoreForSong()"
-                        title="Writes notation here from the description above, then selects it as the source. The Score tab has the fuller form — instrument picker, bar count, multi-minute assembly.">🎼 Compose a score</button>
-                <label title="Comma separated. Blank means piano.">
-                    for:
-                    <input type="text" id="song-instruments" placeholder="Piano, Bass, Drums"
-                           style="width:11rem">
-                </label>
-                <label title="Bars to write. The Score tab can assemble longer pieces from recurring sections.">
-                    bars:
-                    <input type="number" id="song-measures" value="16" min="4" max="64" step="4"
-                           style="width:4.5rem">
-                </label>
-                <span class="song-source-note" id="song-source-note"></span>
-            </div>
-
+            <label class="song-field-label" for="song-prompt">Describe the song</label>
             <textarea id="song-prompt" rows="2"
-                placeholder="Describe the sound and production (e.g. 'warm indie folk, acoustic guitar, close-miked female vocal, light room reverb')"></textarea>
-            <textarea id="song-lyrics" rows="4"
-                placeholder="Lyrics (leave blank for an instrumental)"></textarea>
-            <div class="form-row">
-                <label title="No singing, whatever the lyrics box says. ACE-Step has a switch for this; it is not inferred.">
-                    <input type="checkbox" id="song-instrumental">
-                    Instrumental (no vocals)
+                placeholder="Genre, instruments, mood, voice and production — e.g. 'intimate French chanson, accordion and upright bass, soft female vocal, small café, warm and nostalgic'"></textarea>
+
+            <label class="song-field-label" for="song-lyrics">Lyrics</label>
+            <textarea id="song-lyrics" rows="7"
+                placeholder="[Verse]&#10;Sous le ciel gris de Paris&#10;&#10;[Chorus]&#10;La vie passe comme un rêve&#10;&#10;Leave empty, or tick Instrumental, for no vocals."></textarea>
+            <details class="song-help">
+                <summary>How lyrics shape the song</summary>
+                <p>Section tags in square brackets set the structure:
+                   <code>[Intro]</code> <code>[Verse]</code> <code>[Pre-Chorus]</code>
+                   <code>[Chorus]</code> <code>[Bridge]</code> <code>[Instrumental]</code>
+                   <code>[Outro]</code>. Add a descriptor for more control —
+                   <code>[Chorus - anthemic]</code>, <code>[Verse - whispered]</code>.</p>
+                <p><b>UPPERCASE</b> words are emphasised; <code>(words in parentheses)</code>
+                   become backing vocals. Lines of 6–10 syllables fit best. Even with no
+                   words yet, a list of tags gives the song its shape.</p>
+                <p>Voice type, instruments and production go in the description above.</p>
+            </details>
+
+            <div class="form-row song-controls">
+                <label title="No singing, whatever the lyrics box says.">
+                    <input type="checkbox" id="song-instrumental"> Instrumental
                 </label>
-                <label title="Fast is 8 diffusion steps. Full is 50 — slower, and the only one that can separate a song into stems. Switching restarts the engine.">
-                    Engine:
-                    <select id="song-model" onchange="onSongModelChange()"></select>
-                </label>
-                <label title="1.0 holds to the score closely; 0.2 treats it as a loose suggestion.">
-                    Faithfulness:
-                    <input type="range" id="song-strength" min="0.2" max="1" step="0.05" value="0.75"
-                           oninput="document.getElementById('song-strength-val').textContent = this.value">
-                    <span id="song-strength-val">0.75</span>
-                </label>
-                <label title="0 lets the model choose from the lyrics.">
-                    Seconds:
-                    <input type="number" id="song-duration" value="0" min="0" max="600" step="10" style="width:5rem">
-                </label>
-                <label>
-                    Vocals:
+                <label title="The language the lyrics are sung in. ACE-Step uses it for pronunciation and does not read it from the description. Auto reads it from the lyrics.">
+                    Language
                     <select id="song-language">
-                        <option value="en" selected>English</option>
+                        <option value="auto" selected>Auto (from lyrics)</option>
                         <option value="fr">French</option>
+                        <option value="en">English</option>
                         <option value="ro">Romanian</option>
                         <option value="de">German</option>
                         <option value="es">Spanish</option>
                         <option value="it">Italian</option>
+                        <option value="pt">Portuguese</option>
                         <option value="ja">Japanese</option>
                         <option value="zh">Chinese</option>
                     </select>
                 </label>
-                <button id="song-generate-btn" onclick="generateSong()">🎤 Render song</button>
-                <button id="song-stop-btn" onclick="stopSongEngine()"
-                        title="The song engine holds the GPU until it stops. Use this if someone else needs the card now.">⏏ Free GPU</button>
+                <label title="Length in seconds. Auto lets the model fit it to the lyrics.">
+                    Length
+                    <select id="song-duration">
+                        <option value="0" selected>Auto</option>
+                        <option value="30">30 s</option>
+                        <option value="60">1 min</option>
+                        <option value="120">2 min</option>
+                        <option value="180">3 min</option>
+                        <option value="240">4 min</option>
+                    </select>
+                </label>
+                <label title="How many versions to render at once. Two cost no more than one.">
+                    Takes
+                    <select id="song-takes">
+                        <option value="1">1</option>
+                        <option value="2" selected>2</option>
+                        <option value="3">3</option>
+                        <option value="4">4</option>
+                    </select>
+                </label>
+                <label title="Fast is turbo at 8 steps. Detailed is base at 50 steps and follows the description more literally. Listen to both and choose.">
+                    Engine
+                    <select id="song-model"></select>
+                </label>
+                <button id="song-generate-btn" onclick="generateSong()">🎤 Render</button>
             </div>
+
+            <details class="song-advanced">
+                <summary>Advanced</summary>
+                <div class="form-row song-controls">
+                    <label title="Leave empty for a new song every time. Set it to reproduce a take and change one thing.">
+                        Seed <input type="number" id="song-seed" min="0" placeholder="random" style="width:8rem">
+                    </label>
+                    <label title="Blank uses the session's tempo.">
+                        Tempo <input type="number" id="song-bpm" min="30" max="300" placeholder="session" style="width:5.5rem">
+                    </label>
+                    <label title="e.g. C major, A minor. Blank uses the session's key.">
+                        Key <input type="text" id="song-key" placeholder="session" style="width:7rem">
+                    </label>
+                    <label title="Blank uses the session's time signature.">
+                        Time
+                        <select id="song-time">
+                            <option value="" selected>session</option>
+                            <option value="4">4/4</option>
+                            <option value="3">3/4</option>
+                            <option value="6">6/8</option>
+                            <option value="2">2/4</option>
+                        </select>
+                    </label>
+                </div>
+            </details>
         </div>
+
         <div class="song-content" id="song-content"></div>
     </div>
 
@@ -412,9 +436,9 @@
     <!-- Composer JS -->
     <script src="/static/js/composer-state.js?v=4"></script>
     <script src="/static/js/composer-sessions.js?v=4"></script>
-    <script src="/static/js/composer-chat.js?v=3"></script>
-    <script src="/static/js/composer-song.js?v=5"></script>
-    <script src="/static/js/composer-score.js?v=3"></script>
+    <script src="/static/js/composer-chat.js?v=4"></script>
+    <script src="/static/js/composer-song.js?v=8"></script>
+    <script src="/static/js/composer-score.js?v=4"></script>
 
     <!-- Composer init -->
     <script>

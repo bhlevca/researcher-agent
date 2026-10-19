@@ -245,40 +245,90 @@
 
 .song-content { padding: 0.75rem 1rem; overflow-y: auto; }
 
-/* The save row under a render. The note is not decoration: an unsaved song is
-   deleted, so it has to be obvious that saving is the thing that keeps it. */
-.song-save-row {
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-    flex-wrap: wrap;
-    margin-top: 0.5rem;
+/* ── Song tab ─────────────────────────────────────────────────────────────
+   Description and lyrics in, takes of audio out. */
+.song-field-label {
+    font-size: 0.76rem;
+    color: #94a3b8;
+    margin-bottom: -0.25rem;
 }
 
-.song-save-note { font-size: 0.74rem; color: #94a3b8; }
-
-/* The "Perform:" row. This tab renders audio and does not write notation, so
-   the source has to be visible rather than implied. */
-.song-source-row { gap: 0.6rem; }
-.song-source-note { font-size: 0.72rem; color: #64748b; }
-.song-source-note.is-warn { color: #fbbf24; }
-
-.song-save-name { display: flex; align-items: center; gap: 0.35rem; }
-
-.song-save-name input {
+.song-form select,
+.song-form input[type="text"],
+.song-form input[type="number"] {
     background: #1a1a2e;
     border: 1px solid #0f3460;
     color: #e0e0e0;
     border-radius: 0.35rem;
-    padding: 0.25rem 0.5rem;
+    padding: 0.2rem 0.4rem;
     font-family: inherit;
     font-size: 0.8rem;
-    min-width: 14rem;
-    outline: none;
 }
 
-.song-save-name input:focus { border-color: #e94560; }
-.song-save-name input:disabled { opacity: 0.6; }
+.song-help, .song-advanced {
+    font-size: 0.76rem;
+    color: #94a3b8;
+}
 
-.song-saved-links { display: flex; gap: 0.6rem; font-size: 0.74rem; }
-.song-saved-links a { color: #93c5fd; }
+.song-help summary, .song-advanced summary { cursor: pointer; }
+.song-help p { margin: 0.35rem 0 0.35rem 0.8rem; line-height: 1.5; }
+.song-help code {
+    background: #16213e;
+    border: 1px solid #0f3460;
+    border-radius: 0.25rem;
+    padding: 0 0.25rem;
+    color: #e0e0e0;
+}
+
+.song-advanced .form-row { margin-top: 0.4rem; }
+
+.song-result-head {
+    font-size: 0.8rem;
+    color: #94a3b8;
+    margin-bottom: 0.5rem;
+}
+
+/* One card per take, so they can be compared side by side by ear. */
+.song-take {
+    border: 1px solid #0f3460;
+    border-left: 3px solid #334155;
+    border-radius: 0.5rem;
+    padding: 0.55rem 0.7rem;
+    margin-bottom: 0.6rem;
+    background: #16213e;
+}
+
+.song-take.is-saved { border-left-color: #22c55e; }
+
+.song-take-title {
+    font-size: 0.82rem;
+    color: #e0e0e0;
+    margin-bottom: 0.35rem;
+}
+
+.song-take audio { width: 100%; display: block; }
+
+.song-take-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-top: 0.45rem;
+}
+
+.song-take-name {
+    flex: 1 1 14rem;
+    min-width: 10rem;
+    background: #1a1a2e;
+    border: 1px solid #0f3460;
+    color: #e0e0e0;
+    border-radius: 0.35rem;
+    padding: 0.3rem 0.5rem;
+    font-family: inherit;
+    font-size: 0.82rem;
+}
+
+.song-take-name:focus { border-color: #e94560; outline: none; }
+
+.song-keep-note { font-size: 0.72rem; color: #64748b; margin-top: 0.2rem; }
+.song-status a { color: #93c5fd; }

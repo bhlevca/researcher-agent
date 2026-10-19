@@ -28,6 +28,8 @@ from researcher.user_crews import get_crew, resolve_model
 
 from researcher.composer.models import (
     ComposeSongRequest,
+    CompositionRename,
+    SongSaveRequest,
     ComposerSessionCreate,
     ComposerSessionUpdate,
     ComposeChatRequest,
@@ -37,6 +39,8 @@ from researcher.composer.models import (
 )
 from researcher.composer.storage import (
     saved_audio_paths,
+    find_composition_by_audio,
+    rename_composition,
     create_composer_session,
     list_composer_sessions,
     get_composer_session,
@@ -50,9 +54,7 @@ from researcher.composer.storage import (
 
 logger = logging.getLogger(__name__)
 
-# Beside the generated images and video; the directory is gitignored.
-_SONG_DIR = pathlib.Path(__file__).resolve().parents[1] / "static" / "generated"
-_SONG_DIR.mkdir(parents=True, exist_ok=True)
+
 
 
 async def _get_composer_crew(request: Request, uid: str) -> ComposerCrew:
@@ -609,6 +611,10 @@ def register_composer_routes(app):
         user = await get_current_user(request)
         db = request.app.state.db
         comps = await list_compositions(db, user["id"], session_id)
+        for c in comps:
+            stored = c.get("audio_path") or ""
+            c["audio_url"] = song.url_for(stored) if "/" in stored else ""
+            c["has_musicxml"] = bool(c.get("has_musicxml"))
         return {"compositions": comps}
 
     @app.get("/composer/compositions/{composition_id}")
@@ -618,6 +624,8 @@ def register_composer_routes(app):
         comp = await get_composition(db, composition_id, user["id"])
         if not comp:
             raise HTTPException(status_code=404, detail="Composition not found")
+        stored = comp.get("audio_path") or ""
+        comp["audio_url"] = song.url_for(stored) if "/" in stored else ""
         return comp
 
     @app.post("/composer/convert-midi")
@@ -704,11 +712,14 @@ def register_composer_routes(app):
         comp = await get_composition(db, composition_id, user["id"])
         if not comp:
             raise HTTPException(status_code=404, detail="Composition not found")
-        name = pathlib.PurePath(comp.get("audio_path") or "").name
-        if not name:
+        stored = comp.get("audio_path") or ""
+        if not stored:
             raise HTTPException(status_code=404,
                                 detail="No audio saved for this composition")
-        path = _SONG_DIR / name
+        try:
+            path = song.resolve(stored)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="The audio file is gone")
         if not path.is_file():
             raise HTTPException(status_code=404, detail="The audio file is gone")
         return Response(
@@ -740,23 +751,37 @@ def register_composer_routes(app):
     async def composer_delete_composition(composition_id: str, request: Request):
         user = await get_current_user(request)
         db = request.app.state.db
+        comp = await get_composition(db, composition_id, user["id"])
         deleted = await delete_composition(db, composition_id, user["id"])
         if not deleted:
             raise HTTPException(status_code=404, detail="Composition not found")
+        # A saved song's audio lives in kept/, which nothing else ever cleans,
+        # so deleting the entry has to delete the file — but only once no other
+        # entry still points at it. Two rows sharing one file already exist
+        # from before saving became an upsert.
+        stored = (comp or {}).get("audio_path") or ""
+        if stored.startswith("kept/") and stored not in await saved_audio_paths(db):
+            try:
+                path = song.resolve(stored)
+                if path.is_file():
+                    path.unlink()
+                    song.audit("delete", file=stored, user=user["id"],
+                               title=repr((comp or {}).get("title", "")))
+            except (ValueError, OSError) as e:
+                logger.warning("[song] could not remove %s: %s", stored, e)
         return {"deleted": composition_id}
 
     # ------------------------------------------------------------------
     # Song audio (ACE-Step)
     #
-    # The composer's scores are correct; this makes them audible. ACE-Step
-    # conditions on audio rather than notation, so the score goes through the
-    # existing MusicXML -> MIDI -> fluidsynth path first and that render is
-    # the source audio for a `cover`. The notation stays authoritative.
+    # Text to audio. The Song tab used to offer to perform a score and to write
+    # one; the scores it produced had nothing to do with what ACE-Step made,
+    # which was worse than none, so notation lives in the Score tab only.
     # ------------------------------------------------------------------
 
     @app.post("/composer/song")
     async def composer_song(req: ComposeSongRequest, request: Request):
-        """Render a song as audio — SSE streaming."""
+        """Render takes of a song — SSE streaming."""
         _validate_sid(req.session_id)
         user = await get_current_user(request)
         uid = user["id"]
@@ -765,78 +790,24 @@ def register_composer_routes(app):
         session = await get_composer_session(db, req.session_id, uid)
         if not session:
             raise HTTPException(status_code=404, detail="Composer session not found")
-
-        if not song.is_installed():
-            # Say what is missing rather than failing with a connection error
-            # several layers down.
+        if not song.is_installed() and not song._systemd_managed():
             raise HTTPException(status_code=503, detail=song.install_hint())
 
         prompt = (req.prompt or "").strip()
-        if not prompt and not req.response.strip():
+        if not prompt:
             raise HTTPException(
                 status_code=400,
-                detail="Describe the sound you want, or generate a score first.")
+                detail="Describe the song first: genre, instruments, mood, voice.")
 
-        # Build the source audio on the CPU *before* taking the card, so the
-        # queue is held only for the part that actually needs a GPU.
-        src_audio: bytes | None = None
-        src_error = ""
-        src_label = ""
-        musicxml = ""
-
-        if req.composition_id:
-            # A saved composition: its MusicXML is already exact, so there is
-            # nothing to extract.
-            comp = await get_composition(db, req.composition_id, uid)
-            if not comp:
-                raise HTTPException(status_code=404,
-                                    detail="That saved composition is gone")
-            musicxml = comp.get("musicxml") or ""
-            src_label = comp.get("title") or "saved composition"
-            if not musicxml:
-                src_error = (f"'{src_label}' has no notation stored, so the "
-                             f"song was generated from the description alone.")
-        elif req.response.strip():
-            crew = await _get_composer_crew(request, uid)
-            musicxml = crew.extract_musicxml(
-                req.response, session["key_signature"],
-                session["time_signature"], session["tempo"]) or ""
-            src_label = "your latest score"
-            if not musicxml:
-                src_error = ("No score could be read from that response, so "
-                             "the song was generated from the description "
-                             "alone.")
-
-        if musicxml:
-            crew = await _get_composer_crew(request, uid)
-            midi = crew.musicxml_to_midi(musicxml, session["tempo"])
-            if midi:
-                loop = asyncio.get_running_loop()
-                # gpu-queue-exempt: fluidsynth renders MIDI on the CPU.
-                src_audio = await loop.run_in_executor(
-                    None, crew.midi_to_audio, midi)
-            if not src_audio:
-                src_error = ("Could not render that score to audio — is "
-                             "fluidsynth installed? The song was generated "
-                             "from the description alone.")
-
-        caption = prompt or (
-            f"{session['genre']} in {session['key_signature']}, "
-            f"{session['tempo']} bpm")
+        takes = max(1, min(int(req.takes or 1), song.MAX_TAKES))
+        model = song.resolve_model(req.model)
 
         async def event_stream():
-            if src_error:
-                yield _sse("reasoning", "⚠️ " + src_error)
-            elif src_audio:
-                yield _sse("reasoning",
-                           f"🎼 Performing {src_label} — the audio follows "
-                           f"that composition, it is not a different piece")
-
             progress: queue.Queue = queue.Queue()
+            lines: list[str] = []
 
-            # One card, one queue. "song" is its own residency kind because
-            # ACE-Step is a separate process with no unload endpoint: the
-            # broker stops it when anything else needs the GPU.
+            # One card, one queue. ACE-Step has no unload endpoint, so the
+            # broker restarts it when anything else needs the GPU.
             async with GPU.reserve(Need("song", "acestep"), "song",
                                    user=uid) as res:
                 async for notice in res.wait():
@@ -845,165 +816,170 @@ def register_composer_routes(app):
                         notice["ticket"]))
 
                 task = asyncio.create_task(song.generate(
-                    prompt=caption,
-                    lyrics="" if req.instrumental else req.lyrics,
-                    bpm=session["tempo"],
-                    key_scale=session["key_signature"],
-                    time_signature=session["time_signature"],
+                    prompt=prompt,
+                    lyrics=req.lyrics,
+                    instrumental=req.instrumental or not (req.lyrics or "").strip(),
+                    bpm=req.bpm or session["tempo"],
+                    key_scale=(req.key_scale or session["key_signature"]),
+                    time_signature=(req.time_signature or session["time_signature"]),
                     duration=req.duration,
                     vocal_language=req.vocal_language,
-                    src_audio=src_audio,
-                    cover_strength=req.cover_strength,
-                    model=req.model,
+                    takes=takes,
+                    seed=req.seed,
+                    model=model,
                     on_progress=progress.put_nowait,
                 ))
-
-                # Drain the generator's progress notes while it works, so a
-                # cold start that downloads several GB explains itself.
                 while not task.done():
                     try:
-                        yield _sse("reasoning", "⏳ " + progress.get_nowait())
+                        line = progress.get_nowait()
+                        lines.append(line)
+                        yield _sse("reasoning", "⏳ " + line)
                     except queue.Empty:
                         await asyncio.sleep(0.4)
-
                 try:
-                    audio, meta = task.result()
+                    results = task.result()
                 except Exception as e:
                     logger.exception("[song] generation failed")
                     yield _sse("error", str(e))
                     return
 
-            name = f"song-{uuid.uuid4().hex[:12]}.mp3"
-            path = _SONG_DIR / name
-            path.write_bytes(audio)
-            url = f"/static/generated/{name}"
-            logger.info("[song] wrote %s (%.1f MB)", name, len(audio) / 2**20)
+            rendered = []
+            for i, take in enumerate(results, 1):
+                rel = song.write_scratch(take["audio"])
+                meta = take.get("meta") or {}
+                rendered.append({
+                    "take": i,
+                    "file": rel,
+                    "url": song.url_for(rel),
+                    "seed": take.get("seed"),
+                    "duration": meta.get("duration"),
+                    "bytes": len(take["audio"]),
+                })
+            meta0 = (results[0].get("meta") or {}) if results else {}
+            logger.info("[song] %d take(s) on %s for %s", len(rendered), model, uid)
 
-            lines = [f"Rendered {len(audio) / 2**20:.1f} MB of audio"]
-            for key in ("key", "bpm", "duration"):
-                if (meta or {}).get(key):
-                    lines.append(f"{key}: {meta[key]}")
-
-            # Unsaved renders are scratch, so say so and prune the old ones.
-            # Pruning here rather than on a timer keeps it where the directory
-            # is already being written to.
+            # Old scratch renders go; saved songs live in kept/ and are not
+            # there to be found. The database list is a second guard.
             kept = await saved_audio_paths(db)
             # gpu-queue-exempt: deleting files, no GPU involved.
             await asyncio.get_running_loop().run_in_executor(
-                None, song.prune_unsaved, _SONG_DIR, kept)
+                None, song.prune_unsaved, None, kept)
 
-            note = ("This render is not kept unless you save it."
-                    if src_audio else
-                    "This render is not kept unless you save it. There is no "
-                    "score to go with it — it was generated from the "
-                    "description, not from a composition.")
             yield _sse("done", {
-                "response": (
-                    f"🎵 **{'Performance of your score' if src_audio else 'Generated song'}**\n\n"
-                    f"<audio controls src=\"{url}\"></audio>\n\n"
-                    f"[⬇ Download]({url})\n\n*{note}*"
-                ),
-                "audio_url": url,
-                "has_score": bool(musicxml),
-                "source": src_label,
+                "takes": rendered,
+                "language": meta0.get("language", ""),
+                "model": model,
+                "engine": song.MODELS[model]["label"],
+                "steps": song.MODELS[model]["steps"],
+                "keep_hours": round(song.KEEP_UNSAVED_SECONDS / 3600, 1),
                 "reasoning": lines,
-                "token_usage": {},
-                "incomplete": False,
             })
 
-        return StreamingResponse(event_stream(),
-                                 media_type="text/event-stream")
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
 
     @app.post("/composer/song/save")
-    async def composer_song_save(request: Request):
-        """Keep a rendered song, with the score it was a performance of.
+    async def composer_song_save(req: SongSaveRequest, request: Request):
+        """Keep a take in the library under a name.
 
-        This is what makes a render permanent: anything not saved is pruned.
-        In cover mode the score is exact — it is the MusicXML the audio was
-        rendered from — so the pair is the right artefact: correct notation
-        plus a performance of it.
+        Moves it from scratch/ to kept/, where the cleanup never looks.
+        Saving the same take again updates its name rather than adding a
+        second entry.
         """
+        _validate_sid(req.session_id)
         user = await get_current_user(request)
+        uid = user["id"]
         db = request.app.state.db
-        body = await request.json()
-
-        session_id = body.get("session_id", "")
-        _validate_sid(session_id)
-        session = await get_composer_session(db, session_id, user["id"])
+        session = await get_composer_session(db, req.session_id, uid)
         if not session:
             raise HTTPException(status_code=404, detail="Composer session not found")
 
-        audio_url = (body.get("audio_url") or "").strip()
-        name = pathlib.PurePath(audio_url).name
-        if not name or not name.startswith("song-"):
-            raise HTTPException(status_code=400, detail="No rendered song to save")
-        audio_file = _SONG_DIR / name
-        if not audio_file.is_file():
+        title = (req.title or "").strip() or "Untitled song"
+        try:
+            rel = song.keep(req.file)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="That is not a rendered song")
+        except FileNotFoundError:
+            hours = round(song.KEEP_UNSAVED_SECONDS / 3600, 1)
             raise HTTPException(
                 status_code=404,
-                detail="That render is gone — unsaved songs are not kept.")
+                detail=f"That render is gone — unsaved renders are kept for "
+                       f"{hours:g} hours.")
 
-        # The same extraction the composition save does, so a saved song and a
-        # saved score are the same object. A song performed from an already
-        # saved composition reuses that notation verbatim — re-extracting it
-        # would be a worse copy of something exact.
-        musicxml = ""
-        source_id = (body.get("composition_id") or "").strip()
-        response_text = body.get("response", "")
-        if source_id:
-            src = await get_composition(db, source_id, user["id"])
-            musicxml = (src or {}).get("musicxml") or ""
-        elif response_text.strip():
-            crew = await _get_composer_crew(request, user["id"])
-            musicxml = crew.extract_musicxml(
-                response_text, key=session["key_signature"],
+        existing = await find_composition_by_audio(db, uid, rel)
+        if existing:
+            await rename_composition(db, existing["id"], uid, title)
+            existing["title"] = title
+            comp = existing
+        else:
+            comp = await save_composition(
+                db,
+                user_id=uid,
+                session_id=req.session_id,
+                title=title,
+                description=(req.prompt or "").strip(),
+                instruments=[],
+                genre=session["genre"],
+                key_signature=session["key_signature"],
                 time_signature=session["time_signature"],
-                tempo=session["tempo"]) or ""
+                tempo=session["tempo"],
+                musicxml="",
+                audio_path=rel,
+            )
+        song.audit("save", file=rel, title=repr(title), user=uid)
+        return {"composition": comp, "url": song.url_for(rel), "file": rel}
 
-        comp = await save_composition(
-            db,
-            user_id=user["id"],
-            session_id=session_id,
-            title=(body.get("title") or "").strip() or "Untitled song",
-            description=(body.get("prompt") or "").strip(),
-            instruments=body.get("instruments") or [],
-            genre=session["genre"],
-            key_signature=session["key_signature"],
-            time_signature=session["time_signature"],
-            tempo=session["tempo"],
-            musicxml=musicxml,
-            audio_path=name,
-        )
-        logger.info("[song] saved %s with%s a score", name,
-                    "" if musicxml else "out")
-        return {"composition": comp, "has_score": bool(musicxml),
-                "audio_url": f"/static/generated/{name}"}
+    @app.put("/composer/compositions/{composition_id}")
+    async def composer_rename_composition(
+            composition_id: str, req: CompositionRename, request: Request):
+        """Rename a composition in place."""
+        user = await get_current_user(request)
+        title = (req.title or "").strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="A name is required")
+        if not await rename_composition(request.app.state.db, composition_id,
+                                        user["id"], title):
+            raise HTTPException(status_code=404, detail="Composition not found")
+        return {"id": composition_id, "title": title}
 
     @app.post("/composer/song/stop")
     async def composer_song_stop(request: Request):
-        """Stop the song engine and hand the VRAM back.
+        """Make the engine give the GPU back.
 
-        Exposed because ACE-Step holds the card until its process exits, and
-        somebody waiting for the tutor should not have to wait out the idle
-        window.
+        Refused while a song is rendering: under systemd this is a restart,
+        and restarting mid-render throws the render away.
         """
         await get_current_user(request)
-        was = song.running()
-        song.stop()
+        running = (GPU.snapshot() or {}).get("running") or {}
+        if running.get("label") == "song":
+            raise HTTPException(status_code=409,
+                                detail="A song is rendering — wait for it to finish.")
+        # gpu-queue-exempt: asks the engine to release, no GPU work queued.
+        freed = await asyncio.get_running_loop().run_in_executor(None, song.stop)
         GPU.forget_residency()
-        return {"stopped": was}
+        return {"stopped": bool(freed)}
 
     @app.get("/composer/song/status")
     async def composer_song_status(request: Request):
-        """Whether the engine is installed, running, and for how long idle."""
+        """What the engine is, who owns it, and whether it holds the GPU."""
         await get_current_user(request)
+        managed = song._systemd_managed()
+        installed = managed or song.is_installed()
+        loop = asyncio.get_running_loop()
+        # gpu-queue-exempt: reads /health over HTTP.
+        running = await loop.run_in_executor(None, song.running)
+        # gpu-queue-exempt: reads /health over HTTP.
+        holding = running and await loop.run_in_executor(None, song.holding_gpu)
+        # gpu-queue-exempt: reads /health over HTTP.
+        loaded = await loop.run_in_executor(None, song.loaded_model) if running else ""
         return {
-            "installed": song.is_installed(),
-            "running": song.running(),
-            "idle_seconds": round(song.idle_seconds(), 1),
-            "model": song.ACESTEP_MODEL,
-            "loaded_model": song.loaded_model(),
+            "installed": installed,
+            "managed_by": "systemd" if managed else "app",
+            "unit": f"{song.SYSTEMD_UNIT}.service" if managed else "",
+            "running": running,
+            "holding_gpu": holding,
+            "loaded_model": loaded,
             "models": song.model_choices(),
-            "hint": "" if song.is_installed() else song.install_hint(),
-            "fluidsynth": song.have_fluidsynth(),
+            "max_takes": song.MAX_TAKES,
+            "keep_hours": round(song.KEEP_UNSAVED_SECONDS / 3600, 1),
+            "hint": "" if installed else song.install_hint(),
         }

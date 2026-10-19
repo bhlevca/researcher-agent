@@ -8,14 +8,6 @@ function addComposerMsg(role, text, reasoning, hasScore) {
     // Reasoning goes ABOVE the answer, where the live reasoning box already
     // was while the request ran; appending it below made it jump across the
     // answer the moment the result arrived.
-    // A score written in Chat is still a score the Song tab can perform.
-    // Only the Score tab used to record this, so composing in Chat left the
-    // Song tab thinking there was nothing to perform.
-    if (role === 'assistant' && (hasScore || _hasScore(text || ''))) {
-        composerScoreRawResponse = text;
-        if (typeof refreshSongSources === 'function') refreshSongSources();
-    }
-
     if (role === 'assistant' && reasoning && reasoning.length > 0) {
         const details = document.createElement('details');
         details.className = 'reasoning-toggle';

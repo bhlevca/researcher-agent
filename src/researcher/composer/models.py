@@ -56,27 +56,41 @@ class ComposeAnalyzeRequest(BaseModel):
 
 
 class ComposeSongRequest(BaseModel):
-    """Render a song as audio with ACE-Step.
+    """Render takes of a song with ACE-Step, from a description and lyrics.
 
-    Two modes, chosen by whether *response* carries a score:
+    Text to audio only. The Song tab used to offer to perform a score, and to
+    write one; both produced scores unrelated to what ACE-Step generated, which
+    was worse than none. Notation lives in the Score tab.
 
-    - **cover** — the composer's own score is rendered to audio through
-      fluidsynth and handed to ACE-Step as source audio, which keeps the
-      structure and changes the production. This is the point of the feature:
-      the MusicXML stays the thing that is correct, and the audio is a
-      performance of it.
-    - **text2music** — no score, just *prompt*. A parallel generator rather
-      than a renderer, which is a weaker fit but what people expect from a
-      prompt box.
+    Musical control is mostly in *prompt* (genre, instruments, mood,
+    production, voice type) and *lyrics*, whose section tags — [Verse],
+    [Chorus], [Bridge], [Instrumental], [Outro], with descriptors such as
+    [Chorus - anthemic] — set the song's structure.
     """
 
     session_id: str
-    prompt: str = ""            # style / production description
-    lyrics: str = ""            # blank for an instrumental
-    instrumental: bool = False  # force no vocals even with lyrics present
-    response: str = ""          # a score-bearing composer reply, for cover mode
-    composition_id: str = ""    # or a saved composition, whose MusicXML is exact
-    duration: float = 0.0       # seconds; 0 lets the model choose
-    cover_strength: float = 0.75   # 1.0 holds the score, 0.2 is loose
-    vocal_language: str = "en"
-    model: str = ""             # "" = the default; validated against an allowlist
+    prompt: str = ""                # genre, instruments, mood, voice, production
+    lyrics: str = ""                # with section tags; blank for instrumental
+    instrumental: bool = False      # no vocals, whatever the lyrics say
+    vocal_language: str = "auto"    # "auto" reads it from the lyrics
+    duration: float = 0.0           # seconds; 0 lets the model choose
+    takes: int = 2                  # 1-4; two cost the same as one
+    seed: int | None = None         # set to hear the same song with one change
+    model: str = ""                 # "" = Fast; validated against an allowlist
+    bpm: int | None = None          # overrides the session's tempo
+    key_scale: str = ""             # overrides the session's key
+    time_signature: str = ""        # overrides the session's time signature
+
+
+class SongSaveRequest(BaseModel):
+    """Keep one take in the library, under a name."""
+
+    session_id: str
+    file: str                       # the take's path, e.g. "scratch/song-….mp3"
+    title: str = ""
+    prompt: str = ""
+    seed: int | None = None
+
+
+class CompositionRename(BaseModel):
+    title: str

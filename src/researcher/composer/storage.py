@@ -205,7 +205,8 @@ async def list_compositions(
 ) -> list[dict]:
     cur = await db.execute(
         "SELECT id, title, description, instruments, genre, key_signature, "
-        "time_signature, tempo, created_at FROM compositions "
+        "time_signature, tempo, created_at, audio_path, "
+        "(musicxml != '') AS has_musicxml FROM compositions "
         "WHERE user_id = ? AND session_id = ? ORDER BY created_at DESC",
         (user_id, session_id),
     )
@@ -254,3 +255,32 @@ async def saved_audio_paths(db: aiosqlite.Connection) -> set[str]:
     cursor = await db.execute(
         "SELECT audio_path FROM compositions WHERE audio_path != ''")
     return {row[0] for row in await cursor.fetchall() if row[0]}
+
+
+async def find_composition_by_audio(
+    db: aiosqlite.Connection, user_id: str, audio_path: str
+) -> dict | None:
+    """The composition that already holds this audio, if any.
+
+    Saving is an upsert on the audio file: saving the same take twice, or
+    "renaming" by saving again, used to insert a second row — the database
+    ended up holding "french chanson , type cafe" twice over one file.
+    """
+    cur = await db.execute(
+        "SELECT * FROM compositions WHERE user_id = ? AND audio_path = ? "
+        "ORDER BY created_at LIMIT 1", (user_id, audio_path))
+    row = await cur.fetchone()
+    if not row:
+        return None
+    cols = [d[0] for d in cur.description]
+    return dict(zip(cols, row))
+
+
+async def rename_composition(
+    db: aiosqlite.Connection, composition_id: str, user_id: str, title: str
+) -> bool:
+    cur = await db.execute(
+        "UPDATE compositions SET title = ? WHERE id = ? AND user_id = ?",
+        (title, composition_id, user_id))
+    await db.commit()
+    return cur.rowcount > 0

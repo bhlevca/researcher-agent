@@ -71,8 +71,6 @@ async function generateScore() {
                     } else if (currentEvent === 'done') {
                         content.innerHTML = '';
                         composerScoreRawResponse = data.response || '';
-                        // The Song tab's source list depends on this.
-                        if (typeof refreshSongSources === 'function') refreshSongSources();
                         renderScoreResponse(data.response, data.reasoning, content, data.has_score);
                     } else if (currentEvent === 'error') {
                         content.innerHTML = '<div class="message error">Error: ' + data + '</div>';
@@ -337,9 +335,15 @@ async function loadCompositions() {
         data.compositions.forEach(c => {
             const item = document.createElement('div');
             item.className = 'composition-item';
+            // A song (audio from ACE-Step) and a score (notation) are different
+            // things; say which this is.
+            const kind = c.audio_url ? '🎵' : (c.has_musicxml ? '🎼' : '•');
+            const meta = c.audio_url
+                ? `song · ${new Date(c.created_at).toLocaleString()}`
+                : `${c.genre} · ${c.key_signature} · ${c.time_signature} · ${c.tempo} BPM · ${new Date(c.created_at).toLocaleString()}`;
             item.innerHTML = `
-                <div class="comp-title">${escapeHtml(c.title)}</div>
-                <div class="comp-meta">${c.genre} · ${c.key_signature} · ${c.time_signature} · ${c.tempo} BPM · ${new Date(c.created_at).toLocaleString()}</div>
+                <div class="comp-title">${kind} ${escapeHtml(c.title)}</div>
+                <div class="comp-meta">${escapeHtml(meta)}</div>
             `;
             item.onclick = () => loadComposition(c.id);
             list.appendChild(item);
@@ -362,14 +366,48 @@ async function loadComposition(id) {
         title.style.color = '#e0e0e0';
         content.appendChild(title);
 
+        // A saved song: a player, and saving to disk under its name.
+        if (data.audio_url) {
+            const audio = document.createElement('audio');
+            audio.controls = true;
+            audio.preload = 'metadata';
+            audio.src = data.audio_url;
+            audio.style.width = '100%';
+            content.appendChild(audio);
+            if (data.description) {
+                const d = document.createElement('div');
+                d.className = 'comp-meta';
+                d.textContent = data.description;
+                content.appendChild(d);
+            }
+        }
+
         if (data.musicxml) {
             const pre = document.createElement('div');
             pre.className = 'musicxml-block';
             pre.textContent = data.musicxml.substring(0, 2000) + (data.musicxml.length > 2000 ? '\n... (truncated)' : '');
             content.appendChild(pre);
+        } else if (!data.audio_url) {
+            const none = document.createElement('div');
+            none.style.color = '#64748b';
+            none.textContent = 'Nothing stored for this entry.';
+            content.appendChild(none);
+        }
 
-            const acts = document.createElement('div');
-            acts.className = 'score-actions';
+        const acts = document.createElement('div');
+        acts.className = 'score-actions';
+
+        if (data.audio_url && typeof saveBlobAs === 'function') {
+            const saveBtn = document.createElement('button');
+            saveBtn.textContent = '💾 Save audio…';
+            saveBtn.onclick = async () => {
+                const blob = await (await fetch(data.audio_url)).blob();
+                await saveBlobAs(blob, _safeFileName(data.title));
+            };
+            acts.appendChild(saveBtn);
+        }
+
+        if (data.musicxml) {
             const dlBtn = document.createElement('button');
             dlBtn.textContent = '📥 Download MusicXML';
             dlBtn.onclick = () => {
@@ -384,26 +422,42 @@ async function loadComposition(id) {
                 URL.revokeObjectURL(url);
             };
             acts.appendChild(dlBtn);
-
-            const delBtn = document.createElement('button');
-            delBtn.textContent = '🗑️ Delete';
-            delBtn.style.color = '#e94560';
-            delBtn.onclick = async () => {
-                if (!confirm('Delete "' + data.title + '"?')) return;
-                const r = await fetch('/composer/compositions/' + id, {
-                    method: 'DELETE', headers: composerAuthHeaders(),
-                });
-                if (r.ok) {
-                    composerShowToast('Deleted');
-                    content.innerHTML = '';
-                    loadCompositions();
-                }
-            };
-            acts.appendChild(delBtn);
-            content.appendChild(acts);
-        } else {
-            content.innerHTML += '<div style="color:#64748b;">No MusicXML data stored</div>';
         }
+
+        // Rename in place; saving again used to add a second entry instead.
+        const renameBtn = document.createElement('button');
+        renameBtn.textContent = '✏️ Rename';
+        renameBtn.onclick = async () => {
+            const name = prompt('New name:', data.title);
+            if (name === null || !name.trim() || name.trim() === data.title) return;
+            const r = await fetch('/composer/compositions/' + id, {
+                method: 'PUT', headers: composerJsonHeaders(),
+                body: JSON.stringify({ title: name.trim() }),
+            });
+            if (r.ok) { composerShowToast('Renamed'); loadCompositions(); loadComposition(id); }
+            else composerShowToast('Could not rename');
+        };
+        acts.appendChild(renameBtn);
+
+        // Delete is always offered; it used to live inside the score branch,
+        // so an entry without MusicXML could never be removed.
+        const delBtn = document.createElement('button');
+        delBtn.textContent = '🗑️ Delete';
+        delBtn.style.color = '#e94560';
+        delBtn.onclick = async () => {
+            const what = data.audio_url ? ' and its audio' : '';
+            if (!confirm('Delete "' + data.title + '"' + what + '?')) return;
+            const r = await fetch('/composer/compositions/' + id, {
+                method: 'DELETE', headers: composerAuthHeaders(),
+            });
+            if (r.ok) {
+                composerShowToast('Deleted');
+                content.innerHTML = '';
+                loadCompositions();
+            }
+        };
+        acts.appendChild(delBtn);
+        content.appendChild(acts);
     } catch (e) {
         composerShowToast('Error: ' + e.message);
     }

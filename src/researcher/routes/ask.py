@@ -14,7 +14,7 @@ from researcher.gpu_broker import GPU, Need
 from researcher.user_crews import get_crew
 from researcher.postprocess import _extract_usage
 from researcher.auth import get_current_user
-from researcher.ingestion import get_file_context
+from researcher.ingestion import attach_budget, get_file_context
 from researcher.image import load_image_params_from_json
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,10 @@ def register_ask_routes(app):
 
         file_context = ""
         if req.file_ids:
-            file_context = await get_file_context(db, uid, req.file_ids)
+            file_context = await get_file_context(
+                db, uid, req.file_ids, question=req.topic,
+                budget=attach_budget(
+                    research_crew.get_llm_params().get("num_ctx")))
 
         topic = file_context + req.topic
 

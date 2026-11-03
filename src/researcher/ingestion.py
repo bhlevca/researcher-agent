@@ -224,37 +224,197 @@ async def get_file_texts(db, user_id: str, file_ids: list[str]) -> list[dict]:
     return out
 
 
-async def get_file_context(db, user_id: str, file_ids: list[str]) -> str:
-    """Fetch extracted text for *file_ids* and return formatted context block."""
+# How much attached text to put in the prompt. A scanned book runs to half a
+# million characters — 448855-The Human Zoo came to 493,647 — against a
+# num_ctx of 32768, roughly 130k characters. Sending it whole does not fail
+# loudly; the tail is dropped or the call errors deep inside litellm, and
+# either way the model answers from a fragment it cannot see the edges of.
+#
+# So a long attachment is reduced to the pages that bear on the question, and
+# the block says that is what happened.
+ATTACH_BUDGET_CHARS = int(os.getenv("ATTACH_BUDGET_CHARS", "24000"))
+
+def attach_budget(num_ctx: int | None = None) -> int:
+    """Characters of attachment to allow, from the model's context window.
+
+    About a third of the window, at ~4 characters a token: the rest is the
+    system prompt, the tools, the conversation and the answer. Overriding
+    ATTACH_BUDGET_CHARS pins it regardless.
+    """
+    if os.getenv("ATTACH_BUDGET_CHARS"):
+        return ATTACH_BUDGET_CHARS
+    if not num_ctx or num_ctx <= 0:
+        return ATTACH_BUDGET_CHARS
+    return max(4000, int(num_ctx * 4 / 3))
+
+
+_PAGE_MARK = re.compile(r"^\[Page (\d+)(?: — [^\]]*)?\]$", re.M)
+
+# Words too common to tell pages apart.
+_STOP = frozenset("""a an and are as at be but by for from had has have how i
+if in into is it its of on or that the their then there these this to was were
+what when where which who why will with you your about would could should can
+do does did not no nor so than too very just me my we us our他""".split())
+
+
+def _split_pages(text: str) -> list[tuple[int, str]]:
+    """A scanned document's text, back into (page number, page text).
+
+    scan_pdf_pages and _extract_pdf both write "[Page N]" headers, which is
+    what makes selection possible — and what lets the model cite a page.
+    """
+    marks = list(_PAGE_MARK.finditer(text))
+    if not marks:
+        return []
+    out = []
+    for i, m in enumerate(marks):
+        body_end = marks[i + 1].start() if i + 1 < len(marks) else len(text)
+        out.append((int(m.group(1)), text[m.start():body_end].strip()))
+    return out
+
+
+def _keywords(question: str) -> list[str]:
+    words = [w for w in re.findall(r"\w{3,}", (question or "").lower())
+             if w not in _STOP]
+    seen, out = set(), []
+    for w in words:                    # keep order, drop repeats
+        if w not in seen:
+            seen.add(w)
+            out.append(w)
+    return out
+
+
+def select_pages(text: str, question: str, budget: int) -> tuple[str, dict]:
+    """Reduce a long document to the pages most likely to answer *question*.
+
+    Scores each page by how many of the question's distinctive words it
+    contains, weighted by how often. Returns the chosen pages in reading order
+    with their page numbers intact, and a summary for the caller to disclose.
+
+    Deliberately simple and inspectable: no embeddings, no index to keep in
+    step with the file. It is chosen pages, not a summary, so nothing is
+    paraphrased and every line the model sees is the author's.
+    """
+    pages = _split_pages(text)
+    if not pages:
+        # No page structure to select on; take the opening and say so.
+        return text[:budget], {"mode": "head", "pages": 0, "total": 0,
+                               "chars": min(len(text), budget)}
+
+    terms = _keywords(question)
+    if terms:
+        scored = []
+        for num, body in pages:
+            low = body.lower()
+            hits = sum(low.count(t) for t in terms)
+            distinct = sum(1 for t in terms if t in low)
+            # Distinct terms dominate: a page mentioning three of the asked
+            # words beats one repeating a single word many times.
+            scored.append((distinct * 1000 + hits, num, body))
+        scored.sort(key=lambda x: (-x[0], x[1]))
+        if scored[0][0] == 0:
+            terms = []                 # nothing matched: fall back to the head
+    if not terms:
+        chosen, used = [], 0
+        for num, body in pages:
+            if used + len(body) > budget:
+                break
+            chosen.append((num, body))
+            used += len(body)
+        mode = "head"
+    else:
+        chosen, used = [], 0
+        for score, num, body in scored:
+            if score == 0:
+                break
+            if used + len(body) > budget:
+                continue               # skip a page too big, keep looking
+            chosen.append((num, body))
+            used += len(body)
+        chosen.sort()
+        mode = "selected"
+
+    if not chosen:                     # one page bigger than the whole budget
+        num, body = pages[0]
+        return body[:budget], {"mode": "head", "pages": 1,
+                               "total": len(pages), "chars": budget}
+    return ("\n\n".join(b for _, b in chosen),
+            {"mode": mode, "pages": len(chosen), "total": len(pages),
+             "chars": used,
+             "numbers": [n for n, _ in chosen][:40]})
+
+
+async def get_file_context(db, user_id: str, file_ids: list[str],
+                           question: str = "",
+                           budget: int | None = None) -> str:
+    """Extracted text for *file_ids*, as a context block for the model.
+
+    *question* lets a long document be reduced to the pages that bear on it;
+    without one the opening pages are used. *budget* is the character ceiling
+    per file.
+    """
     if not file_ids:
         return ""
+    budget = ATTACH_BUDGET_CHARS if budget is None else budget
     parts: list[str] = []
     empty: list[str] = []
+    notes: list[str] = []
     for fid in file_ids:
         cursor = await db.execute(
             "SELECT filename, extracted_text FROM files WHERE id = ? AND user_id = ?",
             (fid, user_id),
         )
         row = await cursor.fetchone()
-        if row:
-            filename, text = row[0], (row[1] or "").strip()
-            if text:
-                parts.append(f"--- {filename} ---\n{text}")
-            else:
-                # Never emit an empty block under a "the text is RIGHT HERE"
-                # banner: the agent can then neither read the file nor say so,
-                # and burns every ReAct iteration trying to reconcile the two.
-                empty.append(filename)
+        if not row:
+            continue
+        filename, text = row[0], (row[1] or "").strip()
+        if not text:
+            # Never emit an empty block under a "the text is RIGHT HERE"
+            # banner: the agent can then neither read the file nor say so, and
+            # burns every ReAct iteration trying to reconcile the two.
+            empty.append(filename)
+            continue
+        if len(text) <= budget:
+            parts.append(f"--- {filename} ---\n{text}")
+            continue
+        chunk, info = select_pages(text, question, budget)
+        if info["mode"] == "selected":
+            where = ", ".join(str(n) for n in info.get("numbers", []))
+            notes.append(
+                f"{filename}: {info['pages']} of {info['total']} pages "
+                f"included (pages {where}), chosen for this question out of "
+                f"{len(text):,} characters.")
+            head = (f"--- {filename} (pages {where} of {info['total']}, "
+                    f"selected for this question) ---")
+        else:
+            notes.append(
+                f"{filename}: the first {info['chars']:,} of {len(text):,} "
+                f"characters included — ask about a topic and the relevant "
+                f"pages will be selected instead.")
+            head = (f"--- {filename} (the opening, {info['chars']:,} of "
+                    f"{len(text):,} characters) ---")
+        parts.append(f"{head}\n{chunk}")
+        logger.info("[attach] %s reduced: %s", filename, notes[-1])
+
     if not parts and not empty:
         return ""
 
     block = ""
     if parts:
+        whole = not notes
         block += (
             "=== ATTACHED FILE CONTENT (already extracted — read it directly) ===\n"
-            "The following is the FULL TEXT extracted from the user's uploaded file(s).\n"
-            "You MUST use this text to answer the user's questions. Do NOT claim you\n"
-            "cannot read attachments — the content is RIGHT HERE.\n\n"
+            + ("The following is the FULL TEXT extracted from the user's "
+               "uploaded file(s).\n" if whole else
+               "The following is extracted text from the user's uploaded "
+               "file(s). It is\nTOO LONG to include whole, so only part of it "
+               "is here:\n" + "".join(f"  - {n}\n" for n in notes) +
+               "Answer from these pages and cite their page numbers. If the "
+               "answer is not in\nthem, say which pages you were given and "
+               "ask for a narrower question —\ndo NOT guess at the rest of "
+               "the document.\n")
+            + "You MUST use this text to answer the user's questions. Do NOT "
+              "claim you\ncannot read attachments — the content is RIGHT HERE.\n\n"
             + "\n\n".join(parts)
             + "\n\n=== END OF ATTACHED FILE CONTENT ===\n\n"
         )
@@ -458,8 +618,34 @@ def _extract_pdf(data: bytes) -> tuple[str, bool]:
     return "\n\n".join(pages), ocr_used > 0
 
 
+def _text_layer_survey(data: bytes, sample: int = 12) -> dict:
+    """How much of a PDF already carries text, from a sample of its pages.
+
+    Reported before a scan starts so the person can see whether they are
+    about to re-read something that is already readable. "_text.pdf" files
+    are page images with an OCR layer bolted on: 255 of The Human Zoo's 260
+    pages had one, which is why a scan of it finished in seconds.
+    """
+    try:
+        import fitz
+
+        doc = fitz.open(stream=data, filetype="pdf")
+        total = doc.page_count
+        step = max(1, total // sample)
+        looked = with_text = 0
+        for i in range(0, total, step):
+            looked += 1
+            if doc[i].get_text().strip():
+                with_text += 1
+        doc.close()
+        return {"pages": total, "sampled": looked,
+                "with_text_layer": with_text}
+    except Exception:
+        return {}
+
+
 def scan_pdf_pages(data: bytes, model: str, first: int, last: int,
-                   on_page=None) -> tuple[str, dict]:
+                   on_page=None, force_ocr: bool = False) -> tuple[str, dict]:
     """Read a PDF page by page, reporting progress as it goes.
 
     Unlike _extract_pdf this has no page cap: the caller chose a range and
@@ -478,11 +664,12 @@ def scan_pdf_pages(data: bytes, model: str, first: int, last: int,
     first = max(1, first)
     last = total if last <= 0 else min(last, total)
     pages, stats = [], {"total": total, "first": first, "last": last,
-                        "text": 0, "ocr": 0, "empty": 0, "model": model}
+                        "text": 0, "ocr": 0, "empty": 0, "model": model,
+                        "forced": bool(force_ocr)}
 
     for i in range(first - 1, last):
         page = doc[i]
-        text = page.get_text()
+        text = "" if force_ocr else page.get_text()
         if text.strip():
             pages.append(f"[Page {i + 1}]\n{text}")
             stats["text"] += 1
@@ -1176,7 +1363,7 @@ def register_ingestion_routes(app):
     @app.post("/files/scan")
     async def scan_document(request: Request, file: UploadFile = File(...),
                             model: str = "", first_page: int = 1,
-                            last_page: int = 0):
+                            last_page: int = 0, force_ocr: bool = False):
         """Scan a document to text — SSE streaming, one event per page."""
         user = await get_current_user(request)
         uid = user["id"]
@@ -1217,7 +1404,12 @@ def register_ingestion_routes(app):
                         notice["position"], notice["estimate"], notice["ticket"]))
 
                 res.say(f"scanning {name}")
-                yield _sse("start", {"file": name, "model": chosen})
+                yield _sse("start", {
+                    "file": name, "model": chosen, "force_ocr": force_ocr,
+                    # A page-image PDF with an OCR layer added by someone else
+                    # looks identical to a plain scan until you look.
+                    **_text_layer_survey(data),
+                })
 
                 def on_page(page, total, kind, chars):
                     loop.call_soon_threadsafe(
@@ -1226,7 +1418,7 @@ def register_ingestion_routes(app):
 
                 task = loop.run_in_executor(
                     None, scan_pdf_pages, data, chosen, first_page, last_page,
-                    on_page)
+                    on_page, force_ocr)
 
                 done = 0
                 while True:

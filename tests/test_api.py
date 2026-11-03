@@ -894,3 +894,251 @@ class TestScanning:
         assert "openScanDialog" in js
         # The dialog must say that the GPU is held for the whole scan.
         assert "holds the GPU" in html
+
+
+class TestAttachingSomethingLong:
+    """A scanned book is far more text than the window holds.
+
+    448855-The Human Zoo came to 493,647 characters over 260 pages against a
+    num_ctx of 32768 (~131k characters). get_file_context used to send it
+    whole under a banner calling it the FULL TEXT: the tail is dropped or the
+    call errors inside litellm, and either way the model answers from a
+    fragment whose edges it cannot see.
+    """
+
+    BOOK = "\n\n".join(
+        [f"[Page {n}]\nfiller text about nothing in particular. " * 12
+         for n in range(1, 40)]
+        + ["[Page 40]\n" + "overcrowding in cities and the status game. " * 12]
+    )
+
+    def test_a_short_attachment_is_sent_whole(self):
+        from researcher import ingestion
+
+        text = "[Page 1]\nshort enough"
+        chunk, info = ingestion.select_pages(text, "anything", 10000)
+        assert chunk == text
+        assert info["mode"] == "head"
+
+    def test_the_pages_matching_the_question_are_chosen(self):
+        from researcher import ingestion
+
+        chunk, info = ingestion.select_pages(
+            self.BOOK, "what about overcrowding in cities?", 1200)
+        assert info["mode"] == "selected"
+        assert 40 in info["numbers"], "the only relevant page must be included"
+        assert "overcrowding" in chunk
+
+    def test_the_selection_stays_inside_the_budget(self):
+        from researcher import ingestion
+
+        for budget in (600, 1500, 6000):
+            chunk, info = ingestion.select_pages(self.BOOK, "status game", budget)
+            assert len(chunk) <= budget + 200, (budget, len(chunk))
+
+    def test_chosen_pages_keep_reading_order_and_their_numbers(self):
+        """So the model can cite a page, and quotes are not reordered."""
+        from researcher import ingestion
+
+        chunk, info = ingestion.select_pages(self.BOOK, "overcrowding status", 4000)
+        assert info["numbers"] == sorted(info["numbers"])
+        assert "[Page 40]" in chunk
+
+    def test_a_question_matching_nothing_falls_back_to_the_opening(self):
+        from researcher import ingestion
+
+        chunk, info = ingestion.select_pages(self.BOOK, "zzzqqq xyzzy", 1200)
+        assert info["mode"] == "head"
+        assert chunk.startswith("[Page 1]")
+
+    def test_an_empty_question_takes_the_opening(self):
+        from researcher import ingestion
+
+        chunk, info = ingestion.select_pages(self.BOOK, "", 1200)
+        assert info["mode"] == "head"
+        assert chunk.startswith("[Page 1]")
+
+    def test_text_with_no_page_markers_is_still_handled(self):
+        """A .docx or .txt has no pages to select."""
+        from researcher import ingestion
+
+        chunk, info = ingestion.select_pages("x" * 50000, "anything", 1000)
+        assert info["mode"] == "head"
+        assert len(chunk) == 1000
+
+    def test_a_single_page_bigger_than_the_budget_is_cut_not_dropped(self):
+        from researcher import ingestion
+
+        chunk, info = ingestion.select_pages("[Page 1]\n" + "y" * 9000, "y", 500)
+        assert len(chunk) == 500
+
+    def test_stopwords_do_not_drive_the_selection(self):
+        """"What does the author say about X" must select on X."""
+        from researcher import ingestion
+
+        assert ingestion._keywords("What does the author say about overcrowding?") \
+            == ["author", "say", "overcrowding"]
+        assert "the" not in ingestion._keywords("the the the")
+
+    def test_the_budget_follows_the_models_context_window(self):
+        from researcher import ingestion
+
+        small = ingestion.attach_budget(8192)
+        big = ingestion.attach_budget(32768)
+        assert small < big
+        # A third of the window at ~4 characters a token.
+        assert abs(big - 32768 * 4 / 3) < 10
+        assert ingestion.attach_budget(0) == ingestion.ATTACH_BUDGET_CHARS
+
+    def test_the_banner_stops_claiming_full_text_when_it_is_not(self):
+        """The old wording would have been a lie once anything was dropped."""
+        from researcher import ingestion
+
+        src = pathlib.Path(ingestion.__file__).read_text()
+        body = src[src.index("async def get_file_context("):]
+        assert "TOO LONG to include whole" in body
+        assert "cite their page numbers" in body
+        # And it must forbid filling in the rest from imagination.
+        assert "do NOT guess at the rest" in body
+
+    def test_every_call_site_passes_the_question(self):
+        """Without it a book silently degrades to its opening pages."""
+        root = pathlib.Path(__file__).resolve().parents[1] / "src" / "researcher"
+        for rel in ("routes/chat.py", "routes/ask.py"):
+            src = (root / rel).read_text()
+            for call in src.split("get_file_context(")[1:]:
+                head = call[:220]
+                assert "question=" in head, f"{rel}: a call site omits the question"
+
+    def test_get_file_context_actually_reduces_a_long_attachment(self):
+        """The behavioural test. Asserting select_pages works in isolation let
+        a mutation that sent the whole text again pass every other test here."""
+        from researcher import ingestion
+
+        async def go():
+            import aiosqlite
+
+            db = await aiosqlite.connect(":memory:")
+            await db.execute("CREATE TABLE files (id TEXT, user_id TEXT, "
+                             "filename TEXT, extracted_text TEXT)")
+            await db.execute("INSERT INTO files VALUES ('f1','u','book.pdf',?)",
+                             (self.BOOK,))
+            await db.commit()
+            block = await ingestion.get_file_context(
+                db, "u", ["f1"], question="overcrowding in cities", budget=1200)
+            await db.close()
+            return block
+
+        block = asyncio.run(go())
+        assert len(block) < len(self.BOOK), "the whole document was sent"
+        assert len(block) < 1200 + 1500, "the budget was not applied"
+        assert "TOO LONG to include whole" in block
+        assert "overcrowding" in block
+        assert "FULL TEXT" not in block
+
+    def test_a_short_attachment_still_arrives_whole_and_is_called_full(self):
+        from researcher import ingestion
+
+        async def go():
+            import aiosqlite
+
+            db = await aiosqlite.connect(":memory:")
+            await db.execute("CREATE TABLE files (id TEXT, user_id TEXT, "
+                             "filename TEXT, extracted_text TEXT)")
+            await db.execute("INSERT INTO files VALUES ('f1','u','note.txt',?)",
+                             ("a short note about cheese",))
+            await db.commit()
+            block = await ingestion.get_file_context(db, "u", ["f1"],
+                                                     question="cheese")
+            await db.close()
+            return block
+
+        block = asyncio.run(go())
+        assert "a short note about cheese" in block
+        assert "FULL TEXT" in block
+        assert "TOO LONG" not in block
+
+
+class TestAnAlreadyOcrdScan:
+    """Bogdan doubted that 255 of 260 pages "had text", since the book is an
+    image scan. Both were true: it is 260 page images with an OCR text layer
+    added by whoever made the file — hence its name, 448855-The Human
+    Zoo_text.pdf. That layer measured 3 obvious errors in 16,294 words, nearly
+    all on capitalised front matter, so reading it was right. But its quality
+    is unknowable in advance, so the choice is now exposed.
+    """
+
+    def test_a_text_layer_can_be_ignored_on_request(self):
+        from researcher import ingestion
+
+        src = pathlib.Path(ingestion.__file__).read_text()
+        body = src[src.index("def scan_pdf_pages("):src.index("def _extract_docx(")]
+        assert 'text = "" if force_ocr else page.get_text()' in body
+
+    def test_the_scan_reports_what_the_file_already_has(self):
+        """So a long wait is not spent re-reading readable pages."""
+        from researcher import ingestion
+
+        src = pathlib.Path(ingestion.__file__).read_text()
+        assert "_text_layer_survey" in src
+        body = src[src.index('@app.post("/files/scan")'):]
+        assert "_text_layer_survey(data)" in body
+
+    def test_the_survey_samples_rather_than_reading_everything(self):
+        """It runs before the scan; it must not itself take a minute."""
+        import inspect
+
+        from researcher import ingestion
+
+        src = inspect.getsource(ingestion._text_layer_survey)
+        assert "step = max(1, total // sample)" in src
+
+    def test_a_corrupt_pdf_survey_does_not_break_the_scan(self):
+        from researcher import ingestion
+
+        assert ingestion._text_layer_survey(b"not a pdf") == {}
+
+    def test_the_survey_counts_a_real_text_layer(self):
+        import fitz
+
+        from researcher import ingestion
+
+        doc = fitz.open()
+        for i in range(6):
+            doc.new_page().insert_text((72, 100), f"page {i}")
+        data = doc.tobytes()
+        doc.close()
+        s = ingestion._text_layer_survey(data)
+        assert s["pages"] == 6
+        assert s["with_text_layer"] == s["sampled"]
+
+    def test_an_image_only_pdf_shows_no_text_layer(self):
+        import fitz
+
+        from researcher import ingestion
+
+        src = fitz.open()
+        src.new_page().insert_text((72, 100), "hello")
+        flat = fitz.open()
+        for pg in src:
+            pix = pg.get_pixmap(dpi=36)
+            flat.new_page(width=pg.rect.width, height=pg.rect.height) \
+                .insert_image(pg.rect, pixmap=pix)
+        data = flat.tobytes()
+        src.close()
+        flat.close()
+        assert ingestion._text_layer_survey(data)["with_text_layer"] == 0
+
+    def test_forcing_is_recorded_in_the_result(self):
+        from researcher import ingestion
+
+        src = pathlib.Path(ingestion.__file__).read_text()
+        assert '"forced": bool(force_ocr)' in src
+
+    def test_the_dialog_offers_the_choice_and_explains_the_cost(self):
+        static = pathlib.Path(__file__).resolve().parents[1] / "src" / "researcher" / "static"
+        html = (static / "index.html").read_text()
+        assert 'id="scan-force"' in html
+        assert "much slower" in html
+        js = (static / "js" / "files.js").read_text()
+        assert "force_ocr=${force}" in js

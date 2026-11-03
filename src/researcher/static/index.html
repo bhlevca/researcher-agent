@@ -418,6 +418,10 @@
                 <input type="number" id="scan-last" value="0" min="0" style="width:5rem">
                 <span class="scan-note">0 = to the end</span>
             </label>
+            <label title="Many scanned PDFs already carry an OCR text layer added by whoever made them. That layer is usually good and costs nothing to read. Tick this to ignore it and re-read every page image yourself — much slower, and only worth it if the existing text is poor.">
+                <input type="checkbox" id="scan-force"> Re-read pages that already have text
+            </label>
+            <div id="scan-survey" class="scan-note"></div>
             <div class="scan-dialog-actions">
                 <button onclick="closeScanDialog()">Cancel</button>
                 <button id="scan-go" onclick="chooseScanFile()">Choose a PDF…</button>
@@ -438,7 +442,7 @@
     <script src="/static/js/sessions.js"></script>
     <script src="/static/js/tts.js"></script>
     <script src="/static/js/audio.js"></script>
-    <script src="/static/js/files.js?v=2"></script>
+    <script src="/static/js/files.js?v=3"></script>
     <script src="/static/js/chat.js?v=3"></script>
     <script src="/static/js/export.js"></script>
     <script src="/static/js/app.js"></script>

@@ -29,6 +29,7 @@ from researcher.postprocess import (
 )
 from researcher.auth import get_current_user
 from researcher.ingestion import (
+    attach_budget,
     get_file_context,
     get_file_texts,
     is_extraction_request,
@@ -321,7 +322,12 @@ def register_chat_routes(app):
         file_context = ""
         if req.file_ids:
             db = request.app.state.db
-            file_context = await get_file_context(db, user["id"], req.file_ids)
+            # The question decides which pages of a long attachment are sent:
+            # a scanned book is far more text than the window holds.
+            file_context = await get_file_context(
+                db, user["id"], req.file_ids, question=req.message,
+                budget=attach_budget(
+                    research_crew.get_llm_params().get("num_ctx")))
 
         # Build context from conversation history (3-tier strategy)
         model = effective_model
@@ -499,7 +505,8 @@ def register_chat_routes(app):
         file_context = ""
         if req.file_ids:
             db = request.app.state.db
-            file_context = await get_file_context(db, user["id"], req.file_ids)
+            file_context = await get_file_context(
+                db, user["id"], req.file_ids, question=req.original_query)
 
         model, _ = await resolve_model(request, user["id"])
         if model.startswith("ollama/"):

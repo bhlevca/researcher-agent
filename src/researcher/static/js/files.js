@@ -294,7 +294,9 @@ async function startScan(event) {
 
     const body = new FormData();
     body.append('file', f);
-    const qs = `?model=${encodeURIComponent(model)}&first_page=${first}&last_page=${last}`;
+    const force = document.getElementById('scan-force').checked;
+    const qs = `?model=${encodeURIComponent(model)}&first_page=${first}`
+             + `&last_page=${last}&force_ocr=${force}`;
 
     try {
         const r = await fetch('/files/scan' + qs, {
@@ -327,7 +329,20 @@ async function startScan(event) {
                 if (ev === 'queue') {
                     box.textContent = d.text || 'Waiting for the GPU…';
                 } else if (ev === 'start') {
-                    box.textContent = `Reading ${d.file} with ${d.model}…`;
+                    // Say whether the file already carries text, so a long
+                    // wait is not spent re-reading what was already readable.
+                    let had = '';
+                    if (d.sampled && d.with_text_layer !== undefined) {
+                        const share = d.with_text_layer / d.sampled;
+                        if (d.force_ocr && share > 0.5) {
+                            had = ' — note: it already has a text layer, which you chose to ignore';
+                        } else if (share > 0.9) {
+                            had = ' — most pages already have text, so this will be quick';
+                        } else if (share > 0.1) {
+                            had = ` — about ${Math.round(share * 100)}% of pages already have text`;
+                        }
+                    }
+                    box.textContent = `Reading ${d.file} with ${d.model}${had}…`;
                 } else if (ev === 'page') {
                     pages++;
                     const each = (Date.now() - started) / 1000 / pages;
@@ -339,7 +354,8 @@ async function startScan(event) {
                 } else if (ev === 'done') {
                     const s = d.stats;
                     const bits = [`${s.ocr + s.text} page(s) read`];
-                    if (s.text) bits.push(`${s.text} already had text`);
+                    if (s.text) bits.push(`${s.text} already had a text layer`);
+                    if (s.ocr) bits.push(`${s.ocr} read by ${s.model}`);
                     if (s.empty) bits.push(`${s.empty} unreadable`);
                     box.textContent = `✅ ${d.filename}: ${bits.join(', ')} — ${d.chars.toLocaleString()} characters.`;
                     if (d.too_long_for_context) {

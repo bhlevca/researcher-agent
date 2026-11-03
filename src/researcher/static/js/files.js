@@ -132,14 +132,33 @@ async function downloadFileText(fileId, filename, fmt) {
             return;
         }
         const blob = await resp.blob();
+        const name = filename.replace(/\.[^.]+$/, '') + '.' + fmt;
+        // Chrome/Edge on localhost or https offer a real "Save as" dialog;
+        // elsewhere the browser downloads under this name instead.
+        if (window.showSaveFilePicker) {
+            try {
+                const handle = await window.showSaveFilePicker({
+                    suggestedName: name,
+                    types: [{ description: fmt.toUpperCase() + ' document',
+                              accept: { [blob.type || 'application/octet-stream']: ['.' + fmt] } }],
+                });
+                const w = await handle.createWritable();
+                await w.write(blob);
+                await w.close();
+                showToast('Saved ' + handle.name);
+                return;
+            } catch (e) {
+                if (e && e.name === 'AbortError') return;   // cancelled
+            }
+        }
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = filename.replace(/\.[^.]+$/, '') + '.' + fmt;
+        a.download = name;
         document.body.appendChild(a);
         a.click();
         a.remove();
-        URL.revokeObjectURL(url);
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
     } catch (e) {
         showToast('Export error: ' + e.message);
     }
@@ -278,6 +297,32 @@ function chooseScanFile() {
     document.getElementById('scan-input').click();
 }
 
+// What to do with a finished scan: keep the text as a document, or use it.
+// Buttons rather than an automatic dialog, because browsers only open a
+// "Save as" dialog in answer to a click.
+function scanResultActions(fileId, filename) {
+    const row = document.createElement('div');
+    row.className = 'scan-actions';
+    const add = (label, title, onclick) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = label;
+        b.title = title;
+        b.onclick = onclick;
+        row.appendChild(b);
+    };
+    add('💾 Save as DOCX', 'Save the scanned text as a Word document',
+        () => downloadFileText(fileId, filename, 'docx'));
+    add('💾 Save as ODT', 'Save the scanned text as a LibreOffice document',
+        () => downloadFileText(fileId, filename, 'odt'));
+    add('📎 Attach to chat', 'Ask questions about it in this conversation', (ev) => {
+        attachExistingFile(fileId, filename);
+        ev.target.disabled = true;
+        ev.target.textContent = '✓ Attached';
+    });
+    return row;
+}
+
 async function startScan(event) {
     const f = event.target.files && event.target.files[0];
     event.target.value = '';                 // so the same file can be picked again
@@ -359,10 +404,13 @@ async function startScan(event) {
                     if (s.empty) bits.push(`${s.empty} unreadable`);
                     box.textContent = `✅ ${d.filename}: ${bits.join(', ')} — ${d.chars.toLocaleString()} characters.`;
                     if (d.too_long_for_context) {
-                        box.textContent += ' This is far more text than the model'
-                            + ' can hold at once — ask about a part of it rather'
-                            + ' than attaching the whole thing.';
+                        // Not a warning any more: attaching it works, the
+                        // pages that answer each question are picked for it.
+                        box.textContent += ' Attach it and ask away — it is too'
+                            + ' long to read at once, so the pages relevant to'
+                            + ' each question are picked automatically.';
                     }
+                    box.appendChild(scanResultActions(d.file_id, d.filename));
                     if (typeof loadFilesList === 'function') loadFilesList();
                     showToast('Scan complete: ' + d.filename);
                 } else if (ev === 'error') {

@@ -709,3 +709,10 @@ header h1 { font-size: 1.2rem; font-weight: 600; color: #e94560; }
 
 .scan-dialog-actions button:last-child { background: #e94560; border-color: #e94560; }
 .scan-dialog-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.scan-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.4rem; }
+.scan-actions button {
+    background: #0f3460; border: 1px solid #1a3a6e; color: #cbd5e1;
+    cursor: pointer; font-size: 0.75rem; padding: 0.25rem 0.6rem; border-radius: 0.3rem;
+}
+.scan-actions button:disabled { color: #4ade80; border-color: #166534; cursor: default; }

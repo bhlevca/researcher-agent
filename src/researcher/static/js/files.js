@@ -220,3 +220,141 @@ async function deleteFileFromPanel(id, name) {
         }
     } catch (e) { showToast('Error deleting file'); }
 }
+
+
+// ══════════════════════════════════════════════
+// ── Scanning a document ──
+//
+// One button. It asks which model to read with (the one best suited to pages
+// is preselected), then streams a page at a time. The scan holds the GPU for
+// its whole run, which is accepted rather than worked around: the dialog says
+// so, and everyone else sees "scan — page 42 of 400" in the GPU panel.
+// ══════════════════════════════════════════════
+
+let _scanModels = [];
+
+async function openScanDialog() {
+    const dlg = document.getElementById('scan-dialog');
+    const sel = document.getElementById('scan-model');
+    sel.innerHTML = '<option>loading…</option>';
+    dlg.style.display = 'flex';
+    try {
+        const r = await fetch('/files/scan/models', { headers: authHeaders() });
+        const d = await r.json();
+        _scanModels = d.models || [];
+        sel.innerHTML = '';
+        if (!_scanModels.length) {
+            sel.innerHTML = '<option value="">no vision model installed</option>';
+            document.getElementById('scan-model-why').textContent = d.hint || '';
+            document.getElementById('scan-go').disabled = true;
+            return;
+        }
+        for (const m of _scanModels) {
+            const o = document.createElement('option');
+            o.value = m.name;
+            o.textContent = `${m.name} (${m.size_gb} GB)${m.recommended ? ' — recommended' : ''}`;
+            sel.appendChild(o);
+        }
+        sel.value = d.recommended || _scanModels[0].name;
+        sel.onchange = showScanWhy;
+        showScanWhy();
+        document.getElementById('scan-go').disabled = false;
+    } catch (e) {
+        sel.innerHTML = '<option value="">could not reach the server</option>';
+    }
+}
+
+function showScanWhy() {
+    const name = document.getElementById('scan-model').value;
+    const m = _scanModels.find(x => x.name === name);
+    document.getElementById('scan-model-why').textContent = m ? m.why : '';
+}
+
+function closeScanDialog() {
+    document.getElementById('scan-dialog').style.display = 'none';
+}
+
+function chooseScanFile() {
+    document.getElementById('scan-input').click();
+}
+
+async function startScan(event) {
+    const f = event.target.files && event.target.files[0];
+    event.target.value = '';                 // so the same file can be picked again
+    if (!f) return;
+    closeScanDialog();
+
+    const model = document.getElementById('scan-model').value;
+    const first = parseInt(document.getElementById('scan-first').value, 10) || 1;
+    const last = parseInt(document.getElementById('scan-last').value, 10) || 0;
+
+    const box = document.getElementById('scan-progress');
+    box.style.display = 'block';
+    box.textContent = `Scanning ${f.name}…`;
+
+    const body = new FormData();
+    body.append('file', f);
+    const qs = `?model=${encodeURIComponent(model)}&first_page=${first}&last_page=${last}`;
+
+    try {
+        const r = await fetch('/files/scan' + qs, {
+            method: 'POST', headers: authHeaders(), body,
+        });
+        if (!r.ok) {
+            let detail = r.statusText;
+            try { detail = (await r.json()).detail || detail; } catch (e) { /* keep */ }
+            box.textContent = 'Scan failed: ' + detail;
+            return;
+        }
+        const reader = r.body.getReader();
+        const dec = new TextDecoder();
+        let buf = '', pages = 0, started = Date.now();
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += dec.decode(value, { stream: true });
+            while (buf.includes('\n\n')) {
+                const idx = buf.indexOf('\n\n');
+                const chunk = buf.slice(0, idx);
+                buf = buf.slice(idx + 2);
+                let ev = '', data = '';
+                for (const line of chunk.split('\n')) {
+                    if (line.startsWith('event: ')) ev = line.slice(7);
+                    else if (line.startsWith('data: ')) data += line.slice(6);
+                }
+                if (!data) continue;
+                const d = JSON.parse(data);
+                if (ev === 'queue') {
+                    box.textContent = d.text || 'Waiting for the GPU…';
+                } else if (ev === 'start') {
+                    box.textContent = `Reading ${d.file} with ${d.model}…`;
+                } else if (ev === 'page') {
+                    pages++;
+                    const each = (Date.now() - started) / 1000 / pages;
+                    const leftN = Math.max(0, d.total - d.page);
+                    const left = leftN ? ` · about ${Math.round(leftN * each)}s left` : '';
+                    box.textContent = `Page ${d.page} of ${d.total}` +
+                        (d.kind === 'ocr' ? ' (scanned)' : d.kind === 'text' ? ' (text layer)' : ' — unreadable') +
+                        left;
+                } else if (ev === 'done') {
+                    const s = d.stats;
+                    const bits = [`${s.ocr + s.text} page(s) read`];
+                    if (s.text) bits.push(`${s.text} already had text`);
+                    if (s.empty) bits.push(`${s.empty} unreadable`);
+                    box.textContent = `✅ ${d.filename}: ${bits.join(', ')} — ${d.chars.toLocaleString()} characters.`;
+                    if (d.too_long_for_context) {
+                        box.textContent += ' This is far more text than the model'
+                            + ' can hold at once — ask about a part of it rather'
+                            + ' than attaching the whole thing.';
+                    }
+                    if (typeof loadFilesList === 'function') loadFilesList();
+                    showToast('Scan complete: ' + d.filename);
+                } else if (ev === 'error') {
+                    box.textContent = 'Scan failed: ' + d;
+                }
+            }
+        }
+    } catch (e) {
+        box.textContent = 'Scan failed: ' + e.message;
+    }
+}

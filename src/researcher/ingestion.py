@@ -21,10 +21,10 @@ import logging
 from pathlib import Path
 from datetime import datetime, timezone
 
-from researcher.gpu_broker import GPU, Need
+from researcher.gpu_broker import GPU, Need, queue_message
 
 from fastapi import HTTPException, Request, UploadFile, File
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -33,7 +33,14 @@ logger = logging.getLogger(__name__)
 # Config
 # ---------------------------------------------------------------------------
 
-MAX_FILE_SIZE = 10 * 1024 * 1024        # 10 MB per file
+# Per-file upload cap. 10 MB was arbitrary and too small for a scanned book,
+# which runs to tens or hundreds of megabytes. Raised and made configurable.
+#
+# Size is not what makes a book hard, though: see _extract_pdf. A scanned PDF
+# is OCR'd one page at a time through a vision model, holding the GPU, inside
+# this HTTP request — so a long one is bounded by OCR_MAX_PAGES and by how
+# long the browser will wait, not by megabytes.
+MAX_FILE_SIZE = int(os.getenv("MAX_FILE_SIZE_MB", "200")) * 1024 * 1024
 MAX_TEXT_CHARS = 50_000                  # truncate extracted text
 MAX_FILES_PER_USER = 50
 IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp', '.tif', '.tiff', '.bmp', '.gif'}
@@ -133,16 +140,17 @@ def _render_page_png(page) -> bytes | None:
         return None
 
 
-def _ocr_image(png: bytes) -> str:
+def _ocr_image(png: bytes, model: str | None = None) -> str:
     """OCR a PNG via an Ollama vision model. Returns '' on any failure."""
     import requests
 
+    model = model or OCR_MODEL
     try:
         resp = requests.post(
             f"{OLLAMA_BASE}/api/generate",
             json={
-                "model": OCR_MODEL,
-                "prompt": _ocr_prompt(OCR_MODEL),
+                "model": model,
+                "prompt": _ocr_prompt(model),
                 "images": [base64.b64encode(png).decode()],
                 "stream": False,
                 "options": {"temperature": 0, "num_predict": 4096},
@@ -299,6 +307,106 @@ def _extract_json(data: bytes) -> str:
         return text
 
 
+# ---------------------------------------------------------------------------
+# Choosing the model to scan with.
+#
+# Any vision model in Ollama can read a page, but they are not equally good at
+# it, and the differences were learned the hard way:
+#
+#   deepseek-ocr:3b   purpose-built for pages: dense text, fastest. Measured
+#                     here ~5x faster and more complete than qwen3-vl:8b on
+#                     scans, and it gets its own prompt format automatically.
+#   qwen3-vl:*        "VL" is vision-language, not video. A document model in
+#                     its own right and generally better at layout, tables and
+#                     non-Latin scripts than a plain OCR model — but slower,
+#                     and measured here to return an EMPTY string above
+#                     ~1024 px, which looks like OCR failing in silence rather
+#                     than an error. Hence MAX_IMAGE_EDGE.
+#   everything else   a general chat model that happens to accept images.
+#                     Usable, but expect prose about the page instead of the
+#                     text on it.
+#
+# Ranked rather than hardcoded so the list follows what is actually installed.
+# ---------------------------------------------------------------------------
+
+_SCAN_RANK = (
+    ("deepseek-ocr", 100, "purpose-built for pages — fastest on dense text"),
+    ("qwen3-vl", 70, "document model — better on tables and non-Latin scripts, slower"),
+    ("qwen3.6", 55, "general vision model"),
+    ("qwen3.5", 50, "general vision model"),
+    ("gemma4", 45, "general vision model"),
+    ("gemma3", 40, "general vision model"),
+    ("mistral-small", 35, "general vision model"),
+)
+
+
+def _scan_score(name: str) -> tuple[int, str]:
+    low = (name or "").lower()
+    for tag, score, why in _SCAN_RANK:
+        if tag in low:
+            # A smaller variant of the same family is quicker per page, and
+            # page reading does not reward size the way reasoning does.
+            if any(s in low for s in (":3b", ":8b", "e4b")):
+                score += 5
+            return score, why
+    return 10, "vision model, untested for pages"
+
+
+def scan_models() -> list[dict]:
+    """Installed vision models, best for scanning first.
+
+    Asks Ollama what it has and which of those accept images, so the list
+    cannot drift from the machine. An unreachable Ollama returns an empty
+    list, and the caller says so rather than guessing.
+    """
+    import requests
+
+    base = os.getenv("OLLAMA_BASE", "http://localhost:11434")
+    try:
+        tags = requests.get(f"{base}/api/tags", timeout=10).json().get("models", [])
+    except Exception as e:
+        logger.warning("[scan] could not list Ollama models: %s", e)
+        return []
+
+    out = []
+    for m in tags:
+        name = m.get("name") or ""
+        try:
+            caps = requests.post(f"{base}/api/show", json={"model": name},
+                                 timeout=10).json().get("capabilities") or []
+        except Exception:
+            continue
+        if "vision" not in caps:
+            continue
+        score, why = _scan_score(name)
+        out.append({
+            "name": name,
+            "size_gb": round((m.get("size") or 0) / 2**30, 1),
+            "recommended": False,
+            "why": why,
+            "_score": score,
+        })
+    out.sort(key=lambda m: (-m["_score"], m["size_gb"]))
+    for m in out:
+        m.pop("_score")
+    if out:
+        out[0]["recommended"] = True
+    return out
+
+
+def best_scan_model() -> str:
+    """The model to scan with unless the person picks another."""
+    models = scan_models()
+    if not models:
+        return OCR_MODEL
+    # A configured OCR_MODEL that is actually installed wins: it is a choice
+    # someone made, and the Params panel shows it.
+    installed = {m["name"] for m in models}
+    if OCR_MODEL in installed:
+        return OCR_MODEL
+    return models[0]["name"]
+
+
 def _extract_pdf(data: bytes) -> tuple[str, bool]:
     try:
         import fitz  # PyMuPDF
@@ -310,6 +418,7 @@ def _extract_pdf(data: bytes) -> tuple[str, bool]:
     doc = fitz.open(stream=data, filetype="pdf")
     pages = []
     ocr_used = 0
+    skipped = 0
     for i, page in enumerate(doc):
         text = page.get_text()
         if text.strip():
@@ -319,6 +428,7 @@ def _extract_pdf(data: bytes) -> tuple[str, bool]:
         # produce an empty attachment block that the agent could neither read nor
         # admit to. OCR it instead.
         if not OCR_ENABLED or ocr_used >= OCR_MAX_PAGES:
+            skipped += 1
             continue
         png = _render_page_png(page)
         if png is None:
@@ -329,10 +439,71 @@ def _extract_pdf(data: bytes) -> tuple[str, bool]:
             pages.append(f"[Page {i + 1} — OCR]\n{ocr_text}")
             logger.info("[OCR] Page %d recovered %d chars via %s",
                         i + 1, len(ocr_text), OCR_MODEL)
+    total = doc.page_count
     doc.close()
     if ocr_used:
-        logger.info("[OCR] %d scanned page(s) transcribed", ocr_used)
+        logger.info("[OCR] %d scanned page(s) transcribed, %d skipped",
+                    ocr_used, skipped)
+    if skipped:
+        # Said in the text itself, because this is what the agent will read.
+        # Dropping these pages in silence made a 400-page scan look like a
+        # 20-page document that simply ended.
+        logger.warning("[OCR] %d of %d pages were NOT read (OCR_MAX_PAGES=%d)",
+                       skipped, total, OCR_MAX_PAGES)
+        pages.append(
+            f"[!! {skipped} of {total} pages were not read. OCR stops after "
+            f"{OCR_MAX_PAGES} scanned pages (OCR_MAX_PAGES, or the Params "
+            f"panel). This document is incomplete — do not treat it as the "
+            f"whole text.]")
     return "\n\n".join(pages), ocr_used > 0
+
+
+def scan_pdf_pages(data: bytes, model: str, first: int, last: int,
+                   on_page=None) -> tuple[str, dict]:
+    """Read a PDF page by page, reporting progress as it goes.
+
+    Unlike _extract_pdf this has no page cap: the caller chose a range and
+    accepts how long it takes. *on_page* is called with
+    (page_number, total, kind, chars) after each page, where kind is "text"
+    for a page that had a text layer and "ocr" for one that was read by the
+    vision model.
+
+    Returns the text and a summary, so the caller can say what actually
+    happened rather than leaving the person to guess from the length.
+    """
+    import fitz  # PyMuPDF
+
+    doc = fitz.open(stream=data, filetype="pdf")
+    total = doc.page_count
+    first = max(1, first)
+    last = total if last <= 0 else min(last, total)
+    pages, stats = [], {"total": total, "first": first, "last": last,
+                        "text": 0, "ocr": 0, "empty": 0, "model": model}
+
+    for i in range(first - 1, last):
+        page = doc[i]
+        text = page.get_text()
+        if text.strip():
+            pages.append(f"[Page {i + 1}]\n{text}")
+            stats["text"] += 1
+            kind, chars = "text", len(text)
+        else:
+            png = _render_page_png(page)
+            ocr_text = _ocr_image(png, model=model) if png else ""
+            if ocr_text:
+                pages.append(f"[Page {i + 1} — scanned]\n{ocr_text}")
+                stats["ocr"] += 1
+                kind, chars = "ocr", len(ocr_text)
+            else:
+                # Said in the text rather than dropped. A silently missing page
+                # is indistinguishable from a blank one.
+                pages.append(f"[Page {i + 1} — could not be read]")
+                stats["empty"] += 1
+                kind, chars = "empty", 0
+        if on_page:
+            on_page(i + 1, total, kind, chars)
+    doc.close()
+    return "\n\n".join(pages), stats
 
 
 def _extract_docx(data: bytes) -> str:
@@ -755,7 +926,12 @@ def register_ingestion_routes(app):
 
             data = await f.read()
             if len(data) > MAX_FILE_SIZE:
-                results.append({"filename": name, "error": "File too large (max 10 MB)"})
+                results.append({
+                    "filename": name,
+                    "error": f"File too large: {len(data) / 2**20:.0f} MB, "
+                             f"limit {MAX_FILE_SIZE // 2**20} MB "
+                             f"(raise MAX_FILE_SIZE_MB)",
+                })
                 continue
 
             try:
@@ -973,3 +1149,137 @@ def register_ingestion_routes(app):
             media_type=media_type,
             headers={"Content-Disposition": f'attachment; filename="{stem}{ext}"'},
         )
+
+    # ------------------------------------------------------------------
+    # Scanning a document
+    #
+    # One button, one long job. A scan reads a page at a time through a vision
+    # model and holds the GPU for the whole run, which is accepted rather than
+    # worked around — so the job says what it is doing, both to the person who
+    # started it and to everyone else through the GPU panel.
+    # ------------------------------------------------------------------
+
+    @app.get("/files/scan/models")
+    async def scan_model_choices(request: Request):
+        """Installed vision models, best for reading pages first."""
+        await get_current_user(request)
+        models = scan_models()
+        return {
+            "models": models,
+            "recommended": models[0]["name"] if models else "",
+            "configured": OCR_MODEL,
+            "hint": "" if models else
+                    "No vision model found in Ollama. Pull one, e.g. "
+                    "`ollama pull deepseek-ocr:3b`.",
+        }
+
+    @app.post("/files/scan")
+    async def scan_document(request: Request, file: UploadFile = File(...),
+                            model: str = "", first_page: int = 1,
+                            last_page: int = 0):
+        """Scan a document to text — SSE streaming, one event per page."""
+        user = await get_current_user(request)
+        uid = user["id"]
+        name = file.filename or "unnamed"
+        ext = Path(name).suffix.lower()
+        if ext != ".pdf":
+            raise HTTPException(
+                status_code=400,
+                detail="Scanning reads PDFs. For a photo of a page, attach it "
+                       "with 📎 instead.")
+
+        data = await file.read()
+        if len(data) > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large: {len(data) / 2**20:.0f} MB, limit "
+                       f"{MAX_FILE_SIZE // 2**20} MB (raise MAX_FILE_SIZE_MB)")
+
+        chosen = model.strip() or best_scan_model()
+        installed = {m["name"] for m in scan_models()}
+        if installed and chosen not in installed:
+            raise HTTPException(status_code=400,
+                                detail=f"{chosen} is not an installed vision model")
+
+        def _sse(event: str, payload) -> str:
+            return f"event: {event}\ndata: {json.dumps(payload)}\n\n"
+
+        async def event_stream():
+            progress: asyncio.Queue = asyncio.Queue()
+            loop = asyncio.get_running_loop()
+
+            # The whole scan runs inside one reservation: it is the GPU's
+            # occupant until it finishes, and says so to everyone.
+            async with GPU.reserve(Need("ollama", chosen), "scan",
+                                   user=uid) as res:
+                async for notice in res.wait():
+                    yield _sse("queue", queue_message(
+                        notice["position"], notice["estimate"], notice["ticket"]))
+
+                res.say(f"scanning {name}")
+                yield _sse("start", {"file": name, "model": chosen})
+
+                def on_page(page, total, kind, chars):
+                    loop.call_soon_threadsafe(
+                        progress.put_nowait,
+                        {"page": page, "total": total, "kind": kind, "chars": chars})
+
+                task = loop.run_in_executor(
+                    None, scan_pdf_pages, data, chosen, first_page, last_page,
+                    on_page)
+
+                done = 0
+                while True:
+                    drain = asyncio.ensure_future(progress.get())
+                    finished, _ = await asyncio.wait(
+                        {drain, task}, return_when=asyncio.FIRST_COMPLETED)
+                    if drain in finished:
+                        ev = drain.result()
+                        done += 1
+                        res.say(f"scanning {name}: page {ev['page']} of "
+                                f"{ev['total']}")
+                        yield _sse("page", ev)
+                        continue
+                    drain.cancel()
+                    break
+
+                while not progress.empty():          # anything still queued
+                    ev = progress.get_nowait()
+                    yield _sse("page", ev)
+
+                try:
+                    text, stats = task.result()
+                except Exception as e:
+                    logger.exception("[scan] failed")
+                    yield _sse("error", str(e))
+                    return
+
+            # Stored outside the reservation: the GPU is free the moment the
+            # last page is read.
+            fid = uuid.uuid4().hex[:10]
+            now = datetime.now(timezone.utc).isoformat()
+            user_dir = UPLOAD_DIR / uid
+            user_dir.mkdir(parents=True, exist_ok=True)
+            (user_dir / f"{fid}_{name}").write_bytes(data)
+            db = request.app.state.db
+            await db.execute(
+                "INSERT INTO files "
+                "(id, user_id, filename, extension, size, extracted_text, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (fid, uid, name, ext, len(data), text, now))
+            await db.commit()
+            logger.info("[scan] %s: %d page(s) read (%d text, %d scanned, "
+                        "%d unreadable) with %s", name,
+                        stats["last"] - stats["first"] + 1, stats["text"],
+                        stats["ocr"], stats["empty"], chosen)
+
+            yield _sse("done", {
+                "file_id": fid, "filename": name, "chars": len(text),
+                "stats": stats,
+                # A book is far more text than the model's context window, so
+                # say so rather than letting it be attached and silently cut.
+                "too_long_for_context": len(text) > 60000,
+            })
+
+        return StreamingResponse(event_stream(),
+                                 media_type="text/event-stream")

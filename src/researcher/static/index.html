@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Research Agent</title>
-    <link rel="stylesheet" href="/static/css/main.css?v=3">
+    <link rel="stylesheet" href="/static/css/main.css?v=4">
 </head>
 <body>
     <header>
@@ -390,6 +390,8 @@
     <div id="input-area">
         <input type="file" id="file-input" multiple accept=".txt,.csv,.pdf,.docx,.xlsx,.md,.json,.png,.jpg,.jpeg,.webp,.tif,.tiff,.bmp,.gif" style="display:none" onchange="handleFileSelect(event)">
         <button id="attach-btn" onclick="document.getElementById('file-input').click()" title="Attach files (TXT, CSV, PDF, DOCX, XLSX, MD, JSON, or a scan/photo to OCR)">📎</button>
+        <input type="file" id="scan-input" accept=".pdf" style="display:none" onchange="startScan(event)">
+        <button id="scan-btn" onclick="openScanDialog()" title="Scan a PDF — reads every page with a vision model. Holds the GPU until it finishes.">📄 Scan</button>
         <textarea id="user-input" placeholder="Ask me anything…  (tip: start with  image:  or  video:  to generate directly and skip the agent)" rows="1" autofocus></textarea>
         <button id="mic-btn" onclick="toggleMic()" title="Voice input (click to record, click again to stop)">🎤</button>
         <button id="stop-speak-btn" onclick="stopSpeaking()" title="Stop speaking">⏹ Stop</button>
@@ -397,6 +399,31 @@
         <button id="send-btn" onclick="lastInputWasVoice = false; sendMessage()">Send</button>
     </div>
     <div class="file-chips" id="file-chips"></div>
+    <div id="scan-progress" class="scan-progress" style="display:none"></div>
+
+    <!-- Scan options. Opened by the Scan button; the model is preselected. -->
+    <div id="scan-dialog" class="scan-dialog" style="display:none">
+        <div class="scan-dialog-box">
+            <h3>Scan a document</h3>
+            <p class="scan-note">Every page is read by a vision model. This
+               holds the GPU until it finishes, and everyone else will see it
+               in the GPU panel.</p>
+            <label>Read with
+                <select id="scan-model"></select>
+            </label>
+            <div id="scan-model-why" class="scan-note"></div>
+            <label>Pages
+                <input type="number" id="scan-first" value="1" min="1" style="width:5rem">
+                to
+                <input type="number" id="scan-last" value="0" min="0" style="width:5rem">
+                <span class="scan-note">0 = to the end</span>
+            </label>
+            <div class="scan-dialog-actions">
+                <button onclick="closeScanDialog()">Cancel</button>
+                <button id="scan-go" onclick="chooseScanFile()">Choose a PDF…</button>
+            </div>
+        </div>
+    </div>
 
     <div class="toast" id="toast"></div>
 
@@ -411,7 +438,7 @@
     <script src="/static/js/sessions.js"></script>
     <script src="/static/js/tts.js"></script>
     <script src="/static/js/audio.js"></script>
-    <script src="/static/js/files.js"></script>
+    <script src="/static/js/files.js?v=2"></script>
     <script src="/static/js/chat.js?v=3"></script>
     <script src="/static/js/export.js"></script>
     <script src="/static/js/app.js"></script>

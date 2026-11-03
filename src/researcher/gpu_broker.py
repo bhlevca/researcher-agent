@@ -113,6 +113,17 @@ class Reservation:
     def ticket(self) -> int:
         return self.entry.ticket
 
+    def say(self, note: str) -> None:
+        """Tell everyone else what this job is doing, live.
+
+        The note already appears under each row of the GPU panel, where it was
+        only ever set by someone asking to jump the queue. A long job — a
+        document scan runs a vision model once per page and holds the card the
+        whole time — should say so itself, so a person who finds the GPU busy
+        knows what it is busy with and roughly how much longer.
+        """
+        self.entry.note = (note or "").strip()[:200]
+
     async def wait(self):
         """Async generator: yields position notices, ends when it is our turn.
 
@@ -145,6 +156,9 @@ class _Passthrough:
     @property
     def ticket(self) -> int:
         return 0
+
+    def say(self, note: str) -> None:
+        return
 
     async def wait(self):
         return

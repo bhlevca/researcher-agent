@@ -6,6 +6,7 @@ Uses httpx AsyncClient with mocked heavy dependencies (CrewAI, Ollama, Whisper, 
 import asyncio
 import json
 import io
+import pathlib
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -770,3 +771,126 @@ class TestExport:
         resp = client.post("/export", headers={**auth_headers, "Content-Type": "application/json"},
                            json={"content": "test", "format": "pdf", "filename": "test"})
         assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Scanning a document. The 10 MB cap was arbitrary; the silent page cap behind
+# it was the real bug — a 400-page book came back as 20 pages that merely
+# appeared to end.
+# ---------------------------------------------------------------------------
+
+class TestScanning:
+    def test_the_size_cap_is_configurable_and_not_ten_megabytes(self):
+        from researcher import ingestion
+
+        assert ingestion.MAX_FILE_SIZE > 10 * 1024 * 1024
+        src = pathlib.Path(ingestion.__file__).read_text()
+        assert 'os.getenv("MAX_FILE_SIZE_MB"' in src
+
+    def test_the_error_names_the_actual_size_and_limit(self):
+        from researcher import ingestion
+
+        src = pathlib.Path(ingestion.__file__).read_text()
+        assert "MAX_FILE_SIZE_MB" in src
+        assert '"File too large (max 10 MB)"' not in src
+
+    def test_skipped_pages_are_announced_in_the_text(self):
+        """They used to be dropped with a bare `continue`."""
+        from researcher import ingestion
+
+        src = pathlib.Path(ingestion.__file__).read_text()
+        body = src[src.index("def _extract_pdf("):src.index("def scan_pdf_pages(")]
+        assert "skipped += 1" in body
+        assert "were not read" in body
+        # The wording wraps across f-string lines, so match a fragment.
+        assert "do not treat it as the" in body
+
+    def test_a_page_the_model_cannot_read_is_recorded_not_dropped(self):
+        from researcher import ingestion
+
+        src = pathlib.Path(ingestion.__file__).read_text()
+        body = src[src.index("def scan_pdf_pages("):src.index("def _extract_docx(")]
+        assert "could not be read" in body
+        assert 'stats["empty"]' in body
+
+    def test_the_scan_has_no_page_cap_of_its_own(self):
+        """The caller chose a range and accepts the wait."""
+        from researcher import ingestion
+
+        src = pathlib.Path(ingestion.__file__).read_text()
+        body = src[src.index("def scan_pdf_pages("):src.index("def _extract_docx(")]
+        assert "OCR_MAX_PAGES" not in body
+
+    def test_deepseek_ocr_is_preferred_and_qwen_vl_is_not_called_video(self):
+        from researcher import ingestion
+
+        assert ingestion._scan_score("deepseek-ocr:3b")[0] > \
+            ingestion._scan_score("qwen3-vl:8b")[0]
+        # Both are document models; the ranking is about speed on dense text.
+        assert "document model" in ingestion._scan_score("qwen3-vl:8b")[1]
+        assert ingestion._scan_score("qwen3-vl:8b")[0] > \
+            ingestion._scan_score("llama3:8b")[0]
+
+    def test_an_unreachable_ollama_gives_an_empty_list_not_a_crash(self, monkeypatch):
+        import requests
+
+        from researcher import ingestion
+
+        def _boom(*a, **k):
+            raise requests.ConnectionError("refused")
+
+        monkeypatch.setattr(requests, "get", _boom)
+        assert ingestion.scan_models() == []
+        # And the configured model is still offered as the fallback.
+        assert ingestion.best_scan_model() == ingestion.OCR_MODEL
+
+    def test_the_scan_holds_the_gpu_and_says_so_to_everyone(self):
+        from researcher import ingestion
+
+        src = pathlib.Path(ingestion.__file__).read_text()
+        body = src[src.index('@app.post("/files/scan")'):]
+        assert 'GPU.reserve(Need("ollama", chosen), "scan"' in body
+        assert "res.say(" in body, "the queue must show what it is scanning"
+        assert "queue_message(" in body
+
+    def test_a_running_job_can_publish_progress_to_the_queue(self):
+        import inspect
+
+        from researcher.gpu_broker import Reservation, _Passthrough
+
+        assert "self.entry.note" in inspect.getsource(Reservation.say)
+        # The pass-through must honour the same interface or a nested
+        # reservation would crash on it.
+        assert hasattr(_Passthrough, "say")
+
+    def test_only_pdfs_are_scanned(self):
+        from researcher import ingestion
+
+        src = pathlib.Path(ingestion.__file__).read_text()
+        body = src[src.index('@app.post("/files/scan")'):]
+        assert 'ext != ".pdf"' in body
+
+    def test_a_model_that_is_not_installed_is_refused(self):
+        from researcher import ingestion
+
+        src = pathlib.Path(ingestion.__file__).read_text()
+        body = src[src.index('@app.post("/files/scan")'):]
+        assert "not an installed vision model" in body
+
+    def test_a_book_is_flagged_as_too_long_for_the_context(self):
+        """Nothing truncates the text, so attaching a book silently overflows."""
+        from researcher import ingestion
+
+        src = pathlib.Path(ingestion.__file__).read_text()
+        assert '"too_long_for_context"' in src
+
+    def test_the_page_is_wired_up(self):
+        static = pathlib.Path(__file__).resolve().parents[1] / "src" / "researcher" / "static"
+        html = (static / "index.html").read_text()
+        assert 'id="scan-btn"' in html
+        assert 'id="scan-model"' in html
+        js = (static / "js" / "files.js").read_text()
+        assert "/files/scan/models" in js
+        assert "openScanDialog" in js
+        # The dialog must say that the GPU is held for the whole scan.
+        assert "holds the GPU" in html

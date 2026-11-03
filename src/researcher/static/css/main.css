@@ -631,3 +631,81 @@ header h1 { font-size: 1.2rem; font-weight: 600; color: #e94560; }
 
 .gpu-queue-note button:hover:not(:disabled) { background: #1a3a6e; }
 .gpu-queue-note button:disabled { opacity: 0.6; cursor: default; }
+
+/* ── Scanning a document ─────────────────────────────────────────────────
+   A scan reads one page at a time and holds the GPU for its whole run, so
+   the progress line is not decoration: it is the only sign of life during
+   something that can last minutes. */
+.scan-progress {
+    padding: 0.4rem 1.5rem;
+    background: #16213e;
+    border-top: 1px solid #0f3460;
+    color: #fbbf24;
+    font-size: 0.78rem;
+}
+
+.scan-dialog {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.scan-dialog-box {
+    background: #16213e;
+    border: 1px solid #0f3460;
+    border-radius: 0.6rem;
+    padding: 1.1rem 1.3rem;
+    width: 30rem;
+    max-width: 92%;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+}
+
+.scan-dialog-box h3 { margin: 0; color: #e0e0e0; font-size: 1rem; }
+.scan-dialog-box label {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.82rem;
+    color: #94a3b8;
+    flex-wrap: wrap;
+}
+
+.scan-dialog-box select,
+.scan-dialog-box input {
+    background: #1a1a2e;
+    border: 1px solid #0f3460;
+    color: #e0e0e0;
+    border-radius: 0.35rem;
+    padding: 0.25rem 0.45rem;
+    font-family: inherit;
+    font-size: 0.82rem;
+}
+
+.scan-dialog-box select { flex: 1; min-width: 12rem; }
+.scan-note { font-size: 0.74rem; color: #64748b; margin: 0; line-height: 1.45; }
+
+.scan-dialog-actions {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: flex-end;
+    margin-top: 0.2rem;
+}
+
+.scan-dialog-actions button {
+    background: #0f3460;
+    color: #e0e0e0;
+    border: 1px solid #1a3a6e;
+    border-radius: 0.4rem;
+    padding: 0.35rem 0.8rem;
+    font-size: 0.82rem;
+    cursor: pointer;
+}
+
+.scan-dialog-actions button:last-child { background: #e94560; border-color: #e94560; }
+.scan-dialog-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
